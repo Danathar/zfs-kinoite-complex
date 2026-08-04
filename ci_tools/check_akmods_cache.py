@@ -178,7 +178,15 @@ def inspect_akmods_cache(
     if verify_signature:
         signature_verified = True
         try:
-            cosign_verify(source_image_pinned, key_path=str(REPO_ROOT / "cosign.pub"))
+            if registry_creds:
+                cosign_verify(
+                    source_image_pinned,
+                    key_path=str(REPO_ROOT / "cosign.pub"),
+                    registry_username=registry_actor,
+                    registry_password=registry_token,
+                )
+            else:
+                cosign_verify(source_image_pinned, key_path=str(REPO_ROOT / "cosign.pub"))
         except CiToolError:
             signature_verified = False
 

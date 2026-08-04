@@ -178,6 +178,31 @@ class CommonTests(unittest.TestCase):
 
         self.assertIn("no signatures found", str(context.exception))
 
+    def test_cosign_verify_passes_explicit_registry_credentials_when_provided(self) -> None:
+        with patch("ci_tools.common.run_cmd") as run_cmd_mock:
+            cosign_verify(
+                "ghcr.io/example/image@sha256:abc",
+                key_path="/tmp/cosign.pub",
+                registry_username="Danathar",
+                registry_password="token",
+            )
+
+        args = run_cmd_mock.call_args.args[0]
+        self.assertEqual(
+            args,
+            [
+                "cosign",
+                "verify",
+                "--key",
+                "/tmp/cosign.pub",
+                "--registry-username",
+                "Danathar",
+                "--registry-password",
+                "token",
+                "ghcr.io/example/image@sha256:abc",
+            ],
+        )
+
     def test_run_cmd_redacts_secret_args_in_failure_message(self) -> None:
         args = [
             "skopeo",

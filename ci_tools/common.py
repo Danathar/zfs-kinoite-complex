@@ -333,7 +333,13 @@ def skopeo_copy(
     run_cmd(command, capture_output=False)
 
 
-def cosign_verify(image_ref: str, *, key_path: str) -> None:
+def cosign_verify(
+    image_ref: str,
+    *,
+    key_path: str,
+    registry_username: str = "",
+    registry_password: str = "",
+) -> None:
     """
     Verify a cosign signature on one image reference against a public key file.
 
@@ -354,7 +360,18 @@ def cosign_verify(image_ref: str, *, key_path: str) -> None:
     with no format flag, and both correctly fail (nonzero exit, "no signatures
     found") against an actually-unsigned image.
     """
-    run_cmd(["cosign", "verify", "--key", key_path, image_ref])
+    command = ["cosign", "verify", "--key", key_path]
+    if registry_username and registry_password:
+        command.extend(
+            [
+                "--registry-username",
+                registry_username,
+                "--registry-password",
+                registry_password,
+            ]
+        )
+    command.append(image_ref)
+    run_cmd(command)
 
 
 def sort_kernel_releases(kernel_releases: Sequence[str]) -> list[str]:

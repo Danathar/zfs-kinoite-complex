@@ -155,15 +155,6 @@ jobs:
         name: Load repository defaults
         uses: ./.github/actions/load-ci-defaults
 
-      # The first akmods-cache probe can inspect a package that has not been
-      # published yet. Authenticate before that probe so GHCR distinguishes a
-      # missing cache from an unauthenticated request.
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
-
       # This action handles the preparation work that would otherwise dominate
       # the workflow file: resolve moving inputs, save a manifest artifact,
       # verify the current shared cache, and rebuild that cache only when needed.

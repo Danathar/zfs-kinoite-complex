@@ -54,15 +54,6 @@ jobs:
       - name: Install skopeo and cosign
         uses: ./.github/actions/install-signing-tools
 
-      # PR validation reads the shared akmods package without publishing it.
-      # Authenticate before the cache probe so a private package is handled as
-      # a readable input instead of producing an authorization error.
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
-
       # Reuse the same input-resolution and cache-verification logic as the
       # production workflow so a green pull request actually means something.
       - name: Resolve inputs and verify shared akmods cache
@@ -73,6 +64,8 @@ jobs:
           LOCK_FILE: ci/inputs.lock.json
           BUILD_CONTAINER_REF: ${{ steps.defaults.outputs.default_build_container_image }}
           AKMODS_REPO: ${{ steps.defaults.outputs.akmods_repo }}
+          REGISTRY_ACTOR: ${{ github.actor }}
+          REGISTRY_TOKEN: ${{ github.token }}
         run: |
           python3 -m ci_tools.cli prepare-validation-build
 

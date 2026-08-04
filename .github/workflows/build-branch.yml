@@ -98,15 +98,6 @@ jobs:
         name: Load repository defaults
         uses: ./.github/actions/load-ci-defaults
 
-      # Branch validation also probes the shared cache before the image build;
-      # authenticate so an absent cache is reported as absent rather than as a
-      # misleading GHCR authorization failure.
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
-
       # Branch builds only ever REUSE the shared cache; see allow_cache_rebuild
       # below.
       - name: Resolve inputs, verify cache state, and refresh shared akmods when required

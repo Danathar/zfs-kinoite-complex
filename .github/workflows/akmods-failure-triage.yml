@@ -1,0 +1,262 @@
+name: Akmods Failure Triage
+
+# This workflow runs AFTER the main build workflow completes and manages a
+# small number of sticky GitHub issues that reflect persistent upstream
+# incompatibilities. The build workflow itself still fails loudly — this
+# workflow only adds visibility on top of red builds. On a green build it
+# auto-closes all open akmods-failure sticky issues so transient failures do not
+# stay pinned.
+#
+# It also keeps small JSON files on the `status` branch in sync with the same
+# state, so the README's OpenZFS/kernel badge can show *why* a build is
+# blocked (not just that it is), and a second badge shows how old the live
+# `:latest` image is, without a reader having to open an issue or the registry.
+
+on:
+  workflow_run:
+    workflows: ["Build And Promote Main Image"]
+    types:
+      - completed
+
+concurrency:
+  group: akmods-failure-triage
+  cancel-in-progress: true
+
+jobs:
+  triage:
+    name: Manage sticky akmods failure issue
+    runs-on: ubuntu-24.04
+    if: github.event.workflow_run.event != 'pull_request'
+    permissions:
+      contents: write
+      issues: write
+      actions: read
+      packages: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Needed by the last-good-build badge step below, which inspects the
+      # published `:latest` image directly instead of tracking build state.
+      - name: Install skopeo
+        uses: ./.github/actions/install-signing-tools
+
+      # Pull down the failure payload artifact (if the build job uploaded one)
+      # without using the moving `actions/download-artifact` default branch.
+      - name: Download failure payload if present
+        id: download
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const fs = require('fs');
+            const artifactsResp = await github.rest.actions.listWorkflowRunArtifacts({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: context.payload.workflow_run.id,
+            });
+            const artifacts = artifactsResp.data.artifacts;
+
+            // A build-inputs-<run_id> artifact is uploaded only after the build
+            // job resolves inputs, so its presence means a real build ran. A
+            // scheduled run that the stable-signal gate skipped produces no such
+            // artifact yet still reports the run conclusion as "success". The
+            // auto-close step below gates on this so a skipped run cannot close
+            // sticky issues that track a still-unfixed failure.
+            core.setOutput('build_ran', artifacts.some(a => a.name.startsWith('build-inputs-')) ? 'true' : 'false');
+
+            const prefix = 'akmods-failure-';
+            const artifact = artifacts.find(a => a.name.startsWith(prefix));
+            if (!artifact) {
+              core.setOutput('has_payload', 'false');
+              return;
+            }
+            const zip = await github.rest.actions.downloadArtifact({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              artifact_id: artifact.id,
+              archive_format: 'zip',
+            });
+            fs.mkdirSync('artifacts', { recursive: true });
+            fs.writeFileSync('artifacts/akmods-failure.zip', Buffer.from(zip.data));
+            core.setOutput('has_payload', 'true');
+
+      - name: Unzip payload
+        if: steps.download.outputs.has_payload == 'true'
+        shell: bash
+        run: |
+          cd artifacts
+          unzip -o akmods-failure.zip
+          ls -la
+
+      - name: Open or update sticky issue on failed run
+        if: github.event.workflow_run.conclusion == 'failure' && steps.download.outputs.has_payload == 'true'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const fs = require('fs');
+            const payload = JSON.parse(fs.readFileSync('artifacts/akmods-failure.json', 'utf8'));
+            const stickyLabel = 'akmods-failure';
+            const keyMarker = `<!-- akmods-failure-key: ${payload.key} -->`;
+            const body = `${keyMarker}\n\n${payload.body}`;
+
+            // Ensure the sticky label exists before trying to use it.
+            try {
+              await github.rest.issues.getLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: stickyLabel,
+              });
+            } catch (e) {
+              if (e.status === 404) {
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: stickyLabel,
+                  color: 'd93f0b',
+                  description: 'Sticky issue tracking a persistent akmods build failure',
+                });
+                core.info(`Created label "${stickyLabel}"`);
+              } else {
+                throw e;
+              }
+            }
+
+            // Look for an existing open issue with the same sticky key marker.
+            const existing = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: stickyLabel,
+              per_page: 100,
+            });
+            const match = existing.find(i => (i.body || '').includes(keyMarker));
+            if (match) {
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: match.number,
+                body: body,
+              });
+              core.info(`Updated sticky issue #${match.number} for key ${payload.key}`);
+            } else {
+              const created = await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: payload.title,
+                body: body,
+                labels: [stickyLabel],
+              });
+              core.info(`Opened sticky issue #${created.data.number} for key ${payload.key}`);
+            }
+
+      - name: Close stale sticky issues on successful run
+        if: github.event.workflow_run.conclusion == 'success' && steps.download.outputs.build_ran == 'true'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const stickyLabel = 'akmods-failure';
+            const open = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: stickyLabel,
+              per_page: 100,
+            });
+            for (const issue of open) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: `Build workflow succeeded on ${context.payload.workflow_run.head_sha}. Auto-closing sticky issue.`,
+              });
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                state: 'closed',
+              });
+              core.info(`Closed sticky issue #${issue.number}`);
+            }
+
+      # Only two conclusions tell us anything new about OpenZFS/kernel compat:
+      # a classified upstream-compat failure (has_payload is only 'true' when
+      # the akmods build step actually ran and failed) or a clean success. Any
+      # other conclusion leaves the previous badge state untouched.
+      #
+      # A gate-skipped scheduled run also reports conclusion 'success' without
+      # building anything (see steps.download.outputs.build_ran above), so the
+      # 'success' half of this condition requires build_ran too -- otherwise a
+      # skipped run could overwrite a real red badge with green. The 'failure'
+      # half does not need it: has_payload can only be 'true' when the akmods
+      # build step actually ran, which build_ran already implies.
+      # write-akmods-badge enforces this same rule internally (see
+      # ci_tools/write_akmods_badge.py) so it stays correct even if this
+      # condition is ever loosened by mistake.
+      - name: Build OpenZFS/kernel badge payload
+        id: badge
+        if: steps.download.outputs.has_payload == 'true' || (github.event.workflow_run.conclusion == 'success' && steps.download.outputs.build_ran == 'true')
+        shell: bash
+        env:
+          WORKFLOW_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          BUILD_RAN: ${{ steps.download.outputs.build_ran }}
+          FAILURE_PAYLOAD_PATH: artifacts/akmods-failure.json
+          BADGE_OUTPUT_PATH: artifacts/akmods-badge.json
+        run: |
+          python3 -m ci_tools.cli write-akmods-badge
+
+      # `:latest` only moves on a real promotion, so its age is meaningful on
+      # every run regardless of today's conclusion — this step always runs
+      # (unlike the badge above, which only speaks to a specific failure/
+      # success) so the day-count keeps advancing even on a run that doesn't
+      # otherwise change anything.
+      - name: Build last-good-build badge payload
+        id: last_good_build
+        shell: bash
+        env:
+          REGISTRY_ACTOR: ${{ github.actor }}
+          REGISTRY_TOKEN: ${{ github.token }}
+          BADGE_OUTPUT_PATH: artifacts/last-good-build-badge.json
+        run: |
+          python3 -m ci_tools.cli write-last-good-build-badge
+
+      # Publish whichever badge JSON files changed this run to a dedicated
+      # `status` branch (not `main`) so these bot commits never touch the
+      # branch that produces signed images. shields.io's dynamic/endpoint
+      # badge reads these files straight off raw.githubusercontent.com.
+      #
+      # Only files present in `artifacts/` this run are overwritten — a run
+      # that only refreshes one badge (e.g. a cancelled run still updates
+      # last-good-build but has no new OpenZFS/kernel state) must not wipe
+      # out the other badge's last known-good content.
+      - name: Publish badges to status branch
+        if: steps.badge.outputs.updated == 'true' || steps.last_good_build.outputs.updated == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          work_dir="$(mktemp -d)"
+          cd "$work_dir"
+          git init -q
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git"
+          if git fetch --depth 1 origin status 2>/dev/null; then
+            git checkout -q FETCH_HEAD -b status
+          else
+            git checkout -q --orphan status
+          fi
+          for f in akmods-badge.json last-good-build-badge.json; do
+            if [ -f "$GITHUB_WORKSPACE/artifacts/$f" ]; then
+              cp "$GITHUB_WORKSPACE/artifacts/$f" "$f"
+            fi
+          done
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Badge content unchanged; nothing to commit."
+          else
+            git commit -q -m "Update status badges"
+            git push origin HEAD:status
+          fi

@@ -1,0 +1,105 @@
+name: Build Native Image
+
+description: Build the native Kinoite image with the standard OCI build arguments used by this repository.
+
+inputs:
+  image_name:
+    description: Local image name to hand to buildah.
+    required: true
+  image_tag:
+    description: Local image tag to build.
+    required: true
+  base_image:
+    description: Digest-pinned base image ref.
+    required: true
+  akmods_image:
+    description: Shared akmods cache image ref.
+    required: true
+  akmods_upstream_ref:
+    description: Resolved akmods fork commit SHA used for this build. Recorded as an OCI image label for provenance.
+    required: false
+    default: ""
+  stable_signal_image:
+    description: Upstream stable-signal image ref recorded as OCI image provenance.
+    required: false
+    default: ""
+  stable_signal_digest:
+    description: Upstream stable-signal digest recorded as OCI image provenance.
+    required: false
+    default: ""
+  zfs_version:
+    description: Exact resolved OpenZFS patch version installed by this build. Recorded as an OCI image label for provenance.
+    required: false
+    default: ""
+  image_repo:
+    description: Public image repository path used by in-image signing policy.
+    required: true
+  signing_key_filename:
+    description: Public key filename installed inside the image.
+    required: true
+
+runs:
+  # A "composite action" is a reusable set of workflow steps stored in this
+  # repository. It lets the workflow say "build the image" once, without
+  # copying the same Buildah settings into several workflow files.
+  using: composite
+  steps:
+    - name: Show pinned akmods cache input
+      shell: bash
+      run: |
+        echo "Final image build will consume akmods cache image: ${INPUTS_AKMODS_IMAGE}"
+      env:
+        INPUTS_AKMODS_IMAGE: ${{ inputs.akmods_image }}
+
+    # Buildah is the Open Container Initiative (OCI) image builder used by this
+    # repository. We call it directly (rather than through a wrapper action) so
+    # every build input is one explicit flag readers can see, and so this step
+    # does not depend on a third-party action's release cadence. buildah ships
+    # preinstalled on the GitHub-hosted runner this job uses.
+    - name: Build image with buildah
+      shell: bash
+      env:
+        IMAGE_NAME: ${{ inputs.image_name }}
+        IMAGE_TAG: ${{ inputs.image_tag }}
+        BASE_IMAGE: ${{ inputs.base_image }}
+        AKMODS_IMAGE: ${{ inputs.akmods_image }}
+        IMAGE_REPO: ${{ inputs.image_repo }}
+        SIGNING_KEY_FILENAME: ${{ inputs.signing_key_filename }}
+        # Recorded as OCI image labels below, as provenance for the run.
+        #
+        # AKMODS_UPSTREAM_REF is the akmods fork commit this run *resolved*,
+        # which is only the commit that built the shipped modules when this run
+        # actually rebuilt the akmods cache. On a cache-reuse build the cache
+        # may predate the current tracking ref, so this label can name a commit
+        # that never touched the modules in the image. Do not treat it as proof
+        # of module provenance; org.zfs-kinoite-complex.akmods-image (the
+        # verified digest of the cache actually consumed) is the reliable one.
+        # See docs/akmods-fork-maintenance.md for the full caveat.
+        AKMODS_UPSTREAM_REF: ${{ inputs.akmods_upstream_ref }}
+        STABLE_SIGNAL_IMAGE: ${{ inputs.stable_signal_image }}
+        STABLE_SIGNAL_DIGEST: ${{ inputs.stable_signal_digest }}
+        ZFS_VERSION: ${{ inputs.zfs_version }}
+      run: |
+        set -euo pipefail
+        # --format docker (rather than buildah's oci default) uses Docker v2s2
+        # manifest format instead of OCI image manifests, because host update
+        # tooling (`bootc upgrade` on booted machines) works more reliably with
+        # the Docker format. The "OCI" terminology elsewhere in this project
+        # refers to OCI standards for registry interaction and layer handling,
+        # not the specific container image manifest format produced by buildah.
+        buildah build \
+          --tls-verify=true \
+          --format docker \
+          -f ./Containerfile \
+          --build-arg "BASE_IMAGE=${BASE_IMAGE}" \
+          --build-arg "AKMODS_IMAGE=${AKMODS_IMAGE}" \
+          --build-arg "IMAGE_REPO=${IMAGE_REPO}" \
+          --build-arg "SIGNING_KEY_FILENAME=${SIGNING_KEY_FILENAME}" \
+          --label "org.zfs-kinoite-complex.akmods-ref=${AKMODS_UPSTREAM_REF}" \
+          --label "org.zfs-kinoite-complex.akmods-image=${AKMODS_IMAGE}" \
+          --label "org.zfs-kinoite-complex.base-image=${BASE_IMAGE}" \
+          --label "org.zfs-kinoite-complex.stable-signal-image=${STABLE_SIGNAL_IMAGE}" \
+          --label "org.zfs-kinoite-complex.stable-signal-digest=${STABLE_SIGNAL_DIGEST}" \
+          --label "org.zfs-kinoite-complex.zfs-version=${ZFS_VERSION}" \
+          -t "${IMAGE_NAME}:${IMAGE_TAG}" \
+          .

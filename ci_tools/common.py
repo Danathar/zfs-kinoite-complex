@@ -1,0 +1,374 @@
+"""
+Script: ci_tools/common.py
+What: Shared helper functions used by all `ci_tools` modules.
+Doing: Wraps env reads, command execution, image inspect/copy calls, parsing, and output writes.
+Why: Avoids duplicated helper code.
+Goal: Keep behavior consistent across all helper modules.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import subprocess
+import uuid
+from collections.abc import Mapping, Sequence
+from pathlib import Path
+
+from shared.kernel_release import kernel_release_sort_key
+
+
+class CiToolError(RuntimeError):
+    """Raised when a workflow helper script hits a known error condition."""
+
+
+FEDORA_FROM_KERNEL_RE = re.compile(r".*fc([0-9]+).*")
+REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_DEFAULTS_FILE = REPO_ROOT / "ci" / "defaults.json"
+SECRET_ARG_FLAGS = {
+    "--creds",
+    "--src-creds",
+    "--dest-creds",
+    "--registry-username",
+    "--registry-password",
+}
+
+
+def require_env(name: str) -> str:
+    """Return a required environment variable or raise a clear error."""
+    value = os.environ.get(name)
+    if value is None or value == "":
+        raise CiToolError(f"Missing required environment variable: {name}")
+    return value
+
+
+def optional_env(name: str, default: str = "") -> str:
+    """Return an environment variable with a fallback default."""
+    return os.environ.get(name, default)
+
+
+def load_repo_defaults() -> dict[str, str]:
+    """
+    Load checked-in repository defaults from `ci/defaults.json`.
+
+    Keeping these defaults in version control makes workflow input changes
+    reviewable. The workflows still pass explicit overrides when needed, but the
+    default values themselves live in one file instead of being copied across
+    multiple workflow files.
+    """
+    if not REPO_DEFAULTS_FILE.exists():
+        raise CiToolError(f"Missing repository defaults file: {REPO_DEFAULTS_FILE}")
+
+    with REPO_DEFAULTS_FILE.open("r", encoding="utf-8") as handle:
+        data = json.load(handle)
+
+    defaults: dict[str, str] = {}
+    for key, value in data.items():
+        defaults[str(key)] = str(value)
+    return defaults
+
+
+def redact_command_args(args: Sequence[str]) -> list[str]:
+    """Return command args with known secret values replaced for error messages."""
+    redacted: list[str] = []
+    redact_next = False
+    for arg in args:
+        if redact_next:
+            redacted.append("***REDACTED***")
+            redact_next = False
+            continue
+        flag, separator, _value = arg.partition("=")
+        if flag in SECRET_ARG_FLAGS:
+            if separator:
+                redacted.append(f"{flag}=***REDACTED***")
+            else:
+                redacted.append(arg)
+                redact_next = True
+            continue
+        redacted.append(arg)
+    return redacted
+
+
+def require_env_or_default(name: str) -> str:
+    """
+    Return an environment variable, falling back to checked-in repo defaults.
+
+    This keeps the Python helpers honest even if the workflow files become
+    thinner over time. A command still stops with an error when the value is
+    missing from both env and `ci/defaults.json`.
+    """
+    value = os.environ.get(name)
+    if value is not None and value != "":
+        return value
+
+    default_value = load_repo_defaults().get(name, "")
+    if default_value:
+        return default_value
+
+    raise CiToolError(
+        f"Missing required environment variable: {name} "
+        f"(and no fallback exists in {REPO_DEFAULTS_FILE})"
+    )
+
+
+def run_cmd(
+    args: Sequence[str],
+    *,
+    capture_output: bool = True,
+    cwd: str | None = None,
+    env: Mapping[str, str] | None = None,
+) -> str:
+    """Run a command and return stdout, raising a readable error on failure."""
+    try:
+        command_env = None
+        if env is not None:
+            # Command-specific env overrides let helpers inject secrets or one-off
+            # flags without mutating global process env for the rest of the job.
+            command_env = dict(os.environ)
+            command_env.update(env)
+        result = subprocess.run(
+            list(args),
+            check=True,
+            text=True,
+            capture_output=capture_output,
+            cwd=cwd,
+            env=command_env,
+        )
+    except subprocess.CalledProcessError as exc:
+        stderr = (exc.stderr or "").strip()
+        stdout = (exc.stdout or "").strip()
+        details = stderr or stdout or str(exc)
+        command = " ".join(redact_command_args(args))
+        raise CiToolError(f"Command failed: {command}\n{details}") from exc
+
+    if not capture_output:
+        return ""
+    return result.stdout
+
+
+def git_ls_remote_resolve(repo_url: str, ref: str) -> str:
+    """
+    Resolve a git ref (branch, tag, or SHA) on a remote repository to a concrete commit SHA.
+
+    Used by the input resolver to float the akmods tracking ref to a pinned SHA
+    before the clone step runs. Keeping the resolution here (not in the clone
+    helper) preserves the `rev-parse HEAD` SHA-verification invariant in
+    `akmods_clone_pinned`, which assumes its input is already a concrete SHA.
+    """
+    if not repo_url:
+        raise CiToolError("git_ls_remote_resolve requires a non-empty repo_url")
+    if not ref:
+        raise CiToolError("git_ls_remote_resolve requires a non-empty ref")
+
+    output = run_cmd(["git", "ls-remote", "--exit-code", repo_url, ref])
+    matches: dict[str, str] = {}
+    for line in output.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        sha, _tab, name = line.partition("\t")
+        sha = sha.strip()
+        name = name.strip()
+        if len(sha) == 40 and all(c in "0123456789abcdef" for c in sha):
+            matches.setdefault(name, sha)
+
+    # An annotated tag lists two lines: the tag object itself and a peeled
+    # `^{}` line that points at the underlying commit. Prefer the peeled commit
+    # so the returned SHA matches what `git checkout` resolves later in
+    # `akmods_clone_pinned`; otherwise its `rev-parse HEAD` check would fail with
+    # a spurious "ref mismatch" because HEAD lands on the commit, not the tag.
+    for preferred_name in (
+        f"refs/tags/{ref}^{{}}",
+        f"refs/heads/{ref}",
+        f"refs/tags/{ref}",
+        ref,
+        "HEAD",
+    ):
+        if preferred_name in matches:
+            return matches[preferred_name]
+
+    # Fall back to the first line's SHA if the name didn't match a known form.
+    first = output.strip().splitlines()[0] if output.strip() else ""
+    sha = first.split("\t", 1)[0].strip() if first else ""
+    if len(sha) == 40 and all(c in "0123456789abcdef" for c in sha):
+        return sha
+    raise CiToolError(f"git ls-remote did not return a resolvable commit SHA for {ref} at {repo_url}")
+
+
+def run_json_cmd(args: Sequence[str]) -> dict:
+    """Run a command that returns JSON and parse it."""
+    output = run_cmd(args)
+    try:
+        return json.loads(output)
+    except json.JSONDecodeError as exc:
+        command = " ".join(redact_command_args(args))
+        raise CiToolError(f"Expected JSON from command: {command}") from exc
+
+
+def write_github_outputs(values: Mapping[str, str]) -> None:
+    """
+    Write step outputs for GitHub Actions.
+
+    GitHub provides a file path in `GITHUB_OUTPUT`; writing `name=value` lines
+    there makes that value available to later steps in the same job.
+    """
+    output_file = require_env("GITHUB_OUTPUT")
+    with open(output_file, "a", encoding="utf-8") as handle:
+        for key, value in values.items():
+            _write_github_file_value(handle, key, value)
+
+
+def write_github_env(values: Mapping[str, str]) -> None:
+    """
+    Export environment variables for later GitHub Actions steps.
+
+    GitHub exposes the file path through `GITHUB_ENV`. Writing `NAME=value`
+    lines there makes the variable available to subsequent steps in the same
+    job.
+    """
+    env_file = require_env("GITHUB_ENV")
+    with open(env_file, "a", encoding="utf-8") as handle:
+        for key, value in values.items():
+            _write_github_file_value(handle, key, value)
+
+
+def _write_github_file_value(handle, key: str, value: str) -> None:
+    delimiter = f"EOF_{uuid.uuid4().hex}"
+    while delimiter in value:
+        delimiter = f"EOF_{uuid.uuid4().hex}"
+    handle.write(f"{key}<<{delimiter}\n{value}\n{delimiter}\n")
+
+
+def normalize_owner(owner: str) -> str:
+    """
+    Normalize a GitHub owner/org for container image paths.
+
+    Here, "normalize" means converting to lowercase.
+    Example: `Danathar` becomes `danathar`, so image refs are consistent:
+    `ghcr.io/danathar/...`.
+    """
+    return owner.lower()
+
+
+def skopeo_inspect_json(image_ref: str, *, creds: str | None = None) -> dict:
+    """
+    Return JSON metadata for one image reference.
+
+    `skopeo` reads image metadata directly from the registry without pulling and
+    running a container image.
+    """
+    command = ["skopeo", "inspect"]
+    if creds:
+        command.extend(["--creds", creds])
+    command.append(image_ref)
+    return run_json_cmd(command)
+
+
+def skopeo_inspect_digest(image_ref: str, *, creds: str | None = None) -> str:
+    """Return the image digest from `skopeo inspect` output."""
+    inspect_json = skopeo_inspect_json(image_ref, creds=creds)
+    digest = str(inspect_json.get("Digest") or "")
+    if not digest:
+        raise CiToolError(f"Missing digest in skopeo inspect output for {image_ref}")
+    return digest
+
+
+_MISSING_IMAGE_ERROR_MARKERS = (
+    "manifest unknown",
+    "name unknown",
+    "not found",
+)
+
+
+def is_missing_image_error(message: str) -> bool:
+    """True when a registry inspect failure message means the image does not exist."""
+    normalized = message.lower()
+    return any(marker in normalized for marker in _MISSING_IMAGE_ERROR_MARKERS)
+
+
+def skopeo_inspect_json_optional(image_ref: str, *, creds: str | None = None) -> dict | None:
+    """
+    Inspect one image, returning `None` only when the image does not exist.
+
+    Other registry failures (auth, rate limiting, network errors) still raise
+    so callers do not mistake "we couldn't tell" for "it's missing" and make a
+    reuse/rebuild decision from unknown state.
+    """
+    try:
+        return skopeo_inspect_json(image_ref, creds=creds)
+    except CiToolError as exc:
+        if is_missing_image_error(str(exc)):
+            return None
+        raise
+
+
+def skopeo_copy(
+    source: str,
+    destination: str,
+    *,
+    creds: str | None = None,
+    retry_times: int = 3,
+    preserve_digests: bool = False,
+    multi_arch: str = "",
+) -> None:
+    """
+    Copy an image between registry references using skopeo.
+
+    `preserve_digests` and `multi_arch` are opt-in because not every caller
+    wants them: `check_akmods_cache` copies into a local `dir:` layout and
+    reads `manifest.json` layers directly, and a `--multi-arch=all` manifest
+    list would change that file's shape. Callers that promote a tag to another
+    tag in the same registry (where the destination digest must match the
+    source) should pass both.
+    """
+    command = ["skopeo", "copy", "--retry-times", str(retry_times)]
+    if creds:
+        command.extend(["--src-creds", creds, "--dest-creds", creds])
+    if preserve_digests:
+        command.append("--preserve-digests")
+    if multi_arch:
+        command.append(f"--multi-arch={multi_arch}")
+    command.extend([source, destination])
+    run_cmd(command, capture_output=False)
+
+
+def cosign_verify(image_ref: str, *, key_path: str) -> None:
+    """
+    Verify a cosign signature on one image reference against a public key file.
+
+    Raises `CiToolError` (via `run_cmd`) if verification fails for any reason:
+    no signature found, wrong key, or a registry/network error. Callers that
+    want "not signed" to mean "treat as unusable, do not consume" should catch
+    `CiToolError` around this call rather than letting it propagate.
+
+    Deliberately does not pass `--new-bundle-format=false`, unlike
+    `sign_image.py`'s sign step. This function runs in more than one
+    environment -- including cosign v2.4.1, preinstalled in the
+    `ghcr.io/ublue-os/devcontainer` akmods build container, which does not
+    recognize that flag at all -- so it must work the same way everywhere.
+    Verified directly: both cosign v2.4.1 and v3.1.2 correctly verify this
+    repo's actual signed images (produced by `sign_image.py` with
+    `--new-bundle-format=false --use-signing-config=false
+    --registry-referrers-mode=legacy`) using a bare `cosign verify --key ...`
+    with no format flag, and both correctly fail (nonzero exit, "no signatures
+    found") against an actually-unsigned image.
+    """
+    run_cmd(["cosign", "verify", "--key", key_path, image_ref])
+
+
+def sort_kernel_releases(kernel_releases: Sequence[str]) -> list[str]:
+    """Return unique kernel release strings in stable natural-sort order."""
+    return sorted(dict.fromkeys(kernel_releases), key=kernel_release_sort_key)
+
+
+def extract_fedora_version(kernel_release: str) -> str:
+    """
+    Parse Fedora major version (for example `43`) from a kernel release.
+
+    Example kernel release: `6.18.12-200.fc43.x86_64`.
+    """
+    match = FEDORA_FROM_KERNEL_RE.match(kernel_release)
+    if not match:
+        raise CiToolError(f"Failed to extract Fedora version from kernel release {kernel_release}")
+    return match.group(1)

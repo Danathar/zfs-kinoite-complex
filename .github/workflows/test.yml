@@ -1,0 +1,37 @@
+name: Run Python Tests
+
+# The Python CI tool modules in `ci_tools/` are the decision-making backbone of
+# every workflow. Running their unit tests on every pull request and push to main
+# catches regressions before they reach a production build.
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Python Unit Tests
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install test runner and linter
+        shell: bash
+        run: pip install --quiet pytest "ruff==0.16.1"
+
+      - name: Lint with ruff
+        shell: bash
+        run: ruff check ci_tools/ shared/ tests/ files/ containerfiles/
+
+      - name: Run tests
+        shell: bash
+        run: python3 -m pytest tests/ -v

@@ -1,0 +1,225 @@
+"""
+Script: tests/test_prepare_validation_build.py
+What: Tests for the shared non-main validation preparation command.
+Doing: Mocks resolved inputs and cache status so we can check success/failure behavior without live registry calls.
+Why: Branch and PR workflows depend on one shared command to pin inputs and fail closed when shared akmods are out of date.
+Goal: Keep that read-only validation path explicit and safe.
+"""
+
+from __future__ import annotations
+
+import os
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+from ci_tools.check_akmods_cache import AkmodsCacheStatus
+from ci_tools.common import CiToolError
+from ci_tools.prepare_validation_build import main
+from ci_tools.resolve_build_inputs import BuildInputResolution, ResolvedBuildInputs
+
+_AKMODS_REPO_URL = "https://github.com/Danathar/akmods.git"
+
+
+def _resolved_inputs() -> BuildInputResolution:
+    return BuildInputResolution(
+        inputs=ResolvedBuildInputs(
+            version="43",
+            kernel_release="6.18.16-200.fc43.x86_64",
+            detected_kernel_releases=(
+                "6.18.13-200.fc43.x86_64",
+                "6.18.16-200.fc43.x86_64",
+            ),
+            base_image_ref="quay.io/fedora-ostree-desktops/kinoite:45",
+            base_image_name="quay.io/fedora-ostree-desktops/kinoite",
+            base_image_tag="latest-20260307.1",
+            base_image_pinned="quay.io/fedora-ostree-desktops/kinoite@sha256:base",
+            base_image_digest="sha256:base",
+            build_container_ref="ghcr.io/ublue-os/devcontainer:latest",
+            build_container_pinned="ghcr.io/ublue-os/devcontainer@sha256:build",
+            build_container_digest="sha256:build",
+            zfs_minor_version="2.4",
+            zfs_version="2.4.4",
+            akmods_upstream_ref="abcdef123456",
+            use_input_lock=False,
+            lock_file_path="ci/inputs.lock.json",
+        ),
+        label_kernel_release="6.18.16-200.fc43.x86_64",
+        candidate_tags=("latest-20260307.1",),
+    )
+
+
+class PrepareValidationBuildTests(unittest.TestCase):
+    def test_writes_outputs_and_accepts_reusable_cache(self) -> None:
+        resolution = _resolved_inputs()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = os.path.join(temp_dir, "github-output.txt")
+            with patch.dict(
+                os.environ,
+                {
+                    "GITHUB_OUTPUT": output_path,
+                    "GITHUB_REPOSITORY_OWNER": "Danathar",
+                    "AKMODS_REPO": "zfs-kinoite-complex-akmods",
+                    "AKMODS_UPSTREAM_REPO": _AKMODS_REPO_URL,
+                },
+                clear=False,
+            ), patch(
+                "ci_tools.prepare_validation_build.resolve_build_inputs",
+                return_value=resolution,
+            ), patch(
+                "ci_tools.prepare_validation_build.clone_pinned",
+            ) as clone_pinned, patch(
+                "ci_tools.prepare_validation_build.inspect_akmods_cache",
+                return_value=AkmodsCacheStatus(
+                    source_image="ghcr.io/danathar/zfs-kinoite-complex-akmods:main-43",
+                    image_exists=True,
+                    source_image_pinned=(
+                        "ghcr.io/danathar/zfs-kinoite-complex-akmods@sha256:abc123"
+                    ),
+                    missing_release="",
+                    signature_verified=True,
+                ),
+            ) as inspect_cache:
+                main()
+
+            outputs = Path(output_path).read_text(encoding="utf-8")
+            self.assertIn("version<<", outputs)
+            self.assertIn("43", outputs)
+            self.assertIn("kernel_release<<", outputs)
+            self.assertIn("6.18.16-200.fc43.x86_64", outputs)
+            self.assertIn(
+                "6.18.13-200.fc43.x86_64 6.18.16-200.fc43.x86_64",
+                outputs,
+            )
+            self.assertIn("base_image_tag<<", outputs)
+            self.assertIn("latest-20260307.1", outputs)
+            self.assertIn("akmods_image<<", outputs)
+            self.assertIn(
+                "ghcr.io/danathar/zfs-kinoite-complex-akmods:main-43",
+                outputs,
+            )
+            self.assertIn("akmods_image_pinned<<", outputs)
+            self.assertIn(
+                "ghcr.io/danathar/zfs-kinoite-complex-akmods@sha256:abc123",
+                outputs,
+            )
+
+            inspect_cache.assert_called_once_with(
+                image_org="danathar",
+                source_repo="zfs-kinoite-complex-akmods",
+                fedora_version="43",
+                kernel_release="6.18.16-200.fc43.x86_64",
+                zfs_version="2.4.4",
+            )
+            clone_pinned.assert_called_once_with(_AKMODS_REPO_URL, "abcdef123456")
+
+    def test_fails_closed_when_shared_cache_is_missing_or_out_of_date(self) -> None:
+        resolution = _resolved_inputs()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = os.path.join(temp_dir, "github-output.txt")
+            with patch.dict(
+                os.environ,
+                {
+                    "GITHUB_OUTPUT": output_path,
+                    "GITHUB_REPOSITORY_OWNER": "Danathar",
+                    "AKMODS_REPO": "zfs-kinoite-complex-akmods",
+                    "AKMODS_UPSTREAM_REPO": _AKMODS_REPO_URL,
+                },
+                clear=False,
+            ), patch(
+                "ci_tools.prepare_validation_build.resolve_build_inputs",
+                return_value=resolution,
+            ), patch("ci_tools.prepare_validation_build.clone_pinned") as clone_pinned, patch(
+                "ci_tools.prepare_validation_build.inspect_akmods_cache",
+                return_value=AkmodsCacheStatus(
+                    source_image="ghcr.io/danathar/zfs-kinoite-complex-akmods:main-43",
+                    image_exists=True,
+                    missing_release="6.18.16-200.fc43.x86_64",
+                ),
+            ), self.assertRaises(CiToolError) as context:
+                main()
+
+            self.assertIn(
+                "ghcr.io/danathar/zfs-kinoite-complex-akmods:main-43",
+                str(context.exception),
+            )
+            self.assertIn("ZFS version 2.4.4", str(context.exception))
+            self.assertIn("rebuild_akmods=true", str(context.exception))
+            self.assertIn("6.18.16-200.fc43.x86_64", str(context.exception))
+            clone_pinned.assert_called_once_with(_AKMODS_REPO_URL, "abcdef123456")
+
+    def test_signature_rejection_says_so_instead_of_blaming_the_kernel(self) -> None:
+        # A cache with the right kmod-zfs but no valid signature leaves
+        # missing_release empty. Reporting the kernel unconditionally produced
+        # "does not cover the supported primary kernel <blank>", which pointed
+        # a reader at entirely the wrong problem.
+        resolution = _resolved_inputs()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = os.path.join(temp_dir, "github-output.txt")
+            with patch.dict(
+                os.environ,
+                {
+                    "GITHUB_OUTPUT": output_path,
+                    "GITHUB_REPOSITORY_OWNER": "Danathar",
+                    "AKMODS_REPO": "zfs-kinoite-complex-akmods",
+                    "AKMODS_UPSTREAM_REPO": _AKMODS_REPO_URL,
+                },
+                clear=False,
+            ), patch(
+                "ci_tools.prepare_validation_build.resolve_build_inputs",
+                return_value=resolution,
+            ), patch("ci_tools.prepare_validation_build.clone_pinned"), patch(
+                "ci_tools.prepare_validation_build.inspect_akmods_cache",
+                return_value=AkmodsCacheStatus(
+                    source_image="ghcr.io/danathar/zfs-kinoite-complex-akmods:main-43",
+                    image_exists=True,
+                    source_image_pinned=(
+                        "ghcr.io/danathar/zfs-kinoite-complex-akmods@sha256:abc"
+                    ),
+                    missing_release="",
+                    signature_verified=False,
+                ),
+            ), self.assertRaises(CiToolError) as context:
+                main()
+
+            message = str(context.exception)
+            self.assertIn("cosign signature could not be verified", message)
+            self.assertIn("sha256:abc", message)
+            self.assertNotIn("does not cover the supported primary kernel", message)
+
+    def test_missing_cache_image_says_it_is_missing(self) -> None:
+        resolution = _resolved_inputs()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_path = os.path.join(temp_dir, "github-output.txt")
+            with patch.dict(
+                os.environ,
+                {
+                    "GITHUB_OUTPUT": output_path,
+                    "GITHUB_REPOSITORY_OWNER": "Danathar",
+                    "AKMODS_REPO": "zfs-kinoite-complex-akmods",
+                    "AKMODS_UPSTREAM_REPO": _AKMODS_REPO_URL,
+                },
+                clear=False,
+            ), patch(
+                "ci_tools.prepare_validation_build.resolve_build_inputs",
+                return_value=resolution,
+            ), patch("ci_tools.prepare_validation_build.clone_pinned"), patch(
+                "ci_tools.prepare_validation_build.inspect_akmods_cache",
+                return_value=AkmodsCacheStatus(
+                    source_image="ghcr.io/danathar/zfs-kinoite-complex-akmods:main-43",
+                    image_exists=False,
+                    missing_release="6.18.16-200.fc43.x86_64",
+                ),
+            ), self.assertRaises(CiToolError) as context:
+                main()
+
+            self.assertIn("is missing from the registry", str(context.exception))
+
+
+if __name__ == "__main__":
+    unittest.main()

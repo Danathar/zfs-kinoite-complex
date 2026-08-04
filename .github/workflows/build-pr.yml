@@ -1,0 +1,90 @@
+name: Validate Pull Request Image Build
+
+# Pull requests only need to prove that the proposed code can still build the
+# image correctly. They intentionally stop before any push or signing step.
+on:
+  pull_request:
+    paths-ignore:
+      - README.md
+      - "**/README.md"
+      - docs/**
+      - "**/*.md"
+
+concurrency:
+  # Keep only the newest validation run for a given pull request reference.
+  group: ${{ github.workflow }}-${{ github.ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  build-pr-image:
+    name: Build PR Image (No Push)
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Rechunking briefly needs two copies of the image unpacked at once, so
+      # prepare disk space, podman version, and storage layout before the
+      # build starts.
+      - name: Prepare runner for Chunkah rechunking
+        uses: ./.github/actions/prepare-rechunk-host
+
+      # Shared defaults keep branch, pull request, and main workflows aligned.
+      - id: defaults
+        name: Load repository defaults
+        uses: ./.github/actions/load-ci-defaults
+
+      # The image owner path is still needed here because the build embeds the
+      # public image repository path into the signing-policy files inside the
+      # image, even though this workflow does not push anything.
+      - id: registry
+        name: Prepare registry context
+        uses: ./.github/actions/prepare-registry-context
+
+      # prepare-validation-build's cache check now verifies the akmods cache's
+      # cosign signature (ci_tools/check_akmods_cache.py), and this job never
+      # rebuilds that cache -- so it always takes the verify path and needs
+      # cosign available. Unlike build.yml/build-branch.yml's akmods jobs,
+      # this job does not run inside the devcontainer container (which ships
+      # cosign preinstalled), so it needs it installed explicitly here.
+      - name: Install skopeo and cosign
+        uses: ./.github/actions/install-signing-tools
+
+      # Reuse the same input-resolution and cache-verification logic as the
+      # production workflow so a green pull request actually means something.
+      - name: Resolve inputs and verify shared akmods cache
+        id: prepare
+        shell: bash
+        env:
+          USE_INPUT_LOCK: false
+          LOCK_FILE: ci/inputs.lock.json
+          BUILD_CONTAINER_REF: ${{ steps.defaults.outputs.default_build_container_image }}
+          AKMODS_REPO: ${{ steps.defaults.outputs.akmods_repo }}
+        run: |
+          python3 -m ci_tools.cli prepare-validation-build
+
+      # The image is built locally only. If this step succeeds, the pull request
+      # has proven that its Containerfile and workflow changes still compose.
+      - name: Build validation image locally
+        uses: ./.github/actions/build-native-image
+        with:
+          image_name: ${{ steps.defaults.outputs.image_name }}
+          image_tag: pr-validation
+          base_image: ${{ steps.prepare.outputs.base_image_pinned }}
+          akmods_image: ${{ steps.prepare.outputs.akmods_image_pinned }}
+          akmods_upstream_ref: ${{ steps.prepare.outputs.akmods_upstream_ref }}
+          zfs_version: ${{ steps.prepare.outputs.zfs_version }}
+          image_repo: ghcr.io/${{ steps.registry.outputs.image_org }}/${{ steps.defaults.outputs.image_name }}
+          signing_key_filename: ${{ steps.defaults.outputs.image_name }}.pub
+
+      # Rechunk here too so a pull request cannot merge a change that breaks
+      # the rechunk step; this workflow never publishes, so the rechunked
+      # image is not pushed anywhere.
+      - name: Rechunk validation image with Chunkah
+        uses: ./.github/actions/rechunk-native-image
+        with:
+          image_name: ${{ steps.defaults.outputs.image_name }}
+          image_tag: pr-validation

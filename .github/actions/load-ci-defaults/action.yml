@@ -1,0 +1,42 @@
+name: Load Continuous Integration Defaults
+
+description: Load checked-in workflow defaults from ci/defaults.json.
+
+outputs:
+  akmods_upstream_repo:
+    description: Configured akmods fork repository URL.
+    value: ${{ steps.defaults.outputs.akmods_upstream_repo }}
+  akmods_upstream_ref:
+    description: Explicit akmods fork commit pin from defaults; empty when floating resolution is in use.
+    value: ${{ steps.defaults.outputs.akmods_upstream_ref }}
+  akmods_upstream_track:
+    description: Floating akmods fork tracking ref resolved via git ls-remote when no explicit pin is set.
+    value: ${{ steps.defaults.outputs.akmods_upstream_track }}
+  image_name:
+    description: Final image repository name.
+    value: ${{ steps.defaults.outputs.image_name }}
+  akmods_repo:
+    description: Shared akmods cache repository name.
+    value: ${{ steps.defaults.outputs.akmods_repo }}
+  default_base_image:
+    description: Default floating base image ref.
+    value: ${{ steps.defaults.outputs.default_base_image }}
+  default_build_container_image:
+    description: Default build container ref.
+    value: ${{ steps.defaults.outputs.default_build_container_image }}
+  default_zfs_minor_version:
+    description: Default OpenZFS minor line.
+    value: ${{ steps.defaults.outputs.default_zfs_minor_version }}
+
+runs:
+  # This action turns the checked-in JSON defaults file into normal GitHub
+  # Actions outputs. Keeping the defaults in one tracked file makes changes
+  # reviewable in Git history instead of hiding them in repository settings.
+  using: composite
+  steps:
+    # The Python helper validates the file shape and exports each value through
+    # GitHub's output mechanism so later steps can read them with a stable name.
+    - id: defaults
+      shell: bash
+      run: |
+        python3 -m ci_tools.cli export-repo-defaults

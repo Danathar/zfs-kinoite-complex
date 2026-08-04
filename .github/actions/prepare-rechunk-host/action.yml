@@ -1,0 +1,83 @@
+name: Prepare Rechunk Host
+
+description: Prepare a GitHub-hosted runner for a build that will be rechunked with Chunkah (podman version and disk layout).
+
+runs:
+  # Three identical setup steps are needed in every job that rechunks with
+  # Chunkah, so they live here once instead of being copied into each
+  # workflow file.
+  using: composite
+  steps:
+    # GitHub-hosted runners ship a lot of preinstalled software this repo
+    # never uses. Removing it frees disk headroom before the build and
+    # rechunk steps, which briefly need two copies of the image.
+    #
+    # This pin is intentionally left without a trailing "# vX.Y.Z" comment:
+    # the commit merges a "v10" feature onto master but the upstream repo has
+    # not cut a v10 tag yet, so there is no released version to anchor to.
+    # Renovate will not propose updates for it until upstream tags one.
+    - name: Maximize build space
+      uses: ublue-os/remove-unwanted-software@695eb75bc387dbcd9685a8e72d23439d8686cba6
+
+    # Chunkah relies on OCI layer annotations to describe its content-based
+    # chunks. Podman versions before 5 silently drop those annotations on
+    # push, which would defeat the whole point of rechunking. Install
+    # crun/buildah/podman/skopeo from Ubuntu's `resolute` suite as one
+    # version-matched set.
+    #
+    # This deliberately installs unconditionally rather than skipping when the
+    # runner already ships podman >= 5. It used to skip, and that is how it
+    # broke: runner image ubuntu24/20260726.254 bumped podman 4.9.3 -> 5.8.4
+    # without bumping crun, so the skip fired for the first time and Chunkah
+    # then died in `podman run` with `crun: unknown version specified`
+    # (run 30535305788). podman and crun have to move together; one of them
+    # being new enough is not evidence the pair works. Pinning the toolchain
+    # that executes Chunkah is the same reasoning that digest-pins the Chunkah
+    # image itself in `rechunk-native-image`.
+    #
+    # This `resolute` dependency is itself a watchlist item -- see
+    # docs/maintenance-watchlist.md for what could make it stale or break, and
+    # why it is not something Renovate can track.
+    - name: Update Podman
+      shell: bash
+      run: |
+        set -eux
+        echo "deb http://azure.archive.ubuntu.com/ubuntu resolute universe main" | sudo tee /etc/apt/sources.list.d/resolute.list
+        sudo apt-get update
+        sudo apt-get install -y --allow-downgrades \
+          crun/resolute \
+          buildah/resolute \
+          podman/resolute \
+          skopeo/resolute
+        # Record both, so a future mismatch is diagnosable from the log alone.
+        # The runner's crun version was absent from run 30535305788's log,
+        # which is what made that failure harder to pin down than it needed
+        # to be.
+        podman --version
+        crun --version
+
+        # Fail closed. Installing podman unconditionally means a regression in
+        # the `resolute` suite could hand us podman < 5, which would drop
+        # Chunkah's layer annotations silently rather than loudly -- the exact
+        # failure this step exists to prevent.
+        have_major=$(podman --version | grep -oE '[0-9]+' | head -n 1)
+        if [ "${have_major}" -lt 5 ]; then
+          echo "Installed podman is ${have_major}.x; Chunkah needs >= 5 or it loses OCI layer annotations." >&2
+          exit 1
+        fi
+
+    # GitHub-hosted runners keep most free disk space on /mnt (~66G) while /
+    # has far less headroom. Building the image and then rechunking it keeps
+    # two copies of the root filesystem in podman's storage at once, which
+    # can exhaust /. Relocate podman's rootless storage onto /mnt before the
+    # build so the later rechunk step has room.
+    - name: Move container storage to the large runner disk
+      shell: bash
+      run: |
+        set -eux
+        sudo mkdir -p /mnt/containers
+        sudo chown "$(id -u):$(id -g)" /mnt/containers
+        mkdir -p "${HOME}/.local/share"
+        rm -rf "${HOME}/.local/share/containers"
+        ln -s /mnt/containers "${HOME}/.local/share/containers"
+        df -h / /mnt

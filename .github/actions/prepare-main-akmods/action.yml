@@ -1,0 +1,348 @@
+name: Prepare Main Akmods Build
+
+description: Resolve build inputs, upload the input manifest, verify shared akmods cache state, and rebuild the shared cache only when required.
+
+inputs:
+  use_input_lock:
+    description: Whether to replay build inputs from a lock file.
+    required: true
+  lock_file:
+    description: Lock file path used when replay mode is enabled.
+    required: true
+  build_container_ref:
+    description: Build container image ref for the akmods job.
+    required: true
+  akmods_repo:
+    description: Shared akmods cache repository name.
+    required: true
+  akmods_upstream_repo:
+    description: Configured akmods source repository URL.
+    required: true
+  rebuild_akmods:
+    description: Whether this run should rebuild the shared akmods cache even if a reusable cache already exists.
+    required: true
+  allow_cache_rebuild:
+    description: >-
+      Whether this run is permitted to rebuild and republish the shared akmods
+      cache at all. Callers set this to false for runs that must never mutate
+      shared state -- branch runs, which cannot sign what they publish. When
+      false and a rebuild would otherwise be required, the job fails with an
+      explanation instead of publishing.
+    required: false
+    default: "true"
+  registry_actor:
+    description: Registry username used for shared-cache publishing.
+    required: true
+  registry_token:
+    description: Registry token used for shared-cache publishing.
+    required: true
+
+outputs:
+  version:
+    description: Fedora major version resolved for this run.
+    value: ${{ steps.resolve.outputs.version }}
+  kernel_release:
+    description: Primary kernel release resolved for this run.
+    value: ${{ steps.resolve.outputs.kernel_release }}
+  detected_kernel_releases:
+    description: Full detected kernel release list resolved for this run.
+    value: ${{ steps.resolve.outputs.detected_kernel_releases }}
+  base_image_ref:
+    description: Base image ref before digest pinning.
+    value: ${{ steps.resolve.outputs.base_image_ref }}
+  base_image_name:
+    description: Base image repository name.
+    value: ${{ steps.resolve.outputs.base_image_name }}
+  base_image_tag:
+    description: Stable base image tag selected for this run.
+    value: ${{ steps.resolve.outputs.base_image_tag }}
+  base_image_pinned:
+    description: Digest-pinned base image ref.
+    value: ${{ steps.resolve.outputs.base_image_pinned }}
+  base_image_digest:
+    description: Base image digest used for this run.
+    value: ${{ steps.resolve.outputs.base_image_digest }}
+  build_container_ref:
+    description: Build container ref before digest pinning.
+    value: ${{ steps.resolve.outputs.build_container_ref }}
+  build_container_pinned:
+    description: Digest-pinned build container ref.
+    value: ${{ steps.resolve.outputs.build_container_pinned }}
+  build_container_digest:
+    description: Build container digest used for this run.
+    value: ${{ steps.resolve.outputs.build_container_digest }}
+  zfs_minor_version:
+    description: OpenZFS minor line used for this run.
+    value: ${{ steps.resolve.outputs.zfs_minor_version }}
+  zfs_version:
+    description: Exact OpenZFS patch version resolved on that line for this run.
+    value: ${{ steps.resolve.outputs.zfs_version }}
+  akmods_upstream_ref:
+    description: Resolved akmods source commit used for this run.
+    value: ${{ steps.resolve.outputs.akmods_upstream_ref }}
+  use_input_lock:
+    description: Whether lock replay mode was active.
+    value: ${{ steps.resolve.outputs.use_input_lock }}
+  lock_file_path:
+    description: Lock file path recorded in the resolved inputs.
+    value: ${{ steps.resolve.outputs.lock_file_path }}
+  akmods_cache_exists:
+    description: Whether a reusable shared akmods cache was found.
+    value: ${{ steps.cache.outputs.exists }}
+  akmods_image:
+    description: Shared akmods cache tag that was checked or built.
+    value: ${{ steps.pin_akmods.outputs.akmods_image || steps.cache.outputs.akmods_image }}
+  akmods_image_pinned:
+    description: Digest-pinned shared akmods cache image ref for the final image build.
+    value: ${{ steps.pin_akmods.outputs.akmods_image_pinned || steps.cache.outputs.akmods_image_pinned }}
+  akmods_image_digest:
+    description: >-
+      Bare digest of the shared akmods cache image this run published. Only set
+      when this run actually rebuilt the cache, because only then is there a
+      freshly published digest that still needs signing. The signing job signs
+      this digest instead of re-resolving the tag, which a concurrent branch
+      run rebuilding the same shared tag could move underneath it.
+    value: ${{ steps.pin_akmods.outputs.akmods_image_digest }}
+  rebuilt:
+    description: >-
+      Whether this run actually rebuilt and republished the shared akmods
+      cache image, as opposed to reusing an existing one. Callers use this to
+      decide whether the freshly published cache needs signing this run.
+      Reported by the build step itself rather than recomputed from the same
+      condition that guards it, so the two can never drift apart.
+    value: ${{ steps.akmods_build.outputs.rebuilt || 'false' }}
+
+runs:
+  # This composite action is the "front half" of the main workflow. It decides
+  # what this run should build, records those choices, and refreshes the shared
+  # ZFS module cache only when the current cache no longer matches the primary
+  # kernel we support.
+  using: composite
+  steps:
+    # Resolve every moving input up front. This keeps the rest of the workflow
+    # deterministic for the duration of the run, even if an upstream `latest`
+    # tag changes while the job is still running.
+    - id: resolve
+      name: Resolve build inputs for this run
+      shell: bash
+      env:
+        USE_INPUT_LOCK: ${{ inputs.use_input_lock }}
+        LOCK_FILE: ${{ inputs.lock_file }}
+        BUILD_CONTAINER_REF: ${{ inputs.build_container_ref }}
+        # Authenticates the OpenZFS release lookup in ci_tools/zfs_release.py.
+        # Unauthenticated api.github.com calls are limited per IP, and hosted
+        # runners share IPs, so without this the ZFS version resolution can
+        # fail for reasons unrelated to this repository.
+        GITHUB_TOKEN: ${{ inputs.registry_token }}
+      run: |
+        python3 -m ci_tools.cli resolve-build-inputs
+
+    # Save a plain JSON summary of the resolved inputs. In GitHub Actions,
+    # an "artifact" is a file saved from the run so it can be downloaded later
+    # for debugging or audit work.
+    - name: Write build inputs manifest
+      shell: bash
+      env:
+        USE_INPUT_LOCK: ${{ steps.resolve.outputs.use_input_lock }}
+        LOCK_FILE_PATH: ${{ steps.resolve.outputs.lock_file_path }}
+        FEDORA_VERSION: ${{ steps.resolve.outputs.version }}
+        KERNEL_RELEASE: ${{ steps.resolve.outputs.kernel_release }}
+        DETECTED_KERNEL_RELEASES: ${{ steps.resolve.outputs.detected_kernel_releases }}
+        BASE_IMAGE_REF: ${{ steps.resolve.outputs.base_image_ref }}
+        BASE_IMAGE_NAME: ${{ steps.resolve.outputs.base_image_name }}
+        BASE_IMAGE_TAG: ${{ steps.resolve.outputs.base_image_tag }}
+        BASE_IMAGE_PINNED: ${{ steps.resolve.outputs.base_image_pinned }}
+        BASE_IMAGE_DIGEST: ${{ steps.resolve.outputs.base_image_digest }}
+        BUILD_CONTAINER_REF: ${{ steps.resolve.outputs.build_container_ref }}
+        BUILD_CONTAINER_PINNED: ${{ steps.resolve.outputs.build_container_pinned }}
+        BUILD_CONTAINER_DIGEST: ${{ steps.resolve.outputs.build_container_digest }}
+        ZFS_MINOR_VERSION: ${{ steps.resolve.outputs.zfs_minor_version }}
+        ZFS_VERSION: ${{ steps.resolve.outputs.zfs_version }}
+        AKMODS_UPSTREAM_REF: ${{ steps.resolve.outputs.akmods_upstream_ref }}
+      run: |
+        python3 -m ci_tools.cli write-build-inputs-manifest
+
+    # Upload the manifest as an artifact so a later investigation can answer
+    # "what exactly did this successful or failed run try to build?"
+    - name: Upload build inputs manifest
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: build-inputs-${{ github.run_id }}
+        path: artifacts/build-inputs.json
+        if-no-files-found: error
+        retention-days: 30
+
+    # Reuse the shared akmods cache only when it already contains a matching
+    # module build for the primary kernel this image is expected to boot with,
+    # built against the exact ZFS patch version this run resolved. Matching
+    # only the minor line here used to let a cache holding an older patch on
+    # the same line (e.g. 2.4.3) silently satisfy a newer one (e.g. 2.4.4), so
+    # a new OpenZFS patch never actually reached the image.
+    - id: cache
+      name: Check for existing shared akmods cache
+      shell: bash
+      env:
+        FEDORA_VERSION: ${{ steps.resolve.outputs.version }}
+        KERNEL_RELEASE: ${{ steps.resolve.outputs.kernel_release }}
+        AKMODS_REPO: ${{ inputs.akmods_repo }}
+        ZFS_VERSION: ${{ steps.resolve.outputs.zfs_version }}
+      run: |
+        python3 -m ci_tools.cli check-akmods-cache
+
+    # A run that is not allowed to touch shared state must stop here rather
+    # than republish the cache. Branch runs (human or automated) validate that
+    # a branch still builds, but they must never publish the shared cache image
+    # that production later consumes -- they have no signing key, so anything
+    # they published would be unsigned, which every later run correctly rejects.
+    # Failing loudly is correct: the alternative silently degrades shared state
+    # for every consumer.
+    - name: Refuse to refresh the shared akmods cache from a restricted run
+      if: inputs.allow_cache_rebuild != 'true' && (inputs.rebuild_akmods == 'true' || steps.cache.outputs.exists != 'true')
+      shell: bash
+      run: |
+        echo "The shared akmods cache needs rebuilding, but this run is not allowed to publish it." >&2
+        echo "Branch runs deliberately cannot refresh shared production state or sign images." >&2
+        echo "Seed or refresh the cache from the main workflow: workflow_dispatch with rebuild_akmods=true, then re-run this." >&2
+        exit 1
+
+    # Always verify that the resolved akmods source commit is fetchable. This
+    # avoids a later surprise where the cache looked reusable, but the resolved
+    # source ref itself was wrong or no longer available.
+    - name: Clone resolved upstream akmods tooling
+      shell: bash
+      env:
+        AKMODS_UPSTREAM_REPO: ${{ inputs.akmods_upstream_repo }}
+        AKMODS_UPSTREAM_REF: ${{ steps.resolve.outputs.akmods_upstream_ref }}
+      run: |
+        python3 -m ci_tools.cli akmods-clone-pinned
+
+    # Only rewrite the ZFS target when we are about to build a fresh shared
+    # cache. The existing cache path can skip this because nothing new will be
+    # published in that case.
+    - name: Configure shared ZFS target in self-hosted namespace
+      if: inputs.rebuild_akmods == 'true' || steps.cache.outputs.exists != 'true'
+      shell: bash
+      env:
+        FEDORA_VERSION: ${{ steps.resolve.outputs.version }}
+        AKMODS_REPO: ${{ inputs.akmods_repo }}
+        AKMODS_DESCRIPTION: Shared cache image for pre-built zfs akmod RPMs
+      run: |
+        python3 -m ci_tools.cli akmods-configure-zfs-target
+
+    # This is the expensive step. It builds the precompiled ZFS kernel module
+    # cache only when the caller explicitly requested a rebuild or when the
+    # existing cache does not match the current primary kernel.
+    #
+    # We capture stdout and stderr to a log file so the next step can classify a
+    # failure into `upstream-compat` vs `unknown` without re-running the build.
+    - id: akmods_build
+      name: Build and publish shared self-hosted ZFS akmods image
+      if: inputs.rebuild_akmods == 'true' || steps.cache.outputs.exists != 'true'
+      shell: bash
+      env:
+        AKMODS_KERNEL: main
+        AKMODS_VERSION: ${{ steps.resolve.outputs.version }}
+        KERNEL_RELEASE: ${{ steps.resolve.outputs.kernel_release }}
+        AKMODS_REPO: ${{ inputs.akmods_repo }}
+        AKMODS_TARGET: zfs
+        # Deliberately the exact resolved patch version (e.g. "2.4.4"), not the
+        # line (e.g. "2.4"), despite the variable's name. The fork's
+        # build_files/zfs/build-kmod-zfs.sh uses this value only as a prefix:
+        #   select(.tag_name | startswith("zfs-" + $ZMV))][0]
+        # so passing "2.4" makes it choose the newest release on the line
+        # itself, independently of what this repo resolved. Those two lookups
+        # can disagree -- a release published between them, or the fork reading
+        # only the API's first page while this repo paginates -- and the image
+        # would then carry an org.zfs-kinoite-complex.zfs-version label that
+        # does not match the module it ships. Passing the exact version makes
+        # the fork select precisely what this repo resolved, and if that
+        # release is not visible to the fork it exits nonzero with a clear
+        # message rather than quietly building something else.
+        #
+        # The "Verify the rebuilt cache" step below still checks the result,
+        # because this narrows the mismatch window rather than closing it: the
+        # prefix match would also accept a hypothetical "2.4.44" for "2.4.4".
+        ZFS_MINOR_VERSION: ${{ steps.resolve.outputs.zfs_version }}
+        CI: "1"
+        REGISTRY_ACTOR: ${{ inputs.registry_actor }}
+        REGISTRY_TOKEN: ${{ inputs.registry_token }}
+        GITHUB_TOKEN: ${{ inputs.registry_token }}
+      run: |
+        mkdir -p artifacts
+        set -o pipefail
+        python3 -m ci_tools.cli akmods-build-and-publish 2>&1 | tee artifacts/akmods-build.log
+        # Only reached when the build above actually succeeded, so this reports
+        # what happened rather than restating the `if:` condition guarding this
+        # step. A failed build leaves this unset and the action's `rebuilt`
+        # output falls back to 'false'.
+        echo "rebuilt=true" >> "${GITHUB_OUTPUT}"
+
+    # Run only when the akmods build step above failed. Classifies the failure
+    # and writes a sticky-issue payload the downstream visibility workflow
+    # consumes. The exit status here is always success — this step only
+    # generates metadata. The earlier job failure still propagates normally.
+    - id: classify_akmods_failure
+      name: Classify akmods build failure
+      if: failure() && steps.akmods_build.outcome == 'failure'
+      shell: bash
+      env:
+        AKMODS_FAILURE_LOG: artifacts/akmods-build.log
+        KERNEL_RELEASE: ${{ steps.resolve.outputs.kernel_release }}
+        AKMODS_UPSTREAM_REF: ${{ steps.resolve.outputs.akmods_upstream_ref }}
+        FEDORA_VERSION: ${{ steps.resolve.outputs.version }}
+        AKMODS_FAILURE_PAYLOAD_PATH: artifacts/akmods-failure.json
+      run: |
+        python3 -m ci_tools.cli classify-akmods-failure
+
+    # Upload the classification payload so the workflow_run-triggered
+    # visibility workflow can read it without needing access to job state.
+    - name: Upload akmods failure payload
+      if: failure() && steps.akmods_build.outcome == 'failure'
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: akmods-failure-${{ github.run_id }}
+        path: artifacts/akmods-failure.json
+        if-no-files-found: warn
+        retention-days: 30
+
+    # When this run rebuilt the shared cache, pin the freshly published tag to
+    # the exact registry digest the final image build should consume. Reused
+    # caches get their digest from the earlier check step, which validated that
+    # same pinned image.
+    - id: pin_akmods
+      name: Resolve shared akmods cache digest
+      if: success() && (inputs.rebuild_akmods == 'true' || steps.cache.outputs.exists != 'true')
+      shell: bash
+      env:
+        FEDORA_VERSION: ${{ steps.resolve.outputs.version }}
+        AKMODS_REPO: ${{ inputs.akmods_repo }}
+      run: |
+        python3 -m ci_tools.cli pin-akmods-cache
+
+    # Prove the cache this run just published actually contains the ZFS version
+    # this run resolved, instead of assuming it.
+    #
+    # This repo and the akmods fork resolve the OpenZFS patch version
+    # independently: this repo picks the highest patch on the configured line,
+    # while the fork's build-kmod-zfs.sh takes the most recently published
+    # release whose tag starts with that line. Those normally agree, but a
+    # release published between the two lookups makes them disagree -- and
+    # nothing downstream would notice. The final image would carry
+    # org.zfs-kinoite-complex.zfs-version=<what we resolved> while shipping the
+    # module the fork actually built, and the scheduled gate compares against
+    # that same label, so it would see "unchanged" and never rebuild. The label
+    # would stay wrong indefinitely.
+    #
+    # Only runs on the rebuild path. The reuse path already proved this, since
+    # that is exactly what the earlier check step tests for.
+    - name: Verify the rebuilt cache matches the resolved ZFS version
+      if: success() && (inputs.rebuild_akmods == 'true' || steps.cache.outputs.exists != 'true')
+      shell: bash
+      env:
+        FEDORA_VERSION: ${{ steps.resolve.outputs.version }}
+        KERNEL_RELEASE: ${{ steps.resolve.outputs.kernel_release }}
+        AKMODS_REPO: ${{ inputs.akmods_repo }}
+        ZFS_VERSION: ${{ steps.resolve.outputs.zfs_version }}
+        REQUIRE_MATCH: "true"
+      run: |
+        python3 -m ci_tools.cli check-akmods-cache

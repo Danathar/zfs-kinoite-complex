@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+#
+# Script: build_files/build-image.sh
+# What: Applies all image customizations in one place during the native build.
+# Doing: Enables brew services, installs cached ZFS RPMs, writes the in-image
+#        signing policy, and cleans up build-only state.
+# Why: A separate build script is easier to read than one large Containerfile
+#      shell block, and it keeps the teaching comments close to the steps.
+# Goal: Produce one bootable Fedora Kinoite image with ZFS, Fedora defaults,
+#       brew, and repository trust configuration.
+#
+set -euo pipefail
+
+# Build-time configuration is passed from the Containerfile as environment
+# variables so the script can stay reusable in GitHub Actions workflow runs and local tests.
+: "${IMAGE_REPO:?Missing IMAGE_REPO}"
+: "${SIGNING_KEY_FILENAME:?Missing SIGNING_KEY_FILENAME}"
+
+# `install_zfs_from_akmods_cache.py` accepts either:
+# 1. `AKMODS_IMAGE` for an exact override, or
+# 2. `AKMODS_IMAGE_TEMPLATE` for "follow the Fedora version in this base image".
+# CI passes the exact image today, while local builds usually rely on the
+# template path so they do not need a hard-coded Fedora release number here.
+
+# Copy the committed public key into the standard trust-material directory.
+install -d -m 0755 /etc/pki/containers /etc/containers/registries.d
+install -m 0644 /ctx/cosign.pub "/etc/pki/containers/${SIGNING_KEY_FILENAME}"
+
+# The OCI brew image ships systemd units and preset files. Presetting them at
+# build time means first boot automatically performs the brew extraction step.
+/usr/bin/systemctl preset brew-setup.service
+/usr/bin/systemctl preset brew-update.timer
+/usr/bin/systemctl preset brew-upgrade.timer
+
+# Distrobox is already included by Fedora Kinoite. If this image needs to add
+# Fedora RPM packages during the container build, prefer `dnf5 -y install ...`.
+# `rpm-ostree install distrobox`
+# dnf5 -y install <package>
+
+# Install ZFS userspace + module payloads from the self-hosted akmods cache.
+python3 /ctx/containerfiles/zfs-akmods/install_zfs_from_akmods_cache.py
+
+# Load the ZFS kernel module at boot so the installed userspace tools can report
+# both userspace and kernel-module versions without requiring a manual modprobe.
+install -D -m 0644 \
+  /ctx/files/usr/lib/modules-load.d/zfs.conf \
+  /usr/lib/modules-load.d/zfs.conf
+
+# Write repository-specific trust policy into the final image so future signed
+# updates from the same GitHub Container Registry (GHCR) path work without extra
+# host-side repair steps.
+IMAGE_REPO="${IMAGE_REPO}" \
+SIGNING_KEY_FILENAME="${SIGNING_KEY_FILENAME}" \
+python3 /ctx/files/scripts/configure_signing_policy.py
+
+# `bootc container lint` expects package-created state directories under `/var`
+# to have matching tmpfiles declarations. The `zfs` dependency chain pulls in
+# `pcp`, which creates `/var/lib/pcp/*` directories but does not ship tmpfiles
+# entries for this image build mode, so install a local declaration here.
+install -D -m 0644 \
+  /ctx/files/usr/lib/tmpfiles.d/zfs-kinoite-complex.conf \
+  /usr/lib/tmpfiles.d/zfs-kinoite-complex.conf
+
+# Remove build-only runtime state before `bootc container lint` runs.
+# Why these paths are safe to drop:
+# 1. `/run` is runtime-only state and should not be baked into the image.
+# 2. `/var/lib/containers` here came from build-time image inspection, not from
+#    something users need at runtime after deployment.
+# 3. Some builders leave resolver files bind-mounted under `/run/systemd`.
+#    Those specific paths can be busy, so cleanup here must be best-effort
+#    instead of failing the entire image build on a harmless leftover mount.
+# The `|| true` guards below are intentional:
+# - `/run/systemd/resolve` may be an active bind mount that cannot be unmounted
+#   during this build step, so the umount attempt is best-effort.
+# - `2>/dev/null` on the find commands suppresses errors when a directory has
+#   already been removed by an earlier `-exec` in the same invocation.
+mountpoint -q /run/systemd/resolve && umount /run/systemd/resolve || true
+find /run/systemd -mindepth 1 \
+  ! -path '/run/systemd/resolve' \
+  ! -path '/run/systemd/resolve/*' \
+  -exec rm -rf {} + 2>/dev/null || true
+find /run/systemd -depth -type d -empty -delete 2>/dev/null || true
+rm -rf /var/lib/containers
+
+# Drop the cache and lock state `dnf5` leaves behind after the ZFS install
+# above. Both currently show up as `bootc container lint` warnings:
+# - `/run/dnf` trips `nonempty-run-tmp`. `/run` is a tmpfs on a booted system,
+#   so anything baked in here is masked at boot and is pure image weight.
+# - `/var/lib/dnf` trips `var-tmpfiles`. Content baked into `/var` is only
+#   applied at initial install and is never refreshed by a later
+#   `bootc upgrade`, so build-time cache has no business being there: every
+#   machine installed from the image would carry this run's stale copy forever.
+# Neither path holds anything the booted system needs. Installed-package state
+# lives in the rpm database under `/usr`, and dnf's versionlock configuration
+# lives in `/etc/dnf`; dnf recreates its own cache directories on demand.
+rm -rf /run/dnf /var/lib/dnf
+
+# No explicit `ostree container commit` here: `bootc container lint` (run next,
+# in the Containerfile) already performs the equivalent validation/finalization.
+# bootc's current Fedora Atomic templates use the same lint/finalization model;
+# no separate ostree container commit is needed here.

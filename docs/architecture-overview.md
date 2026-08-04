@@ -1,0 +1,567 @@
+# zfs-kinoite-complex Architecture Overview
+
+If a term is unfamiliar, check the shared glossary first:
+[`docs/glossary.md`](./glossary.md)
+
+## Purpose
+
+This project provides a controlled way to run ZFS on Kinoite with a native
+`Containerfile` build.
+
+The technical target is still the same:
+
+1. track the moving Kinoite/Fedora kernel stream
+2. build matching ZFS akmods, meaning the ZFS kernel-module packages built for that exact kernel set
+3. install those RPMs (Red Hat Package Manager package files) into the final image
+4. publish stable tags only after candidate succeeds
+
+## Real Simplification Goals
+
+This repository intentionally keeps three things out of the image build flow:
+
+1. no generated recipe layer
+2. no separate candidate image repository
+3. no branch/candidate akmods alias repository flow
+
+That means the main complexity now lives in two places only:
+
+1. input pinning and akmods cache control in `ci_tools/`
+2. image-build-time ZFS install logic in `containerfiles/zfs-akmods/install_zfs_from_akmods_cache.py`
+
+One smaller cleanup also matters for readability:
+
+- repo-owned data-shaping logic now lives in tracked Python helpers instead of
+  inline workflow shell wherever that tradeoff is reasonable
+
+## Outputs
+
+### OS Image Repository
+
+All operating-system image tags live in the same repository:
+
+- candidate tag: `ghcr.io/danathar/zfs-kinoite-complex:candidate-<sha>-<fedora>`
+- stable tag: `ghcr.io/danathar/zfs-kinoite-complex:latest`
+- stable audit tag: `ghcr.io/danathar/zfs-kinoite-complex:stable-<run>-<sha>`
+- branch tag: `ghcr.io/danathar/zfs-kinoite-complex:br-<branch>-<fedora>`
+
+### Shared Akmods Cache Repository
+
+The shared cache remains separate because it is a different kind of build output:
+
+- `ghcr.io/danathar/zfs-kinoite-complex-akmods:main-<fedora>`
+- `ghcr.io/danathar/zfs-kinoite-complex-akmods:main-<fedora>-x86_64`
+
+Workflow jobs still check or publish the readable `main-<fedora>` tag, but the
+final OS image build consumes that cache by digest:
+
+- `ghcr.io/danathar/zfs-kinoite-complex-akmods@sha256:<digest>`
+
+Why keep a separate akmods cache repository:
+
+1. it keeps the final OS image tags readable
+2. it preserves the existing akmods reuse model
+3. the cache is build-time infrastructure, not the user-facing OS image
+
+## How It Works
+
+### 0. Scheduled-Build Gate
+
+Before anything else runs, the `preflight` job in `build.yml` decides whether
+a scheduled run should build at all. Push and manual (`workflow_dispatch`)
+runs always build; only the daily `schedule` trigger is gated. This logic
+lives in [`ci_tools/check_stable_signal.py`](../ci_tools/check_stable_signal.py).
+
+The upstream `STABLE_SIGNAL_IMAGE` (`quay.io/fedora-ostree-desktops/kinoite:45` by
+default; see [`ci/defaults.json`](../ci/defaults.json)) is treated as the
+authoritative cadence signal for "has the upstream base image moved since we
+last published?"
+
+`STABLE_SIGNAL_IMAGE` should name the same upstream image as
+`DEFAULT_BASE_IMAGE`. The gate is only meaningful when the image it watches is
+the image the build actually consumes. Keep these two values pointed at the
+same Fedora Kinoite major tag.
+
+Both default to the explicit Fedora major tag `kinoite:45`, deliberately.
+The major tag follows the supported Fedora Kinoite stream without silently
+switching to a development or rawhide stream. If the supported Fedora major
+changes, update both defaults and validate the corresponding akmods support
+before promotion.
+
+That tradeoff is the point: this image exists to carry ZFS, and a ZFS module
+built against a kernel OpenZFS declines to support is a worse outcome than
+temporarily staying on the previous Fedora major.
+
+This repo's own `:latest` image only carries provenance: every
+build writes three OCI labels onto the candidate (and promotion carries them
+onto `:latest`):
+
+- `org.zfs-kinoite-complex.stable-signal-image`: which upstream image was used as the signal
+- `org.zfs-kinoite-complex.stable-signal-digest`: that image's digest at build time
+- `org.zfs-kinoite-complex.zfs-version`: the exact OpenZFS patch version this build resolved and installed
+
+The gate compares the current upstream digest against the base-image signal
+labels, AND independently compares the newest release on the configured ZFS
+minor line (see [`ci_tools/zfs_release.py`](../ci_tools/zfs_release.py)) against
+the `zfs-version` label, so a scheduled run builds when *either* one has moved.
+Without the second check, a new OpenZFS patch release -- including a security
+fix -- could sit unbuilt indefinitely as long as the Kinoite base image itself
+did not change, because the base-image digest is all the gate used to compare.
+It returns one of:
+
+| Reason | Meaning | Builds? |
+|---|---|---|
+| `stable-signal-unchanged` | current `:latest` already reflects this exact upstream digest AND ZFS version | no |
+| `stable-signal-advanced` | upstream digest moved since the last promoted image | yes |
+| `zfs-version-advanced` | a newer OpenZFS release exists on the configured minor line | yes |
+| `stable-signal-image-changed` | `STABLE_SIGNAL_IMAGE` itself was reconfigured since the last promotion | yes |
+| `current-latest-missing` | no `:latest` has ever been published | yes |
+| `current-latest-missing-stable-signal-labels` | `:latest` exists but predates this gate, or was built by a non-schedule event before provenance was recorded | yes |
+| `current-latest-missing-zfs-version-label` | `:latest` exists but predates the `zfs-version` label | yes |
+| `not-schedule-event` | push or manual run; the gate is bypassed entirely | yes |
+
+The `zfs-version` label baked onto the image is *not* sourced from this gate's
+own resolution, unlike the stable-signal labels. It comes from the real
+`build-zfs-akmods` job's own resolution -- the same value the akmods
+cache-reuse check validated against and the same one actually installed --
+so the label can never claim a version different from what the image really
+carries.
+
+The gate is fail-closed on unknown state: a registry error while checking the
+upstream signal image always raises and fails the job. A registry error while
+checking the repo's own `:latest` (auth failure, rate limit, network blip) is
+treated the same way, *except* for a genuine "tag does not exist" response,
+which is a normal `current-latest-missing` build reason. The point is that
+"we couldn't tell" must never be silently treated as "nothing changed." The
+same applies to the OpenZFS releases API call: a network failure or an
+unparseable response raises and fails the job rather than silently falling
+back to "no ZFS change detected."
+
+Push and manual runs still resolve and record the current upstream
+stable-signal digest (best-effort; a registry hiccup does not fail the build)
+so the *next* scheduled run has fresh provenance to compare against. Without
+this, a push build would leave the label empty, and the following scheduled
+run would always see `current-latest-missing-stable-signal-labels` and do a
+full rebuild even when the upstream base image had not moved. The `zfs-version`
+label does not need this same bootstrapping step: it is always written by the
+real `build-zfs-akmods` job for every event type, schedule included, so it is
+never left empty by a push or manual run the way an unresolved stable-signal
+digest would be.
+
+The `akmods-failure-triage.yml` workflow (see "Operational Model" below)
+checks for a `build-inputs-<run_id>` artifact before treating a run as a real
+build. A gate-skipped scheduled run reports `success` but never reaches input
+resolution, so it never uploads that artifact — this keeps a skipped run from
+being mistaken for a green build and auto-closing sticky failure issues that
+track a still-unfixed problem.
+
+### 1. Input Resolution
+
+The main workflow resolves and pins:
+
+1. base image ref, digest, and stable tag
+2. build container ref and digest for the akmods job
+3. Fedora major version
+4. every installed kernel found in `/lib/modules`
+5. resolved akmods source commit SHA
+6. ZFS minor version line
+
+Those values are written to a saved workflow output file named `build-inputs-<run_id>` so the same input set can be replayed later.
+
+The `main` workflow now wraps that whole preparation path in one local action:
+
+- [`.github/actions/prepare-main-akmods/action.yml`](../.github/actions/prepare-main-akmods/action.yml)
+
+That action does five things in one place:
+
+1. resolve and record build inputs
+2. upload the build-input manifest
+3. verify whether the shared akmods cache can be reused
+4. rebuild and republish the shared cache only when required
+5. resolve the checked or rebuilt cache tag to the digest-pinned ref passed to the final image build
+
+### 2. Shared Akmods Cache Reuse Or Rebuild
+
+The workflow checks whether the shared cache image already contains a matching
+`kmod-zfs-<kernel_release>-<zfs_version>-...rpm` for the supported primary
+kernel **and** the exact OpenZFS patch version resolved for this run (see
+[`ci_tools/zfs_release.py`](../ci_tools/zfs_release.py)), **and** that the
+cache is signed by this repo's own cosign key. Matching on the minor line
+alone (for example any `2.4.*`) used to let a cache built for an older patch
+on that line silently satisfy a newer one, so a new OpenZFS patch release
+never actually forced a rebuild as long as the kernel and line stayed the
+same.
+
+The repo's policy is:
+
+1. detect every installed kernel in the base image for visibility
+2. choose the newest detected kernel as the supported primary kernel
+3. require ZFS support only for that supported primary kernel, at the exact resolved patch version
+4. use image rollback, not older bundled kernels in the same image, as the recovery path
+
+That check now does one direct inspection path:
+
+1. copy the shared cache image into a local Open Container Initiative (OCI) layout
+2. unpack its filesystem layers
+3. check whether the extracted RPM tree contains a matching `kmod-zfs` package for the supported primary kernel at the exact resolved ZFS version
+4. only once that matches, verify the cache image's cosign signature against
+   the committed `cosign.pub` (see
+   [`ci_tools/check_akmods_cache.py`](../ci_tools/check_akmods_cache.py)'s
+   `cosign_verify` call)
+
+The signature check exists because this cache is a real supply-chain input,
+not just build-time infrastructure: branch workflows also hold `packages:
+write` and can rebuild and republish this same shared tag, so a matching
+filename alone does not prove who produced the content being reused. A cache
+that matches the kernel and ZFS version but fails signature verification is
+treated the same as a cache miss. Only `main` runs may rebuild and republish
+this cache: branch runs pass `allow_cache_rebuild: "false"` and fail with an
+explanation instead, because the signing key lives in a `main`-restricted
+environment they cannot reach, so anything they published would be unsigned
+and rejected by every later consumer anyway. When a `main` run does rebuild,
+a dedicated `sign-akmods-cache` job (in `build.yml`, running in the
+`production-signing` environment) signs the freshly published digest, reusing
+`ci_tools/sign_image.py` unchanged.
+
+One environment detail worth knowing: this signature check runs inside the
+same `ghcr.io/ublue-os/devcontainer` container as the rest of the akmods job,
+which ships its own preinstalled cosign (currently v2.4.1) rather than the
+v3.1.2 this repo installs elsewhere via `install-signing-tools`. The
+`cosign_verify` helper deliberately does not pass `--new-bundle-format=false`
+(a flag v2.4.1 does not recognize at all) because both versions verify this
+repo's legacy-format signatures correctly without it -- verified directly
+against a real signed image before relying on it. `build-pr.yml`'s validation
+job does not run inside that container, so it installs cosign explicitly via
+`install-signing-tools` instead.
+
+Even when the shared cache is reusable, the workflows still clone the resolved
+`Danathar/akmods` commit once per run.
+
+Why:
+
+1. a stale akmods ref can hide for a while if the workflow keeps reusing an older shared cache
+2. cloning the resolved ref is the cheapest way to prove that the configured commit SHA
+   still exists in the configured fork
+3. this keeps branch, pull request, push, and schedule paths honest with each other
+
+The akmods source commit is chosen by a cascade (see [`docs/akmods-fork-maintenance.md`](./akmods-fork-maintenance.md)):
+
+1. explicit env override (`AKMODS_UPSTREAM_REF`)
+2. non-empty pin in `ci/defaults.json`
+3. floating `AKMODS_UPSTREAM_TRACK` ref resolved via `git ls-remote` on every run
+
+The default is (3), so the build self-heals once upstream catches up after a transient incompatibility.
+
+If yes:
+
+- reuse the cache
+
+If no:
+
+1. clone the resolved `Danathar/akmods` fork commit
+2. point its target output to `ghcr.io/<owner>/zfs-kinoite-complex-akmods`
+3. build the shared cache image for the supported primary kernel
+
+Important design change:
+
+- this repo no longer patches the cloned akmods `Justfile` at runtime
+- the repo-specific publish-name logic now lives in the `Danathar/akmods`
+  fork commit itself
+- that keeps the runtime clone step boring: clone, check out the exact commit, verify the commit SHA, stop
+
+Plain-language summary of how the akmods source is selected:
+
+1. the source repository is still the configured fork, `Danathar/akmods`
+2. `ci/defaults.json` *can* pin one exact commit via `AKMODS_UPSTREAM_REF`, but that
+   field is **empty by default**, so the normal mode is floating: `AKMODS_UPSTREAM_TRACK`
+   (default `main`) is resolved with `git ls-remote` at the start of every run
+3. whichever commit that resolves to is then treated as fixed for the rest of the run —
+   the workflow clones exactly that SHA into `/tmp/akmods` and verifies it
+4. so pushing new commits to that fork **does** affect this repo without any edit here.
+   The next run resolves the new SHA immediately; that new fork code only builds the
+   shipped modules at the next akmods cache rebuild, since a reused cache is not rebuilt
+
+See [`docs/akmods-fork-maintenance.md`](./akmods-fork-maintenance.md) for the full
+resolution cascade, when to set a temporary pin, and the provenance caveat that follows
+from point 4.
+
+### 3. Native Final Image Build
+
+The final image is defined by the repository root [`Containerfile`](../Containerfile).
+
+It does four important things:
+
+1. starts from the pinned `BASE_IMAGE`
+2. imports Homebrew from the `ublue-os/brew` payload because Fedora Kinoite does not ship it
+3. runs [`build_files/build-image.sh`](../build_files/build-image.sh)
+4. runs `bootc container lint`
+
+The buildah invocation uses Docker v2s2 manifest format (`oci: false`) rather than
+OCI image manifests because host update tooling (`bootc upgrade` on booted
+machines) works more reliably with the Docker format. The "OCI" terminology
+elsewhere in this project refers to OCI standards for registry interaction and
+layer handling, not the specific container image manifest format produced by
+buildah.
+
+`build-image.sh` then:
+
+1. installs the committed `cosign.pub` public key into the image trust-material path
+2. enables brew setup/update services via `systemctl preset`
+3. keeps Distrobox from the upstream Fedora Kinoite image
+4. runs the ZFS install helper against the resolved akmods cache image reference
+5. writes repository-specific signing policy for `ghcr.io/danathar/zfs-kinoite-complex`
+6. installs the local `tmpfiles.d` declaration needed for `bootc container lint`
+7. removes build-only runtime/container state
+
+There is no explicit `ostree container commit` step: the `RUN bootc container
+lint` that follows performs the image validation/finalization needed by this
+native bootc build, so a separate commit step is redundant.
+
+For future Fedora package additions during image composition, use
+`dnf5 -y install ...` in the container build. Distrobox does not need a local
+install step here because Kinoite already includes it.
+
+The signing-policy step is now a pure Python helper:
+
+- [`files/scripts/configure_signing_policy.py`](../files/scripts/configure_signing_policy.py)
+
+That removed the earlier shell script that embedded an inline Python block just
+to write `policy.json`.
+
+Fedora-version handling is intentionally dynamic here:
+
+1. workflow runs normally pass a digest-pinned `AKMODS_IMAGE` build argument
+2. local builds can rely on `AKMODS_IMAGE_TEMPLATE` instead
+3. the helper fills in `{fedora}` by asking the selected base image which Fedora
+   major version it is based on
+4. that keeps the root `Containerfile` from hard-coding `43`, `44`, or any
+   other future Fedora major version into its local-build fallback
+
+#### Content-Based Layering With Chunkah
+
+After `bootc container lint` passes, the workflow (not the `Containerfile`)
+re-layers the locally built image with
+[Chunkah](https://github.com/coreos/chunkah), meaning it re-splits the same
+filesystem content into content-addressed layers instead of the layers
+buildah produced. Chunkah does not add, remove, or change any file inside the
+image; it only changes which layer each byte range lives in, so unrelated
+future updates can reuse layers whose content has not changed instead of
+re-pulling whole files that happen to share a layer with something that did
+change.
+
+This lives outside the `Containerfile` because it operates on the already-built
+local image, between the build and the point where that image is pushed and
+signed:
+
+1. [`.github/actions/prepare-rechunk-host`](../.github/actions/prepare-rechunk-host/action.yml)
+   runs at the top of each build job, before `build-native-image`, and prepares
+   two things a default GitHub-hosted runner does not provide:
+   - a version-matched `crun`/`buildah`/`podman`/`skopeo` set, installed
+     unconditionally from Ubuntu's `resolute` apt suite; podman before 5
+     silently drops Chunkah's layer annotations on push, which would defeat the
+     whole point of rechunking. The install is unconditional on purpose. It
+     and the step asserts podman `>= 5` after installing, so a regression in
+     the suite fails the build instead of quietly producing an unannotated
+     image.
+   - container storage relocated onto the runner's larger `/mnt` disk, because
+     rechunking briefly needs two unpacked copies of the image in storage at once
+2. [`.github/actions/rechunk-native-image`](../.github/actions/rechunk-native-image/action.yml)
+   runs after `build-native-image` and before `publish-native-image`. It rechunks
+   the local image via `podman run --mount=type=image` against the Chunkah
+   container, buffers the compressed result to an OCI archive on `/`, prunes all
+   local container storage, then loads the archive with its temp directory
+   pointed at `/mnt` -- so neither disk ever has to hold two unpacked copies of
+   the image at once -- and finally re-tags the rechunked result back onto the
+   same local tag `publish-native-image` expects.
+3. `publish-native-image`'s promote step copies the signed digest to the
+   requested tag with `skopeo copy --preserve-digests`, so that copy cannot
+   silently re-encode the manifest and drop Chunkah's layer annotations.
+   `ci_tools/promote_stable.py`'s later `latest`/audit-tag copies already used
+   `--preserve-digests` for the same reason.
+
+The Chunkah container image (currently `v0.6.0`) is both version- and
+digest-pinned as the `chunkah_image` input default inside
+`rechunk-native-image/action.yml`, tracked by a Renovate custom manager in the
+root [`renovate.json`](../renovate.json) whose regex captures both
+`currentValue` and `currentDigest`. It is digest-pinned, not just
+version-pinned, because this step rewrites the locally built image
+immediately before it is pushed and signed -- a moved tag under the same
+`v0.6.0` version would let unreviewed content in right before this repo's own
+key signs it. Renovate owns essentially every other version bump in this
+repo, including the GitHub Actions commit-SHA pins used throughout
+`.github/actions/` and `.github/workflows/`, the `ruff` version pinned for CI
+linting, and the OpenZFS minor release line in
+[`ci/defaults.json`](../ci/defaults.json).
+
+There is one deliberate exception. `ublue-os/remove-unwanted-software` in
+[`prepare-rechunk-host/action.yml`](../.github/actions/prepare-rechunk-host/action.yml)
+is pinned to a commit that upstream has not tagged (it merges their "v10" work,
+but their tags still stop at `v9`), so there is no released version for
+Renovate to anchor to and it does not appear in the dependency dashboard.
+Do not "fix" this by adding a `# v10` comment. No such tag exists, so Renovate
+would not find the declared version in the registry at all. It would not
+propose anything: rolling back to `v9` in that situation requires
+`rollbackPrs`, which defaults to `false` and is not enabled by this repo's
+presets, and there is no version above `v10` to offer either. The annotation
+would therefore be silently inert *and* untrue — strictly worse than the
+current honest absence, because a future reader would see a version comment
+and reasonably assume the pin is tracked.
+
+The pin is an immutable SHA, so nothing drifts; the only cost is not being told
+when upstream finally tags a release. Revisit when they do — at that point the
+correct fix is to repin to the tagged commit and add the matching comment,
+not to annotate the existing SHA.
+
+### 4. Primary-Kernel ZFS Install Logic
+
+This repo no longer tries to keep every bundled kernel inside the current image
+ZFS-ready.
+
+Instead, the helper does this:
+
+1. inspect every kernel directory under `/lib/modules`
+2. choose the newest detected kernel as the supported primary kernel
+3. require one matching `kmod-zfs` RPM for that kernel
+4. install ZFS userspace RPMs and that one primary `kmod-zfs` through `dnf5`
+5. run `depmod -a <kernel>` for the supported primary kernel
+6. fail the build if that supported kernel does not end up with a `zfs.ko` module (the check accepts uncompressed `zfs.ko` as well as Fedora's compressed forms `zfs.ko.xz` and `zfs.ko.zst`)
+
+Why this is the chosen tradeoff:
+
+1. the intended safety rule is "do not publish a new image unless the kernel it is expected to boot first has working ZFS"
+2. if a deployed image still proves bad, the recovery path is rollback to the previous image
+3. that makes support for older bundled kernels inside the current image optional rather than required
+4. dropping that broader guarantee removes a large amount of build and compose complexity
+
+Consequence:
+
+- if the current image contains an older bundled kernel and someone boots that older kernel directly, ZFS is not guaranteed to work there
+- the documented recovery path is to roll back the image instead
+
+### Retired Design Note: The Older Multi-Kernel Fallback System
+
+Earlier versions of this project used a more complex design.
+
+That older design worked like this:
+
+1. inspect every detected kernel in the base image
+2. build kernel-module payloads for every detected kernel
+3. merge those payloads back into one shared akmods cache image
+4. install one `kmod-zfs` package normally through `rpm-ostree`
+5. unpack the remaining kernel-module payloads directly into the image root
+6. run `depmod` for every detected kernel
+
+Why it existed:
+
+1. some upstream base images exposed more than one installed kernel under `/lib/modules`
+2. the older design tried to guarantee that ZFS would still work even if someone booted an older bundled kernel from the current image
+3. that was a stronger guarantee than simple image rollback
+
+Why this repo no longer uses that design:
+
+1. the stated operator goal is simpler: do not publish a new image unless the primary kernel has matching ZFS support
+2. if a deployed image still proves bad, the documented answer is to roll back to the previous image and stay there
+3. once rollback became the chosen recovery model, supporting every bundled kernel inside the current image stopped being necessary
+4. most of the remaining pipeline complexity lived in that broader guarantee
+
+What was intentionally given up:
+
+1. booting an older bundled kernel from the current image is no longer treated as a supported ZFS recovery path
+2. the supported recovery path is now image rollback to the previous known-good image
+
+### 5. Promotion And Signing
+
+Publication signs the candidate digest before any user-facing tag is moved.
+
+The publish action:
+
+1. pushes a transient `*-unsigned-<run_id>` tag
+2. resolves that transient tag to a digest
+3. signs and verifies that digest
+4. copies the signed digest to the requested candidate tag
+
+Promotion is a separate job.
+
+It:
+
+1. resolves the candidate tag digest
+2. re-verifies that digest's cosign signature against the committed `cosign.pub`
+3. copies that digest to `stable-<run>-<sha>` (the immutable audit tag)
+4. copies that digest to `latest`
+
+Step 2 is deliberately redundant with the signing that already happened during
+candidate publication. Promotion runs as a separate job on a fresh runner, and
+it is the step that actually points `latest` at a digest, so it verifies
+locally rather than inferring from an earlier job that the digest it is about
+to promote is signed. It verifies with the same committed public key that is
+baked into the image and enforced by booted systems, so a key mismatch or a
+missing signature fails in CI instead of at a user's next `bootc upgrade`. If
+verification fails, neither tag moves.
+
+Audit-before-`latest` is deliberate: `build.yml` cancels an in-progress
+promotion when a newer push starts a fresh run (see the workflow's
+`concurrency` block), so if the job is cancelled between the two copies, an
+audit record with no `latest` move is a safer partial state than a moved
+`latest` with no audit record. Each copy uses skopeo's `--preserve-digests`
+and `--multi-arch=all`, and is followed by inspecting the destination tag to
+confirm it resolved to the exact candidate digest — this keeps the copy
+fail-closed if a future manifest-list image or a change in skopeo's
+conversion behavior would otherwise change the digest silently.
+
+It does not sign `latest` again. Cosign signatures are tied to the digest, so
+the candidate signature carries over when `latest` resolves to the same digest.
+
+Because candidate and stable tags are in the same repository, the trust model is simpler:
+
+- no second image path under `ghcr.io`
+- no stable-vs-candidate policy drift
+- no host-side repair script to normalize two repository names
+
+The signer uses legacy cosign registry attachments because the bootc policy path
+used here discovers signatures through containers/image
+`use-sigstore-attachments`. See
+[`docs/signing-and-bootc.md`](./signing-and-bootc.md) for the detailed signing
+model and the cosign v3 compatibility flags.
+
+## Operational Model
+
+1. `build.yml`: candidate-first build and promotion
+   - the workflow now uses small Python helpers for registry-context export and
+     candidate-tag generation instead of inline shell snippets
+   - scheduled runs are gated on the upstream base image advancing; see "0. Scheduled-Build
+     Gate" above. Push and manual runs always build
+2. `build-branch.yml`: branch-tagged push with shared-cache reuse only
+   - branch runs never rebuild the shared akmods cache and never sign anything;
+     the signing key is scoped to a `main`-only environment
+   - bot-authored branch runs build locally and intentionally skip the push
+   - human-authored branch runs push an UNSIGNED `br-*` test image (explicit
+     `allow_unsigned` opt-in in `publish-native-image`) for throwaway VMs only;
+     machines enforcing this repository's signature policy refuse those tags
+   - the final branch image tag is now composed by a small Python helper
+3. `build-pr.yml`: read-only validation inputs plus no-push build
+4. `test.yml`: Python unit tests for repository-owned CI helpers and image-build helpers
+5. `akmods-failure-triage.yml`: `workflow_run` visibility workflow that opens, updates, and closes sticky akmods failure issues
+   - failed shared-akmods builds upload `akmods-failure.json` before the job exits
+   - `upstream-compat` marks known ZFS/kernel compatibility failures; the build
+     still fails and `latest` is not promoted
+   - when OpenZFS configure metadata shows `ZFS_META_KVER_MAX` below the
+     resolved base-image kernel, the job summary and sticky payload call out
+     that this is an intentional fail-closed protection
+
+## Design Principles
+
+1. keep stable on the last known-good build when candidate fails
+2. keep the final image repo single-path and boring
+3. keep the shared akmods cache explicit and inspectable
+4. pin run inputs so `latest` drift does not change behavior mid-run
+5. keep the supported-kernel logic in Python, not inline workflow shell
+6. keep workflow defaults in one checked-in file instead of copying them across YAML files
+
+One unavoidable exception exists:
+
+- GitHub resolves `jobs.<job>.container.image` before any step can run
+- because of that, the akmods jobs in both `build.yml` and `build-branch.yml`
+  still carry one literal fallback build-container ref next to the checked-in
+  defaults file
+- both workflows accept a `workflow_dispatch` input to override this fallback
+  when the default image breaks
+- every later step reads the checked-in defaults instead of repeating them

@@ -1,0 +1,430 @@
+name: Build And Promote Main Image
+
+# This is the production workflow. It resolves the current Fedora base image,
+# ensures there is a matching ZFS module build for the primary kernel we
+# support, builds a candidate image, and only then promotes that tested image
+# to the stable `latest` tag.
+on:
+  schedule:
+    # GitHub cron expressions use Coordinated Universal Time (UTC). `00 06`
+    # means 06:00 UTC each day, which is 01:00 in New York during standard
+    # time and 02:00 during daylight saving time.
+    - cron: "00 06 * * *"
+
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - README.md
+      - "**/README.md"
+      - docs/**
+      - "**/*.md"
+
+  workflow_dispatch:
+    # `workflow_dispatch` is GitHub's name for a manual run started from the
+    # web interface or the `gh` command-line tool.
+    inputs:
+      rebuild_akmods:
+        description: Force rebuild of shared self-hosted ZFS akmods
+        required: false
+        default: false
+        type: boolean
+      promote_to_stable:
+        description: Promote the tested candidate tag to latest after success
+        required: false
+        default: true
+        type: boolean
+      use_input_lock:
+        description: Use lock file inputs instead of moving latest tags
+        required: false
+        default: false
+        type: boolean
+      lock_file:
+        description: Lock file path for replay mode
+        required: false
+        default: ci/inputs.lock.json
+        type: string
+
+concurrency:
+  # Never let two `main` runs race to publish images. If a newer run starts, the
+  # older one is cancelled before it can publish something based on older input.
+  group: ${{ github.workflow }}-${{ github.ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  preflight:
+    name: Evaluate Stable Signal Gate
+    runs-on: ubuntu-24.04
+    outputs:
+      should_build: ${{ steps.gate.outputs.should_build }}
+      reason: ${{ steps.gate.outputs.reason }}
+      stable_signal_ref: ${{ steps.gate.outputs.stable_signal_ref }}
+      stable_signal_digest: ${{ steps.gate.outputs.stable_signal_digest }}
+      zfs_version: ${{ steps.gate.outputs.zfs_version }}
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install skopeo and cosign
+        uses: ./.github/actions/install-signing-tools
+
+      - name: Evaluate stable signal gate
+        id: gate
+        shell: bash
+        env:
+          REGISTRY_ACTOR: ${{ github.actor }}
+          REGISTRY_TOKEN: ${{ github.token }}
+          # The gate resolves the current OpenZFS release to decide whether a
+          # new ZFS patch alone should trigger a build. Authenticate that
+          # lookup; see ci_tools/zfs_release.py.
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          python3 -m ci_tools.cli check-stable-signal
+
+  build-zfs-akmods:
+    name: Build Shared ZFS Akmods Cache
+    needs: preflight
+    if: github.event_name != 'schedule' || needs.preflight.outputs.should_build == 'true'
+    runs-on: ubuntu-24.04
+    outputs:
+      fedora_version: ${{ steps.prepare.outputs.version }}
+      kernel_release: ${{ steps.prepare.outputs.kernel_release }}
+      detected_kernel_releases: ${{ steps.prepare.outputs.detected_kernel_releases }}
+      base_image_ref: ${{ steps.prepare.outputs.base_image_ref }}
+      base_image_name: ${{ steps.prepare.outputs.base_image_name }}
+      base_image_tag: ${{ steps.prepare.outputs.base_image_tag }}
+      base_image_pinned: ${{ steps.prepare.outputs.base_image_pinned }}
+      base_image_digest: ${{ steps.prepare.outputs.base_image_digest }}
+      build_container_ref: ${{ steps.prepare.outputs.build_container_ref }}
+      build_container_pinned: ${{ steps.prepare.outputs.build_container_pinned }}
+      build_container_digest: ${{ steps.prepare.outputs.build_container_digest }}
+      zfs_minor_version: ${{ steps.prepare.outputs.zfs_minor_version }}
+      zfs_version: ${{ steps.prepare.outputs.zfs_version }}
+      akmods_upstream_ref: ${{ steps.prepare.outputs.akmods_upstream_ref }}
+      use_input_lock: ${{ steps.prepare.outputs.use_input_lock }}
+      lock_file_path: ${{ steps.prepare.outputs.lock_file_path }}
+      akmods_cache_exists: ${{ steps.prepare.outputs.akmods_cache_exists }}
+      akmods_image: ${{ steps.prepare.outputs.akmods_image }}
+      akmods_image_pinned: ${{ steps.prepare.outputs.akmods_image_pinned }}
+      akmods_image_digest: ${{ steps.prepare.outputs.akmods_image_digest }}
+      rebuilt: ${{ steps.prepare.outputs.rebuilt }}
+    permissions:
+      contents: read
+      packages: write
+    container:
+      # The akmods job runs inside a privileged build container because it needs
+      # the kernel-module build tooling and container storage access expected by
+      # the upstream akmods workflow we are reusing. It is digest-pinned, not
+      # `:latest`, because this job runs `--privileged` with `/` bind-mounted as
+      # `/host-sys`, container storage mounted, and a package-write token: a
+      # moved `:latest` tag would mean GitHub could start the job from an image
+      # nobody reviewed, before this repo's own input-resolution or digest
+      # checks ever run. Renovate's built-in `github-actions` manager already
+      # tracks `container:`/`services:` image digests in workflow files (see
+      # its `extractContainer()` in `github-actions/extract.js`), so this pin
+      # gets kept current the same way GitHub Actions SHA pins do -- no custom
+      # manager needed.
+      # This literal must match DEFAULT_BUILD_CONTAINER_IMAGE in ci/defaults.json;
+      # a job's `container:` block cannot read step outputs, so it cannot read the
+      # checked-in default and this literal must be kept in sync manually.
+      #
+      # Deliberately a fixed literal with no `workflow_dispatch` override. An
+      # override here was a free-text string that became the image for a job
+      # running --privileged, as root, with `/` bind-mounted at /host-sys,
+      # container storage mounted, and a package-write token -- so anyone able
+      # to dispatch this workflow could run arbitrary code in that position and
+      # publish a cache that later trusted jobs sign, build from, and promote.
+      # It cannot be fixed with a validation step: `container:` is resolved and
+      # started before any step in the job runs, so a guard would execute inside
+      # the very container it was meant to gate. Changing the build container is
+      # a reviewable edit to ci/defaults.json plus this literal, via a PR.
+      image: ghcr.io/ublue-os/devcontainer@sha256:74af83ac3b3fa573bee61d6d2d5ea5ba59f92f44afc3833d57b05ace66eb98ca
+      options: "--privileged --volume /:/host-sys --volume /var/lib/containers:/var/lib/containers --security-opt seccomp=unconfined --security-opt label=disable --user 0:0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Load the repository defaults, including akmods source-selection settings
+      # and the default floating base-image reference.
+      - id: defaults
+        name: Load repository defaults
+        uses: ./.github/actions/load-ci-defaults
+
+      # This action handles the preparation work that would otherwise dominate
+      # the workflow file: resolve moving inputs, save a manifest artifact,
+      # verify the current shared cache, and rebuild that cache only when needed.
+      - name: Resolve inputs, verify cache state, and refresh shared akmods when required
+        id: prepare
+        uses: ./.github/actions/prepare-main-akmods
+        with:
+          use_input_lock: ${{ github.event.inputs.use_input_lock || 'false' }}
+          lock_file: ${{ github.event.inputs.lock_file || 'ci/inputs.lock.json' }}
+          build_container_ref: ${{ steps.defaults.outputs.default_build_container_image }}
+          akmods_repo: ${{ steps.defaults.outputs.akmods_repo }}
+          akmods_upstream_repo: ${{ steps.defaults.outputs.akmods_upstream_repo }}
+          rebuild_akmods: ${{ github.event_name == 'schedule' || github.event.inputs.rebuild_akmods == 'true' }}
+          registry_actor: ${{ github.actor }}
+          registry_token: ${{ github.token }}
+
+  sign-akmods-cache:
+    name: Sign Shared ZFS Akmods Cache
+    needs: build-zfs-akmods
+    # Only when this run actually rebuilt and republished the cache. Signing
+    # an unchanged, already-signed, reused cache again on every run would be
+    # pure waste; if a rebuild's own akmods_build step failed, `rebuilt` was
+    # never resolved (the upstream job failed before reaching that output),
+    # so this job correctly does not run either.
+    if: needs.build-zfs-akmods.outputs.rebuilt == 'true'
+    runs-on: ubuntu-24.04
+    # The production signing key is expected to live in this environment as an
+    # environment secret, with a deployment branch restriction limiting it to
+    # `main`. GitHub decides whether to hand over environment secrets based on
+    # the ref the job actually runs against -- not on what any workflow file
+    # says -- so a branch push cannot reach the key even by editing this file.
+    # Referencing the environment before it exists in repository settings
+    # auto-creates it unprotected; the branch restriction itself can only be
+    # configured by the repository owner in Settings -> Environments. See
+    # docs/production-boundary-proposal.md.
+    environment: production-signing
+    env:
+      HAS_SIGNING_SECRET: ${{ secrets.SIGNING_SECRET != '' }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - id: defaults
+        name: Load repository defaults
+        uses: ./.github/actions/load-ci-defaults
+
+      - id: registry
+        name: Prepare registry context
+        uses: ./.github/actions/prepare-registry-context
+
+      - name: Install skopeo and cosign
+        uses: ./.github/actions/install-signing-tools
+
+      # `cosign sign` pushes the signature back to GHCR as a blob, so this job
+      # needs a registry login of its own. ci_tools/sign_image.py deliberately
+      # threads no credentials through and relies on the calling workflow
+      # having authenticated first, the same way publish-native-image and
+      # promote-stable do.
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Require signing secret for akmods cache signing
+        if: env.HAS_SIGNING_SECRET != 'true'
+        shell: bash
+        run: |
+          echo "SIGNING_SECRET is not configured. Refusing to leave a freshly rebuilt akmods cache unsigned: a later run's cache-reuse check refuses to trust an unsigned cache, so an unsigned rebuild here just forces every future run to rebuild again." >&2
+          exit 1
+
+      # Fail closed rather than silently letting sign-image fall back to
+      # re-resolving the tag, which is exactly the race this digest avoids.
+      - name: Require a pinned cache digest to sign
+        if: needs.build-zfs-akmods.outputs.akmods_image_digest == ''
+        shell: bash
+        run: |
+          echo "This run rebuilt the shared akmods cache but produced no pinned digest. Refusing to sign by re-resolving the shared tag, which a concurrent branch rebuild could have moved." >&2
+          exit 1
+
+      # Signs the exact digest the previous job pinned, not the shared tag.
+      # ci_tools/check_akmods_cache.py refuses to reuse a cache without this
+      # signature (see its cosign_verify call), which is the actual point:
+      # this cache is a real supply-chain input, so a later run reusing it
+      # should be able to prove it was produced by this repo's own pipeline,
+      # not just that a filename happens to match.
+      #
+      # IMAGE_DIGEST matters here. `build-branch.yml` rebuilds and republishes
+      # this same shared `main-<fedora>` tag, so a concurrent branch run can
+      # move it between the moment build-zfs-akmods pinned a digest and the
+      # moment this job runs. Re-resolving the tag would then sign the other
+      # run's image and leave the digest this run's candidate image was
+      # actually built from unsigned forever.
+      - name: Sign shared akmods cache image
+        shell: bash
+        env:
+          IMAGE_ORG: ${{ steps.registry.outputs.image_org }}
+          IMAGE_NAME: ${{ steps.defaults.outputs.akmods_repo }}
+          IMAGE_TAG: main-${{ needs.build-zfs-akmods.outputs.fedora_version }}
+          IMAGE_DIGEST: ${{ needs.build-zfs-akmods.outputs.akmods_image_digest }}
+          COSIGN_PRIVATE_KEY: ${{ secrets.SIGNING_SECRET }}
+        run: |
+          python3 -m ci_tools.cli sign-image
+
+  build-candidate-image:
+    name: Build Candidate Image
+    needs:
+      - preflight
+      - build-zfs-akmods
+    if: github.event_name != 'schedule' || needs.preflight.outputs.should_build == 'true'
+    runs-on: ubuntu-24.04
+    # Signs the candidate with the production key; same environment scoping as
+    # sign-akmods-cache above -- see the comment there.
+    environment: production-signing
+    env:
+      HAS_SIGNING_SECRET: ${{ secrets.SIGNING_SECRET != '' }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Rechunking briefly needs two copies of the image unpacked at once, so
+      # prepare disk space, podman version, and storage layout before the
+      # build starts.
+      - name: Prepare runner for Chunkah rechunking
+        uses: ./.github/actions/prepare-rechunk-host
+
+      # Re-load defaults here because each GitHub job runs on a fresh runner.
+      - id: defaults
+        name: Load repository defaults
+        uses: ./.github/actions/load-ci-defaults
+
+      # The registry context step normalizes the owner name so every later GHCR
+      # reference uses one consistent, lowercase path.
+      - id: registry
+        name: Prepare registry context
+        uses: ./.github/actions/prepare-registry-context
+
+      - name: Require signing secret for production image publication
+        if: env.HAS_SIGNING_SECRET != 'true'
+        shell: bash
+        run: |
+          echo "SIGNING_SECRET is not configured. Refusing to publish an unsigned production image because booted systems enforce cosign signature verification for this repository." >&2
+          exit 1
+
+      # The candidate tag is the image that gets tested first. Promotion happens
+      # later by copying this already-built image to `latest` only after success.
+      - name: Compute candidate tag
+        id: tags
+        shell: bash
+        env:
+          FEDORA_VERSION: ${{ needs.build-zfs-akmods.outputs.fedora_version }}
+        run: |
+          python3 -m ci_tools.cli compute-candidate-tag
+
+      # Build the candidate image against the exact base-image digest and the
+      # shared akmods cache chosen in the previous job.
+      - name: Build candidate image locally
+        uses: ./.github/actions/build-native-image
+        with:
+          image_name: ${{ steps.defaults.outputs.image_name }}
+          image_tag: ${{ steps.tags.outputs.candidate_tag }}
+          base_image: ${{ needs.build-zfs-akmods.outputs.base_image_pinned }}
+          akmods_image: ${{ needs.build-zfs-akmods.outputs.akmods_image_pinned }}
+          akmods_upstream_ref: ${{ needs.build-zfs-akmods.outputs.akmods_upstream_ref }}
+          stable_signal_image: ${{ needs.preflight.outputs.stable_signal_ref }}
+          stable_signal_digest: ${{ needs.preflight.outputs.stable_signal_digest }}
+          zfs_version: ${{ needs.build-zfs-akmods.outputs.zfs_version }}
+          image_repo: ghcr.io/${{ steps.registry.outputs.image_org }}/${{ steps.defaults.outputs.image_name }}
+          signing_key_filename: ${{ steps.defaults.outputs.image_name }}.pub
+
+      # Re-layer the built image into content-addressed chunks before it is
+      # published. This only changes how the image is split into layers, not
+      # which files it contains.
+      - name: Rechunk candidate image with Chunkah
+        uses: ./.github/actions/rechunk-native-image
+        with:
+          image_name: ${{ steps.defaults.outputs.image_name }}
+          image_tag: ${{ steps.tags.outputs.candidate_tag }}
+
+      # Candidate publication is separate from promotion. This lets the workflow
+      # test and sign the candidate first, then decide later whether it is safe
+      # to copy that exact digest to the stable tag.
+      - name: Push and sign candidate image
+        uses: ./.github/actions/publish-native-image
+        with:
+          image_registry: ${{ steps.registry.outputs.image_registry }}
+          image_name: ${{ steps.defaults.outputs.image_name }}
+          image_tag: ${{ steps.tags.outputs.candidate_tag }}
+          registry_username: ${{ github.actor }}
+          registry_password: ${{ github.token }}
+          image_org: ${{ steps.registry.outputs.image_org }}
+          cosign_private_key: ${{ secrets.SIGNING_SECRET }}
+
+  promote-stable:
+    name: Promote Candidate To Stable
+    needs:
+      - build-zfs-akmods
+      - build-candidate-image
+      - sign-akmods-cache
+    # `sign-akmods-cache` is in `needs` so a failed cache signing stops
+    # promotion. Without it that job runs in parallel with nothing downstream
+    # depending on it, so a signing failure turned the run red while `:latest`
+    # still moved -- publishing an image built from a cache this repo cannot
+    # prove it produced, and leaving that cache permanently untrusted.
+    #
+    # It is legitimately skipped whenever the cache was reused rather than
+    # rebuilt, which is the common case. A skipped `needs` job would normally
+    # skip this job too, so the conditions below are spelled out explicitly
+    # under `!cancelled()`: promote only when both build jobs actually
+    # succeeded, and when cache signing either succeeded or was never needed.
+    # This reproduces the previous skip behaviour for a gate-skipped scheduled
+    # run (both build jobs skipped, so neither is 'success').
+    if: >-
+      !cancelled()
+      && needs.build-zfs-akmods.result == 'success'
+      && needs.build-candidate-image.result == 'success'
+      && (needs.sign-akmods-cache.result == 'success' || needs.sign-akmods-cache.result == 'skipped')
+      && (github.event_name != 'workflow_dispatch' || github.event.inputs.promote_to_stable == 'true')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Each job starts on a fresh runner, so we load defaults and registry
+      # context again instead of depending on process-local state from earlier
+      # jobs.
+      - id: defaults
+        name: Load repository defaults
+        uses: ./.github/actions/load-ci-defaults
+
+      - id: registry
+        name: Prepare registry context
+        uses: ./.github/actions/prepare-registry-context
+
+      # Promotion and signing need `skopeo` and `cosign`, but the earlier build
+      # jobs do not. Installing them only here keeps the other jobs lighter.
+      - name: Install skopeo and cosign
+        uses: ./.github/actions/install-signing-tools
+
+      # `promote-stable` re-verifies the candidate signature before moving any
+      # tag. The skopeo calls in that helper pass explicit credentials, but
+      # `cosign verify` reads the Docker config file instead, so authenticate
+      # here rather than depending on the package staying publicly readable.
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      # Promotion copies the already-tested candidate image digest to `latest`
+      # and records audit tags. The candidate signature carries over because
+      # both tags resolve to the same digest.
+      - name: Promote candidate image to latest and audit tags
+        shell: bash
+        env:
+          REGISTRY_ACTOR: ${{ github.actor }}
+          REGISTRY_TOKEN: ${{ github.token }}
+          FEDORA_VERSION: ${{ needs.build-zfs-akmods.outputs.fedora_version }}
+          IMAGE_NAME: ${{ steps.defaults.outputs.image_name }}
+        run: |
+          python3 -m ci_tools.cli promote-stable

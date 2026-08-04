@@ -74,13 +74,13 @@ def _current_latest_inspect(
 class EvaluateStableSignalGateTests(unittest.TestCase):
     def test_unchanged_signal_skips_schedule_build(self) -> None:
         def inspect(image_ref: str, *, creds: str | None = None) -> dict:
-            if image_ref == "docker://quay.io/fedora-ostree-desktops/kinoite:45":
+            if image_ref == "docker://quay.io/fedora-ostree-desktops/kinoite:44":
                 self.assertIsNone(creds)
                 return _stable_signal_inspect("sha256:same")
             if image_ref == "docker://ghcr.io/danathar/zfs-kinoite-complex:latest":
                 self.assertEqual(creds, "actor:token")
                 return _current_latest_inspect(
-                    signal_image="quay.io/fedora-ostree-desktops/kinoite:45",
+                    signal_image="quay.io/fedora-ostree-desktops/kinoite:44",
                     signal_digest="sha256:same",
                     zfs_version="2.4.3",
                 )
@@ -93,7 +93,7 @@ class EvaluateStableSignalGateTests(unittest.TestCase):
             decision = evaluate_stable_signal_gate(
                 image_org="danathar",
                 image_name="zfs-kinoite-complex",
-                stable_signal_image="quay.io/fedora-ostree-desktops/kinoite:45",
+                stable_signal_image="quay.io/fedora-ostree-desktops/kinoite:44",
                 zfs_minor_version="2.4",
                 creds="actor:token",
             )
@@ -102,7 +102,7 @@ class EvaluateStableSignalGateTests(unittest.TestCase):
         self.assertEqual(decision.reason, "stable-signal-unchanged")
         self.assertEqual(
             decision.stable_signal_ref,
-            "quay.io/fedora-ostree-desktops/kinoite:45",
+            "quay.io/fedora-ostree-desktops/kinoite:44",
         )
         self.assertEqual(decision.stable_signal_digest, "sha256:same")
         self.assertEqual(decision.zfs_version, "2.4.3")
@@ -110,11 +110,11 @@ class EvaluateStableSignalGateTests(unittest.TestCase):
     def test_changed_signal_builds(self) -> None:
         def inspect(image_ref: str, *, creds: str | None = None) -> dict:
             del creds
-            if image_ref == "docker://quay.io/fedora-ostree-desktops/kinoite:45":
+            if image_ref == "docker://quay.io/fedora-ostree-desktops/kinoite:44":
                 return _stable_signal_inspect("sha256:new")
             if image_ref == "docker://ghcr.io/danathar/zfs-kinoite-complex:latest":
                 return _current_latest_inspect(
-                    signal_image="quay.io/fedora-ostree-desktops/kinoite:45",
+                    signal_image="quay.io/fedora-ostree-desktops/kinoite:44",
                     signal_digest="sha256:old",
                     zfs_version="2.4.3",
                 )
@@ -127,7 +127,7 @@ class EvaluateStableSignalGateTests(unittest.TestCase):
             decision = evaluate_stable_signal_gate(
                 image_org="danathar",
                 image_name="zfs-kinoite-complex",
-                stable_signal_image="quay.io/fedora-ostree-desktops/kinoite:45",
+                stable_signal_image="quay.io/fedora-ostree-desktops/kinoite:44",
                 zfs_minor_version="2.4",
                 creds="actor:token",
             )
@@ -140,11 +140,11 @@ class EvaluateStableSignalGateTests(unittest.TestCase):
         # force a build even when Kinoite stable has not moved at all.
         def inspect(image_ref: str, *, creds: str | None = None) -> dict:
             del creds
-            if image_ref == "docker://quay.io/fedora-ostree-desktops/kinoite:45":
+            if image_ref == "docker://quay.io/fedora-ostree-desktops/kinoite:44":
                 return _stable_signal_inspect("sha256:same")
             if image_ref == "docker://ghcr.io/danathar/zfs-kinoite-complex:latest":
                 return _current_latest_inspect(
-                    signal_image="quay.io/fedora-ostree-desktops/kinoite:45",
+                    signal_image="quay.io/fedora-ostree-desktops/kinoite:44",
                     signal_digest="sha256:same",
                     zfs_version="2.4.3",
                 )
@@ -157,7 +157,7 @@ class EvaluateStableSignalGateTests(unittest.TestCase):
             decision = evaluate_stable_signal_gate(
                 image_org="danathar",
                 image_name="zfs-kinoite-complex",
-                stable_signal_image="quay.io/fedora-ostree-desktops/kinoite:45",
+                stable_signal_image="quay.io/fedora-ostree-desktops/kinoite:44",
                 zfs_minor_version="2.4",
                 creds="actor:token",
             )
@@ -172,11 +172,11 @@ class EvaluateStableSignalGateTests(unittest.TestCase):
         # change".
         def inspect(image_ref: str, *, creds: str | None = None) -> dict:
             del creds
-            if image_ref == "docker://quay.io/fedora-ostree-desktops/kinoite:45":
+            if image_ref == "docker://quay.io/fedora-ostree-desktops/kinoite:44":
                 return _stable_signal_inspect("sha256:same")
             if image_ref == "docker://ghcr.io/danathar/zfs-kinoite-complex:latest":
                 return _current_latest_inspect(
-                    signal_image="quay.io/fedora-ostree-desktops/kinoite:45",
+                    signal_image="quay.io/fedora-ostree-desktops/kinoite:44",
                     signal_digest="sha256:same",
                     zfs_version="",
                 )
@@ -189,7 +189,7 @@ class EvaluateStableSignalGateTests(unittest.TestCase):
             decision = evaluate_stable_signal_gate(
                 image_org="danathar",
                 image_name="zfs-kinoite-complex",
-                stable_signal_image="quay.io/fedora-ostree-desktops/kinoite:45",
+                stable_signal_image="quay.io/fedora-ostree-desktops/kinoite:44",
                 zfs_minor_version="2.4",
                 creds="actor:token",
             )
@@ -201,7 +201,7 @@ class EvaluateStableSignalGateTests(unittest.TestCase):
     def test_missing_previous_image_builds(self) -> None:
         def inspect(image_ref: str, *, creds: str | None = None) -> dict:
             del creds
-            if image_ref == "docker://quay.io/fedora-ostree-desktops/kinoite:45":
+            if image_ref == "docker://quay.io/fedora-ostree-desktops/kinoite:44":
                 return _stable_signal_inspect("sha256:new")
             if image_ref == "docker://ghcr.io/danathar/zfs-kinoite-complex:latest":
                 raise CiToolError("Command failed: skopeo inspect\nmanifest unknown")
@@ -214,7 +214,7 @@ class EvaluateStableSignalGateTests(unittest.TestCase):
             decision = evaluate_stable_signal_gate(
                 image_org="danathar",
                 image_name="zfs-kinoite-complex",
-                stable_signal_image="quay.io/fedora-ostree-desktops/kinoite:45",
+                stable_signal_image="quay.io/fedora-ostree-desktops/kinoite:44",
                 zfs_minor_version="2.4",
                 creds="actor:token",
             )
@@ -225,7 +225,7 @@ class EvaluateStableSignalGateTests(unittest.TestCase):
     def test_missing_previous_labels_builds(self) -> None:
         def inspect(image_ref: str, *, creds: str | None = None) -> dict:
             del creds
-            if image_ref == "docker://quay.io/fedora-ostree-desktops/kinoite:45":
+            if image_ref == "docker://quay.io/fedora-ostree-desktops/kinoite:44":
                 return _stable_signal_inspect("sha256:new")
             if image_ref == "docker://ghcr.io/danathar/zfs-kinoite-complex:latest":
                 return {
@@ -242,7 +242,7 @@ class EvaluateStableSignalGateTests(unittest.TestCase):
             decision = evaluate_stable_signal_gate(
                 image_org="danathar",
                 image_name="zfs-kinoite-complex",
-                stable_signal_image="quay.io/fedora-ostree-desktops/kinoite:45",
+                stable_signal_image="quay.io/fedora-ostree-desktops/kinoite:44",
                 zfs_minor_version="2.4",
                 creds="actor:token",
             )
@@ -256,7 +256,7 @@ class EvaluateStableSignalGateTests(unittest.TestCase):
         # into a build decision from unknown state.
         def inspect(image_ref: str, *, creds: str | None = None) -> dict:
             del creds
-            if image_ref == "docker://quay.io/fedora-ostree-desktops/kinoite:45":
+            if image_ref == "docker://quay.io/fedora-ostree-desktops/kinoite:44":
                 return _stable_signal_inspect("sha256:new")
             if image_ref == "docker://ghcr.io/danathar/zfs-kinoite-complex:latest":
                 raise CiToolError("unauthorized: authentication required")
@@ -269,7 +269,7 @@ class EvaluateStableSignalGateTests(unittest.TestCase):
             evaluate_stable_signal_gate(
                 image_org="danathar",
                 image_name="zfs-kinoite-complex",
-                stable_signal_image="quay.io/fedora-ostree-desktops/kinoite:45",
+                stable_signal_image="quay.io/fedora-ostree-desktops/kinoite:44",
                 zfs_minor_version="2.4",
                 creds="actor:token",
             )
@@ -288,7 +288,7 @@ class EvaluateStableSignalGateTests(unittest.TestCase):
             evaluate_stable_signal_gate(
                 image_org="danathar",
                 image_name="zfs-kinoite-complex",
-                stable_signal_image="quay.io/fedora-ostree-desktops/kinoite:45",
+                stable_signal_image="quay.io/fedora-ostree-desktops/kinoite:44",
                 zfs_minor_version="2.4",
                 creds="actor:token",
             )
@@ -309,7 +309,7 @@ class CheckStableSignalMainTests(unittest.TestCase):
                     "REGISTRY_ACTOR": "actor",
                     "REGISTRY_TOKEN": "token",
                     "IMAGE_NAME": "zfs-kinoite-complex",
-                    "STABLE_SIGNAL_IMAGE": "quay.io/fedora-ostree-desktops/kinoite:45",
+                    "STABLE_SIGNAL_IMAGE": "quay.io/fedora-ostree-desktops/kinoite:44",
                     "DEFAULT_ZFS_MINOR_VERSION": "2.4",
                 },
                 clear=False,
@@ -318,7 +318,7 @@ class CheckStableSignalMainTests(unittest.TestCase):
                 return_value=StableSignalDecision(
                     should_build=False,
                     reason="stable-signal-unchanged",
-                    stable_signal_ref="quay.io/fedora-ostree-desktops/kinoite:45",
+                    stable_signal_ref="quay.io/fedora-ostree-desktops/kinoite:44",
                     stable_signal_digest="sha256:same",
                     zfs_version="2.4.3",
                 ),
@@ -328,7 +328,7 @@ class CheckStableSignalMainTests(unittest.TestCase):
             evaluate.assert_called_once_with(
                 image_org="danathar",
                 image_name="zfs-kinoite-complex",
-                stable_signal_image="quay.io/fedora-ostree-desktops/kinoite:45",
+                stable_signal_image="quay.io/fedora-ostree-desktops/kinoite:44",
                 zfs_minor_version="2.4",
                 creds="actor:token",
             )
@@ -337,7 +337,7 @@ class CheckStableSignalMainTests(unittest.TestCase):
                 {
                     "should_build": "false",
                     "reason": "stable-signal-unchanged",
-                    "stable_signal_ref": "quay.io/fedora-ostree-desktops/kinoite:45",
+                    "stable_signal_ref": "quay.io/fedora-ostree-desktops/kinoite:44",
                     "stable_signal_digest": "sha256:same",
                     "zfs_version": "2.4.3",
                 },
@@ -352,7 +352,7 @@ class CheckStableSignalMainTests(unittest.TestCase):
                     "GITHUB_OUTPUT": str(output_path),
                     "GITHUB_EVENT_NAME": "workflow_dispatch",
                     "IMAGE_NAME": "zfs-kinoite-complex",
-                    "STABLE_SIGNAL_IMAGE": "quay.io/fedora-ostree-desktops/kinoite:45",
+                    "STABLE_SIGNAL_IMAGE": "quay.io/fedora-ostree-desktops/kinoite:44",
                 },
                 clear=False,
             ), patch("ci_tools.check_stable_signal.evaluate_stable_signal_gate") as evaluate, patch(
@@ -367,7 +367,7 @@ class CheckStableSignalMainTests(unittest.TestCase):
                 {
                     "should_build": "true",
                     "reason": "not-schedule-event",
-                    "stable_signal_ref": "quay.io/fedora-ostree-desktops/kinoite:45",
+                    "stable_signal_ref": "quay.io/fedora-ostree-desktops/kinoite:44",
                     "stable_signal_digest": "sha256:push-time",
                     "zfs_version": "",
                 },
@@ -380,12 +380,12 @@ class BypassDecisionTests(unittest.TestCase):
             "ci_tools.check_stable_signal.skopeo_inspect_json_optional",
             return_value={"Digest": "sha256:push-time"},
         ) as inspect_optional:
-            decision = _bypass_decision("quay.io/fedora-ostree-desktops/kinoite:45")
+            decision = _bypass_decision("quay.io/fedora-ostree-desktops/kinoite:44")
 
-        inspect_optional.assert_called_once_with("docker://quay.io/fedora-ostree-desktops/kinoite:45")
+        inspect_optional.assert_called_once_with("docker://quay.io/fedora-ostree-desktops/kinoite:44")
         self.assertTrue(decision.should_build)
         self.assertEqual(decision.reason, "not-schedule-event")
-        self.assertEqual(decision.stable_signal_ref, "quay.io/fedora-ostree-desktops/kinoite:45")
+        self.assertEqual(decision.stable_signal_ref, "quay.io/fedora-ostree-desktops/kinoite:44")
         self.assertEqual(decision.stable_signal_digest, "sha256:push-time")
         self.assertEqual(decision.zfs_version, "")
 
@@ -394,7 +394,7 @@ class BypassDecisionTests(unittest.TestCase):
             "ci_tools.check_stable_signal.skopeo_inspect_json_optional",
             return_value=None,
         ):
-            decision = _bypass_decision("quay.io/fedora-ostree-desktops/kinoite:45")
+            decision = _bypass_decision("quay.io/fedora-ostree-desktops/kinoite:44")
 
         self.assertTrue(decision.should_build)
         self.assertEqual(decision.stable_signal_digest, "")
@@ -404,7 +404,7 @@ class BypassDecisionTests(unittest.TestCase):
             "ci_tools.check_stable_signal.skopeo_inspect_json_optional",
             side_effect=CiToolError("unauthorized: authentication required"),
         ):
-            decision = _bypass_decision("quay.io/fedora-ostree-desktops/kinoite:45")
+            decision = _bypass_decision("quay.io/fedora-ostree-desktops/kinoite:44")
 
         self.assertTrue(decision.should_build)
         self.assertEqual(decision.reason, "not-schedule-event")
@@ -421,7 +421,7 @@ class BypassDecisionTests(unittest.TestCase):
         ), patch(
             "ci_tools.check_stable_signal.resolve_latest_zfs_version"
         ) as resolve_zfs:
-            _bypass_decision("quay.io/fedora-ostree-desktops/kinoite:45")
+            _bypass_decision("quay.io/fedora-ostree-desktops/kinoite:44")
 
         resolve_zfs.assert_not_called()
 

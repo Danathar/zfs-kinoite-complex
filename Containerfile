@@ -6,7 +6,7 @@
 # Fedora Kinoite is the upstream Fedora KDE Atomic desktop image. It does not
 # carry the optional Homebrew payload, so import that payload as a
 # separate stage below while keeping the operating-system base Fedora-owned.
-ARG BASE_IMAGE="quay.io/fedora-ostree-desktops/kinoite:45"
+ARG BASE_IMAGE="quay.io/fedora-ostree-desktops/kinoite:44"
 ARG BREW_IMAGE="ghcr.io/ublue-os/brew:latest"
 
 FROM scratch AS ctx

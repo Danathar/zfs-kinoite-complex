@@ -71,7 +71,7 @@ a scheduled run should build at all. Push and manual (`workflow_dispatch`)
 runs always build; only the daily `schedule` trigger is gated. This logic
 lives in [`ci_tools/check_stable_signal.py`](../ci_tools/check_stable_signal.py).
 
-The upstream `STABLE_SIGNAL_IMAGE` (`quay.io/fedora-ostree-desktops/kinoite:45` by
+The upstream `STABLE_SIGNAL_IMAGE` (`quay.io/fedora-ostree-desktops/kinoite:44` by
 default; see [`ci/defaults.json`](../ci/defaults.json)) is treated as the
 authoritative cadence signal for "has the upstream base image moved since we
 last published?"
@@ -81,7 +81,7 @@ last published?"
 the image the build actually consumes. Keep these two values pointed at the
 same Fedora Kinoite major tag.
 
-Both default to the explicit Fedora major tag `kinoite:45`, deliberately.
+Both default to the explicit Fedora major tag `kinoite:44`, deliberately.
 The major tag follows the supported Fedora Kinoite stream without silently
 switching to a development or rawhide stream. If the supported Fedora major
 changes, update both defaults and validate the corresponding akmods support

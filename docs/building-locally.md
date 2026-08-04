@@ -33,8 +33,8 @@ CI uses [`.github/actions/build-native-image`](../.github/actions/build-native-i
 
 ```bash
 podman build \
-    --build-arg BASE_IMAGE=quay.io/fedora-ostree-desktops/kinoite:45 \
-    --build-arg AKMODS_IMAGE=ghcr.io/danathar/zfs-kinoite-complex-akmods:main-45 \
+    --build-arg BASE_IMAGE=quay.io/fedora-ostree-desktops/kinoite:44 \
+    --build-arg AKMODS_IMAGE=ghcr.io/danathar/zfs-kinoite-complex-akmods:main-44 \
     -t zfs-kinoite-complex:local \
     .
 ```

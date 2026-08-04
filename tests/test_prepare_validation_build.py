@@ -31,7 +31,7 @@ def _resolved_inputs() -> BuildInputResolution:
                 "6.18.13-200.fc43.x86_64",
                 "6.18.16-200.fc43.x86_64",
             ),
-            base_image_ref="quay.io/fedora-ostree-desktops/kinoite:45",
+            base_image_ref="quay.io/fedora-ostree-desktops/kinoite:44",
             base_image_name="quay.io/fedora-ostree-desktops/kinoite",
             base_image_tag="latest-20260307.1",
             base_image_pinned="quay.io/fedora-ostree-desktops/kinoite@sha256:base",

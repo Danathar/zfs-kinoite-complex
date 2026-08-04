@@ -33,7 +33,7 @@ def _env() -> dict[str, str]:
         "FEDORA_VERSION": "43",
         "KERNEL_RELEASE": "6.18.16-200.fc43.x86_64",
         "DETECTED_KERNEL_RELEASES": "6.18.13-200.fc43.x86_64 6.18.16-200.fc43.x86_64",
-        "BASE_IMAGE_REF": "quay.io/fedora-ostree-desktops/kinoite:45",
+        "BASE_IMAGE_REF": "quay.io/fedora-ostree-desktops/kinoite:44",
         "BASE_IMAGE_NAME": "quay.io/fedora-ostree-desktops/kinoite",
         "BASE_IMAGE_TAG": "45",
         "BASE_IMAGE_PINNED": "quay.io/fedora-ostree-desktops/kinoite@sha256:base",

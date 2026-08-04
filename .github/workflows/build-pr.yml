@@ -21,6 +21,7 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: read
+      packages: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -52,6 +53,15 @@ jobs:
       # cosign preinstalled), so it needs it installed explicitly here.
       - name: Install skopeo and cosign
         uses: ./.github/actions/install-signing-tools
+
+      # PR validation reads the shared akmods package without publishing it.
+      # Authenticate before the cache probe so a private package is handled as
+      # a readable input instead of producing an authorization error.
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
 
       # Reuse the same input-resolution and cache-verification logic as the
       # production workflow so a green pull request actually means something.

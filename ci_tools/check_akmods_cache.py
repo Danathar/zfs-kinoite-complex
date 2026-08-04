@@ -111,7 +111,15 @@ def inspect_akmods_cache(
     """
 
     source_image = f"ghcr.io/{image_org}/{source_repo}:main-{fedora_version}"
-    inspect_json = skopeo_inspect_json_optional(f"docker://{source_image}")
+    registry_actor = optional_env("REGISTRY_ACTOR")
+    registry_token = optional_env("REGISTRY_TOKEN")
+    registry_creds = f"{registry_actor}:{registry_token}" if registry_actor and registry_token else None
+    if registry_creds:
+        inspect_json = skopeo_inspect_json_optional(
+            f"docker://{source_image}", creds=registry_creds
+        )
+    else:
+        inspect_json = skopeo_inspect_json_optional(f"docker://{source_image}")
     if inspect_json is None:
         return AkmodsCacheStatus(
             source_image=source_image,
@@ -129,7 +137,14 @@ def inspect_akmods_cache(
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         akmods_dir = root / "akmods"
-        skopeo_copy(f"docker://{source_image_pinned}", f"dir:{akmods_dir}")
+        if registry_creds:
+            skopeo_copy(
+                f"docker://{source_image_pinned}",
+                f"dir:{akmods_dir}",
+                creds=registry_creds,
+            )
+        else:
+            skopeo_copy(f"docker://{source_image_pinned}", f"dir:{akmods_dir}")
 
         try:
             layer_files = load_layer_files_from_oci_layout(akmods_dir)

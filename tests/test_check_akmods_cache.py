@@ -287,6 +287,28 @@ class CheckAkmodsCacheTests(unittest.TestCase):
         self.assertEqual(status.missing_release, "6.18.16-200.fc43.x86_64")
         self.assertEqual(status.inspection_method, "missing-image")
 
+    def test_inspect_akmods_cache_passes_registry_credentials_when_available(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"REGISTRY_ACTOR": "Danathar", "REGISTRY_TOKEN": "token"},
+            clear=True,
+        ), patch(
+            "ci_tools.check_akmods_cache.skopeo_inspect_json_optional",
+            return_value=None,
+        ) as inspect_json_optional:
+            inspect_akmods_cache(
+                image_org="danathar",
+                source_repo="zfs-kinoite-complex-akmods",
+                fedora_version="43",
+                kernel_release="6.18.16-200.fc43.x86_64",
+                zfs_version="2.4.1",
+            )
+
+        inspect_json_optional.assert_called_once_with(
+            "docker://ghcr.io/danathar/zfs-kinoite-complex-akmods:main-43",
+            creds="Danathar:token",
+        )
+
     def test_inspect_akmods_cache_raises_on_non_missing_registry_error(self) -> None:
         # skopeo_inspect_json_optional already re-raises everything except a
         # missing-image error; inspect_akmods_cache must not swallow it into a

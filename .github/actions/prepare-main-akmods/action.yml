@@ -186,6 +186,11 @@ runs:
         KERNEL_RELEASE: ${{ steps.resolve.outputs.kernel_release }}
         AKMODS_REPO: ${{ inputs.akmods_repo }}
         ZFS_VERSION: ${{ steps.resolve.outputs.zfs_version }}
+        # The shared cache is a GHCR package owned by this repository. Pass
+        # credentials explicitly because the first cache probe runs before any
+        # image build or publish step has established registry context.
+        REGISTRY_ACTOR: ${{ inputs.registry_actor }}
+        REGISTRY_TOKEN: ${{ inputs.registry_token }}
       run: |
         python3 -m ci_tools.cli check-akmods-cache
 

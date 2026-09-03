@@ -17,6 +17,7 @@ fills in the rest.
 
 ```text
 README.md
+CONTRIBUTING.md              <- how to submit a change, run tests, and read coverage
 docs/
   documentation-guide.md      <- this file (doc map + reading paths)
   glossary.md                 <- shared term and command definitions
@@ -71,6 +72,10 @@ docs/
 
 1. [`docs/maintenance-watchlist.md`](./maintenance-watchlist.md)
 
+### Goal: I want to contribute a change
+
+1. [`../CONTRIBUTING.md`](../CONTRIBUTING.md)
+
 ## Where To Put New Documentation
 
 1. Put shared term definitions in [`docs/glossary.md`](./glossary.md).
@@ -86,3 +91,5 @@ docs/
 8. Put workflow-step-to-code mapping in [`.github/scripts/README.md`](../.github/scripts/README.md).
 9. Put pins or decisions that will need a future human call, and that no automation
    will surface, in [`docs/maintenance-watchlist.md`](./maintenance-watchlist.md).
+10. Put contribution process -- how to submit a change, run tests, read coverage --
+    in [`../CONTRIBUTING.md`](../CONTRIBUTING.md).

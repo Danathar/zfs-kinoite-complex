@@ -34,6 +34,32 @@ SECRET_ARG_FLAGS = {
     "--registry-password",
 }
 
+# Wall-clock ceilings for external commands, in seconds.
+#
+# These exist to turn a hung child process into a fast, readable failure --
+# not to police normal runtimes. Every value is far above what these commands
+# actually take in CI, so a healthy run never approaches one. Without them the
+# only backstop is GitHub Actions' 360-minute job default, which means a
+# stalled TLS handshake against ghcr.io can hold a privileged job and its
+# package-write token open for six hours.
+#
+# Commands whose runtime scales with hardware and network throughput -- the
+# `just build`/`push` image builds, `podman run` against a not-yet-pulled base
+# image, `dnf5`/`depmod` inside the image build -- deliberately get no
+# per-command ceiling here, because any number would be a guess. Those are
+# covered by the job-level `timeout-minutes` added to every workflow job.
+REGISTRY_METADATA_TIMEOUT = 120.0
+"""`skopeo inspect`: reads a manifest, transfers no layers."""
+
+REGISTRY_TRANSFER_TIMEOUT = 1800.0
+"""`skopeo copy`: full layer transfer, and it runs with `--retry-times 3`."""
+
+GIT_REMOTE_TIMEOUT = 120.0
+"""`git ls-remote`: ref listing only, no object transfer."""
+
+COSIGN_TIMEOUT = 300.0
+"""`cosign verify`: fetches a signature manifest and its small payload."""
+
 
 def require_env(name: str) -> str:
     """Return a required environment variable or raise a clear error."""
@@ -118,8 +144,18 @@ def run_cmd(
     capture_output: bool = True,
     cwd: str | None = None,
     env: Mapping[str, str] | None = None,
+    timeout: float | None = None,
 ) -> str:
-    """Run a command and return stdout, raising a readable error on failure."""
+    """
+    Run a command and return stdout, raising a readable error on failure.
+
+    `timeout` is a wall-clock ceiling in seconds. It defaults to `None` (wait
+    forever) so callers that have no defensible bound keep their current
+    behavior; callers that talk to a registry or a git remote pass one of the
+    module-level `*_TIMEOUT` constants. Exceeding it raises `CiToolError`, the
+    same type a nonzero exit raises, so a hang fails the job exactly the way a
+    command failure already does instead of surfacing as a bare traceback.
+    """
     try:
         command_env = None
         if env is not None:
@@ -134,7 +170,16 @@ def run_cmd(
             capture_output=capture_output,
             cwd=cwd,
             env=command_env,
+            timeout=timeout,
         )
+    except subprocess.TimeoutExpired as exc:
+        command = " ".join(redact_command_args(args))
+        # Deliberately worded to share no substring with
+        # `_MISSING_IMAGE_ERROR_MARKERS`. `skopeo_inspect_json_optional`
+        # classifies failures by message text, and a timeout must never be
+        # read as "the image does not exist" -- that would turn "we could not
+        # tell" into a reuse/rebuild decision made from unknown state.
+        raise CiToolError(f"Command timed out after {timeout}s: {command}") from exc
     except subprocess.CalledProcessError as exc:
         stderr = (exc.stderr or "").strip()
         stdout = (exc.stdout or "").strip()
@@ -161,7 +206,9 @@ def git_ls_remote_resolve(repo_url: str, ref: str) -> str:
     if not ref:
         raise CiToolError("git_ls_remote_resolve requires a non-empty ref")
 
-    output = run_cmd(["git", "ls-remote", "--exit-code", repo_url, ref])
+    output = run_cmd(
+        ["git", "ls-remote", "--exit-code", repo_url, ref], timeout=GIT_REMOTE_TIMEOUT
+    )
     matches: dict[str, str] = {}
     for line in output.splitlines():
         line = line.strip()
@@ -196,9 +243,9 @@ def git_ls_remote_resolve(repo_url: str, ref: str) -> str:
     raise CiToolError(f"git ls-remote did not return a resolvable commit SHA for {ref} at {repo_url}")
 
 
-def run_json_cmd(args: Sequence[str]) -> dict:
+def run_json_cmd(args: Sequence[str], *, timeout: float | None = None) -> dict:
     """Run a command that returns JSON and parse it."""
-    output = run_cmd(args)
+    output = run_cmd(args, timeout=timeout)
     try:
         return json.loads(output)
     except json.JSONDecodeError as exc:
@@ -262,7 +309,7 @@ def skopeo_inspect_json(image_ref: str, *, creds: str | None = None) -> dict:
     if creds:
         command.extend(["--creds", creds])
     command.append(image_ref)
-    return run_json_cmd(command)
+    return run_json_cmd(command, timeout=REGISTRY_METADATA_TIMEOUT)
 
 
 def skopeo_inspect_digest(image_ref: str, *, creds: str | None = None) -> str:
@@ -330,7 +377,7 @@ def skopeo_copy(
     if multi_arch:
         command.append(f"--multi-arch={multi_arch}")
     command.extend([source, destination])
-    run_cmd(command, capture_output=False)
+    run_cmd(command, capture_output=False, timeout=REGISTRY_TRANSFER_TIMEOUT)
 
 
 def cosign_verify(
@@ -371,7 +418,7 @@ def cosign_verify(
             ]
         )
     command.append(image_ref)
-    run_cmd(command)
+    run_cmd(command, timeout=COSIGN_TIMEOUT)
 
 
 def sort_kernel_releases(kernel_releases: Sequence[str]) -> list[str]:

@@ -18,6 +18,8 @@ concurrency:
 jobs:
   build-pr-image:
     name: Build PR Image (No Push)
+    # Full image build, no push; observed up to 9m.
+    timeout-minutes: 60
     runs-on: ubuntu-24.04
     permissions:
       contents: read

@@ -322,6 +322,57 @@ class InstallZfsFromAkmodsCacheTests(unittest.TestCase):
 
                 self.assertEqual(kernel_release, "6.18.16-200.fc43.x86_64")
 
+    def test_run_cmd_raises_runtime_error_on_timeout(self) -> None:
+        # The registry pull runs inside the image build, where a hang would
+        # otherwise stall the whole build job. A timeout must surface as the
+        # same RuntimeError a nonzero exit raises, not a bare
+        # subprocess.TimeoutExpired traceback.
+        args = ["skopeo", "copy", "--src-creds", "actor:build-secret", "docker://x", "dir:/tmp/x"]
+        with (
+            patch.object(
+                helper.subprocess,
+                "run",
+                side_effect=subprocess.TimeoutExpired(args, 1800.0),
+            ),
+            self.assertRaises(RuntimeError) as context,
+        ):
+            helper._run_cmd(args, timeout=1800.0)
+
+        message = str(context.exception)
+        self.assertIn("timed out", message)
+        self.assertNotIn("build-secret", message)
+        self.assertIn("--src-creds ***REDACTED***", message)
+
+    def test_run_cmd_defaults_to_no_timeout(self) -> None:
+        # The local rpm/dnf5/depmod callers keep waiting; only the registry
+        # pull opts in to a ceiling.
+        with patch.object(helper.subprocess, "run") as subprocess_run:
+            subprocess_run.return_value = subprocess.CompletedProcess([], 0, stdout="43\n")
+            helper._run_cmd(["rpm", "-E", "%fedora"])
+
+        self.assertIsNone(subprocess_run.call_args.kwargs["timeout"])
+
+    def test_registry_transfer_timeout_matches_ci_tools(self) -> None:
+        # This script cannot import ci_tools (it runs inside the image build
+        # with only shared/ on sys.path), so the ceiling is duplicated the way
+        # SECRET_ARG_FLAGS already is. Pin the two together here so they cannot
+        # silently drift apart.
+        from ci_tools.common import REGISTRY_TRANSFER_TIMEOUT
+
+        self.assertEqual(helper.REGISTRY_TRANSFER_TIMEOUT, REGISTRY_TRANSFER_TIMEOUT)
+
+    def test_registry_pull_is_bounded(self) -> None:
+        with patch.object(helper, "_run_cmd") as run_cmd_mock:
+            helper.copy_oci_layout_from_registry(
+                "ghcr.io/example/akmods:main-43",
+                layout_dir=Path(tempfile.gettempdir()) / "does-not-exist-layout",
+            )
+
+        self.assertEqual(
+            run_cmd_mock.call_args.kwargs.get("timeout"),
+            helper.REGISTRY_TRANSFER_TIMEOUT,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

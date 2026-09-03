@@ -16,6 +16,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 from ci_tools.common import (
+    COSIGN_TIMEOUT,
+    GIT_REMOTE_TIMEOUT,
+    REGISTRY_METADATA_TIMEOUT,
+    REGISTRY_TRANSFER_TIMEOUT,
     CiToolError,
     cosign_verify,
     git_ls_remote_resolve,
@@ -244,6 +248,120 @@ class CommonTests(unittest.TestCase):
         message = str(context.exception)
         self.assertNotIn("json-secret", message)
         self.assertIn("--creds ***REDACTED***", message)
+
+    def test_run_cmd_passes_timeout_through_to_subprocess(self) -> None:
+        with patch("ci_tools.common.subprocess.run") as subprocess_run:
+            subprocess_run.return_value = subprocess.CompletedProcess([], 0, stdout="ok")
+            run_cmd(["skopeo", "inspect", "example"], timeout=12.5)
+
+        self.assertEqual(subprocess_run.call_args.kwargs["timeout"], 12.5)
+
+    def test_run_cmd_defaults_to_no_timeout(self) -> None:
+        # Callers with no defensible ceiling must keep waiting rather than
+        # inherit an arbitrary one.
+        with patch("ci_tools.common.subprocess.run") as subprocess_run:
+            subprocess_run.return_value = subprocess.CompletedProcess([], 0, stdout="ok")
+            run_cmd(["rpm", "-E", "%fedora"])
+
+        self.assertIsNone(subprocess_run.call_args.kwargs["timeout"])
+
+    def test_run_cmd_raises_ci_tool_error_on_timeout(self) -> None:
+        # A hung child must fail the job the same way a nonzero exit does,
+        # not escape as a bare subprocess.TimeoutExpired traceback.
+        with (
+            patch(
+                "ci_tools.common.subprocess.run",
+                side_effect=subprocess.TimeoutExpired(["skopeo", "inspect"], 120.0),
+            ),
+            self.assertRaises(CiToolError) as context,
+        ):
+            run_cmd(["skopeo", "inspect", "example"], timeout=120.0)
+
+        self.assertIn("timed out", str(context.exception))
+
+    def test_run_cmd_redacts_secret_args_in_timeout_message(self) -> None:
+        args = ["skopeo", "copy", "--src-creds", "actor:timeout-secret"]
+        with (
+            patch(
+                "ci_tools.common.subprocess.run",
+                side_effect=subprocess.TimeoutExpired(args, 30.0),
+            ),
+            self.assertRaises(CiToolError) as context,
+        ):
+            run_cmd(args, timeout=30.0)
+
+        message = str(context.exception)
+        self.assertNotIn("timeout-secret", message)
+        self.assertIn("--src-creds ***REDACTED***", message)
+
+    def test_timeout_message_is_not_classified_as_a_missing_image(self) -> None:
+        # This is the one that matters for reuse decisions:
+        # skopeo_inspect_json_optional classifies inspect failures by message
+        # text, and returning None for a timeout would turn "we could not
+        # tell" into "the image does not exist" -- which downstream code reads
+        # as a definitive answer.
+        with (
+            patch(
+                "ci_tools.common.subprocess.run",
+                side_effect=subprocess.TimeoutExpired(["skopeo", "inspect"], 120.0),
+            ),
+            self.assertRaises(CiToolError) as context,
+        ):
+            run_cmd(["skopeo", "inspect", "example"], timeout=120.0)
+
+        message = str(context.exception)
+        self.assertFalse(is_missing_image_error(message))
+
+    def test_skopeo_inspect_json_optional_reraises_timeouts(self) -> None:
+        # End-to-end form of the check above, through the real classifier.
+        with (
+            patch(
+                "ci_tools.common.subprocess.run",
+                side_effect=subprocess.TimeoutExpired(["skopeo", "inspect"], 120.0),
+            ),
+            self.assertRaises(CiToolError),
+        ):
+            skopeo_inspect_json_optional("ghcr.io/example/image:tag")
+
+    def test_registry_and_signing_helpers_bound_their_calls(self) -> None:
+        # Each helper that talks to a registry, a git remote, or a signature
+        # store passes a ceiling. Asserting the constant rather than a literal
+        # keeps this test about "is it bounded", not about the exact number.
+        cases = (
+            (
+                "inspect",
+                lambda: skopeo_inspect_digest("ghcr.io/example/image:tag"),
+                REGISTRY_METADATA_TIMEOUT,
+            ),
+            (
+                "copy",
+                lambda: skopeo_copy("docker://a", "docker://b"),
+                REGISTRY_TRANSFER_TIMEOUT,
+            ),
+            (
+                "ls-remote",
+                lambda: git_ls_remote_resolve("https://example.invalid/r.git", "main"),
+                GIT_REMOTE_TIMEOUT,
+            ),
+            (
+                "cosign-verify",
+                lambda: cosign_verify("ghcr.io/example/image@sha256:x", key_path="cosign.pub"),
+                COSIGN_TIMEOUT,
+            ),
+        )
+        for label, invoke, expected_timeout in cases:
+            with self.subTest(helper=label):
+                with patch("ci_tools.common.run_cmd") as run_cmd_mock:
+                    run_cmd_mock.return_value = (
+                        '{"Digest": "sha256:x"}'
+                        if label == "inspect"
+                        else "0000000000000000000000000000000000000000\trefs/heads/main"
+                    )
+                    invoke()
+
+                self.assertEqual(
+                    run_cmd_mock.call_args.kwargs.get("timeout"), expected_timeout
+                )
 
     def test_write_github_outputs_uses_safe_heredoc_values(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

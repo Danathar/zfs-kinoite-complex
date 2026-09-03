@@ -27,6 +27,8 @@ concurrency:
 jobs:
   prepare-branch-metadata:
     name: Compute Branch Tag
+    # Tag computation only; observed under 1m.
+    timeout-minutes: 20
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -47,6 +49,10 @@ jobs:
 
   build-branch-akmods:
     name: Build Or Reuse Shared ZFS Akmods Cache
+    # Reuses the shared cache when it matches, but rebuilds it when it does
+    # not -- same --privileged compile as build.yml's, so it gets the same
+    # ceiling.
+    timeout-minutes: 90
     runs-on: ubuntu-24.04
     outputs:
       fedora_version: ${{ steps.prepare.outputs.version }}
@@ -124,6 +130,8 @@ jobs:
 
   build-branch-image:
     name: Build Branch Image
+    # Full image build; observed up to 8m.
+    timeout-minutes: 60
     needs:
       - prepare-branch-metadata
       - build-branch-akmods

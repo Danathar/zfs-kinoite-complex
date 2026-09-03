@@ -16,6 +16,8 @@ concurrency:
 jobs:
   test:
     name: Python Unit Tests
+    # Lint plus unit tests; observed under 1m.
+    timeout-minutes: 15
     runs-on: ubuntu-24.04
     permissions:
       contents: read

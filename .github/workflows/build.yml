@@ -54,6 +54,8 @@ concurrency:
 jobs:
   preflight:
     name: Evaluate Stable Signal Gate
+    # Registry metadata reads only; observed under 1m.
+    timeout-minutes: 20
     runs-on: ubuntu-24.04
     outputs:
       should_build: ${{ steps.gate.outputs.should_build }}
@@ -87,6 +89,10 @@ jobs:
 
   build-zfs-akmods:
     name: Build Shared ZFS Akmods Cache
+    # Compiles the ZFS kmods; longest job in the repo, observed up to 27m.
+    # Runs --privileged with / bind-mounted and holds a package-write token,
+    # so an unbounded hang is the worst case in this repo.
+    timeout-minutes: 90
     needs: preflight
     if: github.event_name != 'schedule' || needs.preflight.outputs.should_build == 'true'
     runs-on: ubuntu-24.04
@@ -173,6 +179,9 @@ jobs:
 
   sign-akmods-cache:
     name: Sign Shared ZFS Akmods Cache
+    # cosign sign + verify against one digest; observed under 1m. Runs with
+    # the production signing key in scope.
+    timeout-minutes: 30
     needs: build-zfs-akmods
     # Only when this run actually rebuilt and republished the cache. Signing
     # an unchanged, already-signed, reused cache again on every run would be
@@ -265,6 +274,8 @@ jobs:
 
   build-candidate-image:
     name: Build Candidate Image
+    # Full image build and push; observed up to 11m.
+    timeout-minutes: 60
     needs:
       - preflight
       - build-zfs-akmods
@@ -358,6 +369,8 @@ jobs:
 
   promote-stable:
     name: Promote Candidate To Stable
+    # Tag promotion and signing; observed under 1m.
+    timeout-minutes: 30
     needs:
       - build-zfs-akmods
       - build-candidate-image

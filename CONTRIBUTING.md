@@ -1,10 +1,12 @@
 # Contributing
 
-Read [`AGENTS.md`](./AGENTS.md) section 0 before your first change. This
-repository is not a demo: the maintainer daily-drives the image it publishes,
-on real hardware, with multi-terabyte ZFS pools attached, and there is no
-staging tier between `main` and that machine. The rules in section 0 override
-the general guidance that follows them, and they override this page too.
+Read [`AGENTS.md`](./AGENTS.md) section 0 before your first change, and
+[`docs/safety-model.md`](./docs/safety-model.md) for what this repository
+actually guarantees today: it is testing-only, exercised in VMs, and not yet
+used in production (see the warning in [`README.md`](./README.md#install)).
+AGENTS.md's caution rules apply regardless — a bad image can still strand a
+test machine or a real pool someone attached to try it — and they override the
+general guidance that follows them, and they override this page too.
 
 If a term is unfamiliar, check [`docs/glossary.md`](./docs/glossary.md) first.
 
@@ -24,11 +26,11 @@ If a term is unfamiliar, check [`docs/glossary.md`](./docs/glossary.md) first.
 ## Tests
 
 [`docs/code-reading-guide.md`](./docs/code-reading-guide.md#running-tests) covers
-the layout and the reading order. To match CI exactly, install the versions
-[`.github/workflows/test.yml`](./.github/workflows/test.yml) installs:
+the layout and the reading order. To match what
+[`.github/workflows/test.yml`](./.github/workflows/test.yml) installs today:
 
 ```bash
-pip install pytest pytest-cov "ruff==0.16.1"
+pip install pytest "ruff==0.16.1"
 python3 -m pytest tests/ -v
 ruff check ci_tools/ shared/ tests/ files/ containerfiles/
 ```
@@ -40,10 +42,15 @@ is only a runner here — the suite is `unittest.TestCase` throughout, so
 `python3 -m unittest discover -s tests` also works with nothing installed at
 all, which is useful when you have no network.
 
+Add `pytest-cov` for the [Coverage](#coverage) section below; `test.yml` does
+not install it yet at the time of writing, so a local coverage run is not yet
+something CI also produces on every PR.
+
 ## Coverage
 
-CI reports coverage on every pull request and push to `main`. To reproduce the
-number locally:
+CI reports coverage on every pull request and push to `main` once
+[#12](https://github.com/Danathar/zfs-kinoite-complex/pull/12) lands; until
+then, reproduce the number locally the same way that workflow step will:
 
 ```bash
 python3 -m pytest tests/ \
@@ -130,9 +137,12 @@ Because every external call is mocked, error-handling branches are the ones
 most likely to be covered on paper and untested in fact. When a branch exists
 to handle a *real* failure — a registry timeout, a rate limit, a malformed
 manifest — prefer a test that produces the real failure shape over one that
-patches the call to raise. `tests/test_common.py`'s timeout tests are written
-this way: they drive a genuine `subprocess.TimeoutExpired` through `run_cmd`
-and assert on the classification consequence, not merely that something raised.
+patches the call to raise. [#13](https://github.com/Danathar/zfs-kinoite-complex/pull/13)
+adds an example of this once merged: `tests/test_common.py` drives a genuine
+`subprocess.TimeoutExpired` through `run_cmd` and asserts on the
+classification consequence — specifically, that the resulting error message
+is never mistaken for `_MISSING_IMAGE_ERROR_MARKERS` — rather than asserting
+only that something raised.
 
 ## Documentation
 

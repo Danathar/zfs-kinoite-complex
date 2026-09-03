@@ -8,11 +8,13 @@ Source inspiration: https://github.com/forrestchang/andrej-karpathy-skills
 
 ---
 
-## 0. This repository is in production — read this before anything else
+## 0. This repository publishes a real image — read this before anything else
 
-**This is not a sandbox or a teaching demo.** The maintainer daily-drives the image this
-repo publishes, on real hardware, with multi-terabyte ZFS pools attached. There is no
-staging tier between this repo and that machine.
+**This is not a sandbox or a teaching demo.** This repository is testing-only today —
+see `docs/safety-model.md` — but the pipeline is real: it publishes a signed `:latest`
+tag that `bootc upgrade` pulls onto whatever machine is tracking it, and there is no
+staging tier between a change landing here and that machine booting it. Anyone who forks
+or tracks this repo, now or later, could point real hardware with real ZFS pools at it.
 
 Concretely:
 

@@ -81,6 +81,7 @@ Start here depending on what you want:
 | fix a broken build | [`docs/upstream-change-response.md`](./docs/upstream-change-response.md) |
 | read the deep design history and validation notes | [`docs/zfs-kinoite-testing.md`](./docs/zfs-kinoite-testing.md) |
 | change which akmods commit is built | [`docs/akmods-fork-maintenance.md`](./docs/akmods-fork-maintenance.md) |
+| contribute a change | [`CONTRIBUTING.md`](./CONTRIBUTING.md) |
 | look up a term | [`docs/glossary.md`](./docs/glossary.md) |
 | see the whole documentation map | [`docs/documentation-guide.md`](./docs/documentation-guide.md) |
 

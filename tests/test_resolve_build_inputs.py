@@ -17,6 +17,7 @@ from unittest.mock import patch
 
 from ci_tools.common import CiToolError, sort_kernel_releases
 from ci_tools.resolve_build_inputs import (
+    _load_lock_file,
     _resolve_default_akmods_ref,
     choose_base_image_tag,
     extract_source_tag,
@@ -105,6 +106,19 @@ class ChooseBaseImageTagTests(unittest.TestCase):
                 fedora_version="43",
                 expected_digest="sha256:abc",
                 digest_lookup=lambda _tag: "",
+            )
+
+    def test_rejects_when_no_candidate_tag_matches_expected_digest(self) -> None:
+        # Every derived candidate resolves to some other digest -- none of them
+        # is the pinned base image, so selection must fail closed instead of
+        # silently returning an unverified tag.
+        with self.assertRaises(CiToolError):
+            choose_base_image_tag(
+                source_tag="latest",
+                version_label="43.20260227.1",
+                fedora_version="43",
+                expected_digest="sha256:expected",
+                digest_lookup=lambda _tag: "sha256:other",
             )
 
 
@@ -365,6 +379,111 @@ class LockFileAkmodsRefInvariantTests(unittest.TestCase):
         # Empty means "resolve the newest patch live", which is what a normal
         # (non-replay) build should do.
         self.assertEqual(configured.locked_zfs_version, "")
+
+
+class LockFileReplayValidationTests(unittest.TestCase):
+    """
+    Replay mode (`workflow_dispatch` with `use_input_lock=true`) is not part of
+    the normal schedule/push run path, so a stale or malformed
+    `ci/inputs.lock.json` is only ever caught by these guards on the rare run
+    that actually replays it. Each one fails closed instead of silently
+    proceeding with an unverified or mismatched input.
+    """
+
+    def test_load_lock_file_missing_path_raises(self) -> None:
+        with self.assertRaises(CiToolError):
+            _load_lock_file("/nonexistent/inputs.lock.json")
+
+    def test_lock_replay_missing_base_image_raises(self) -> None:
+        lock_payload = {
+            "version": 1,
+            "build_container": "ghcr.io/example/build@sha256:cafef00d",
+            "zfs_minor_version": "2.4",
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            lock_path = Path(temp_dir) / "inputs.lock.json"
+            lock_path.write_text(json.dumps(lock_payload), encoding="utf-8")
+            env = {
+                "USE_INPUT_LOCK": "true",
+                "LOCK_FILE": str(lock_path),
+                "BUILD_CONTAINER_REF": "ghcr.io/example/build@sha256:cafef00d",
+                "DEFAULT_AKMODS_REF": "a" * 40,
+            }
+            with (
+                patch.dict(os.environ, env, clear=False),
+                self.assertRaises(CiToolError),
+            ):
+                resolve_configured_inputs()
+
+    def test_lock_replay_base_image_placeholder_raises(self) -> None:
+        lock_payload = {
+            "version": 1,
+            "base_image": "ghcr.io/example/base@REPLACE_ME",
+            "build_container": "ghcr.io/example/build@sha256:cafef00d",
+            "zfs_minor_version": "2.4",
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            lock_path = Path(temp_dir) / "inputs.lock.json"
+            lock_path.write_text(json.dumps(lock_payload), encoding="utf-8")
+            env = {
+                "USE_INPUT_LOCK": "true",
+                "LOCK_FILE": str(lock_path),
+                "BUILD_CONTAINER_REF": "ghcr.io/example/build@sha256:cafef00d",
+                "DEFAULT_AKMODS_REF": "a" * 40,
+            }
+            with (
+                patch.dict(os.environ, env, clear=False),
+                self.assertRaises(CiToolError),
+            ):
+                resolve_configured_inputs()
+
+    def test_lock_replay_build_container_placeholder_raises(self) -> None:
+        lock_payload = {
+            "version": 1,
+            "base_image": "ghcr.io/example/base@sha256:deadbeef",
+            "build_container": "ghcr.io/example/build@REPLACE_ME",
+            "zfs_minor_version": "2.4",
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            lock_path = Path(temp_dir) / "inputs.lock.json"
+            lock_path.write_text(json.dumps(lock_payload), encoding="utf-8")
+            env = {
+                "USE_INPUT_LOCK": "true",
+                "LOCK_FILE": str(lock_path),
+                "BUILD_CONTAINER_REF": "ghcr.io/example/build@sha256:cafef00d",
+                "DEFAULT_AKMODS_REF": "a" * 40,
+            }
+            with (
+                patch.dict(os.environ, env, clear=False),
+                self.assertRaises(CiToolError),
+            ):
+                resolve_configured_inputs()
+
+    def test_lock_replay_build_container_mismatch_raises(self) -> None:
+        # The build container is no longer settable per run (it selects the
+        # image for a privileged job), so a lock file pinned to a different
+        # one than the current BUILD_CONTAINER_REF must fail the replay
+        # instead of silently building with today's container.
+        lock_payload = {
+            "version": 1,
+            "base_image": "ghcr.io/example/base@sha256:deadbeef",
+            "build_container": "ghcr.io/example/build@sha256:other",
+            "zfs_minor_version": "2.4",
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            lock_path = Path(temp_dir) / "inputs.lock.json"
+            lock_path.write_text(json.dumps(lock_payload), encoding="utf-8")
+            env = {
+                "USE_INPUT_LOCK": "true",
+                "LOCK_FILE": str(lock_path),
+                "BUILD_CONTAINER_REF": "ghcr.io/example/build@sha256:cafef00d",
+                "DEFAULT_AKMODS_REF": "a" * 40,
+            }
+            with (
+                patch.dict(os.environ, env, clear=False),
+                self.assertRaises(CiToolError),
+            ):
+                resolve_configured_inputs()
 
 
 if __name__ == "__main__":

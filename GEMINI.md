@@ -8,13 +8,14 @@ Intent: make goals, constraints, and verification explicit so the model stays pr
 
 **Tradeoff:** These guidelines bias toward correctness and explicitness over speed. For trivial tasks, use judgment.
 
-## 0. This repository is in production
+## 0. This repository publishes a real image
 
-This is not a sandbox. The maintainer daily-drives the image this repo publishes, on real
-hardware, with multi-terabyte ZFS pools attached. A bad image reaching `:latest` gets
-pulled by `bootc upgrade` onto a machine someone depends on — there is no staging tier in
-between. The bar for changes here is higher than "tests pass," and these constraints
-override sections 1-5 below when they conflict:
+This is not a sandbox. This repository is testing-only today — see `docs/safety-model.md`
+— but the pipeline is real: it publishes a signed `:latest` tag that `bootc upgrade` pulls
+onto whatever machine is tracking it, and there is no staging tier between a change landing
+here and that machine booting it. Anyone who forks or tracks this repo, now or later, could
+point real hardware with real ZFS pools at it. The bar for changes here is higher than
+"tests pass," and these constraints override sections 1-5 below when they conflict:
 
 - **Never weaken a fail-closed check to make something pass.** This codebase deliberately
   fails the build when ZFS does not match the primary kernel, when a signature cannot be

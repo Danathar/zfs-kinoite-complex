@@ -8,16 +8,19 @@ Source: https://github.com/forrestchang/andrej-karpathy-skills
 
 ---
 
-## 0. This Repository Is In Production — Read This First
+## 0. This Repository Publishes A Real Image — Read This First
 
-**This is not a sandbox or a teaching demo. The maintainer daily-drives the image
-this repo publishes, on real hardware, with multi-terabyte ZFS pools attached.**
+**This is not a sandbox or a teaching demo. This repository is testing-only today —
+see `docs/safety-model.md` — but the pipeline is real: it publishes a signed `:latest`
+tag that `bootc upgrade` pulls onto whatever machine is tracking it, and there is no
+staging tier between a change landing here and that machine booting it. Anyone who
+forks or tracks this repo, now or later, could point real hardware with real ZFS
+pools at it.**
 
 What that means concretely:
 
 - A bad image that reaches `:latest` gets pulled by `bootc upgrade` onto a
-  machine someone works on. There is no staging tier between this repo and that
-  machine.
+  machine someone works on.
 - A ZFS module that builds but misbehaves sits between the user and pooled data.
   "It compiled" is not evidence that it is safe.
 - A broken promotion or signing path can either strand a machine on an

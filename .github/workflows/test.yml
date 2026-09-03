@@ -26,12 +26,27 @@ jobs:
 
       - name: Install test runner and linter
         shell: bash
-        run: pip install --quiet pytest "ruff==0.16.1"
+        run: pip install --quiet pytest pytest-cov "ruff==0.16.1"
 
       - name: Lint with ruff
         shell: bash
         run: ruff check ci_tools/ shared/ tests/ files/ containerfiles/
 
+      # Coverage is reported, not enforced. There is no --cov-fail-under gate:
+      # the point is that a reviewer can read the number and the missing lines
+      # off the job log instead of reconstructing them by hand. The measured
+      # paths are every module this repo's CI decisions actually run through,
+      # including the two outside ci_tools/ and shared/ that AGENTS.md section 0
+      # rule 2 calls out as safety-critical -- the akmods cache installer and
+      # the signing-policy writer. Leaving those out would report a coverage
+      # number that silently excluded exactly the code most worth watching.
       - name: Run tests
         shell: bash
-        run: python3 -m pytest tests/ -v
+        run: |
+          python3 -m pytest tests/ -v \
+            --cov=ci_tools \
+            --cov=shared \
+            --cov=containerfiles/zfs-akmods \
+            --cov=files/scripts \
+            --cov-branch \
+            --cov-report=term-missing

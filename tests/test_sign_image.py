@@ -30,13 +30,119 @@ class SignImageTests(unittest.TestCase):
         )
 
     def test_requires_signing_key(self) -> None:
-        with self.assertRaises(CiToolError):
+        # Pin the guard, not just "something raised": an empty SIGNING_SECRET
+        # must stop before any cosign invocation and before any tag lookup.
+        def exploding_run_cmd(*_args, **_kwargs) -> str:
+            raise AssertionError("cosign must not run without a signing key")
+
+        def exploding_lookup(_ref: str) -> str:
+            raise AssertionError("the tag must not be resolved without a signing key")
+
+        with self.assertRaises(CiToolError) as raised:
             sign_published_image(
                 image_org="danathar",
                 image_name="zfs-kinoite-complex",
                 image_tag="latest",
                 cosign_private_key="",
+                digest_lookup=exploding_lookup,
+                command_runner=exploding_run_cmd,
             )
+
+        self.assertEqual(
+            str(raised.exception),
+            "SIGNING_SECRET is empty; cannot sign published image.",
+        )
+
+    def test_missing_verification_key_file_fails_closed_before_signing(self) -> None:
+        # A verification key that is not on disk must stop the whole operation.
+        # Signing without being able to verify afterwards would publish a
+        # signature nothing in this run ever proved usable, and the later
+        # cache-reuse check in check_akmods_cache.py trusts that proof.
+        def exploding_run_cmd(*_args, **_kwargs) -> str:
+            raise AssertionError("cosign must not run without a verification key on disk")
+
+        def exploding_lookup(_ref: str) -> str:
+            raise AssertionError("the tag must not be resolved without a verification key")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            missing_key = Path(temp_dir) / "absent-cosign.pub"
+            with unittest.mock.patch.dict(
+                os.environ, {"COSIGN_PUBLIC_KEY_PATH": str(missing_key)}, clear=False
+            ), self.assertRaises(CiToolError) as raised:
+                sign_published_image(
+                    image_org="danathar",
+                    image_name="zfs-kinoite-complex",
+                    image_tag="latest",
+                    cosign_private_key="private-key",
+                    digest_lookup=exploding_lookup,
+                    command_runner=exploding_run_cmd,
+                )
+
+            self.assertEqual(
+                str(raised.exception),
+                f"Missing required verification key file: {missing_key}",
+            )
+
+    def test_blank_verification_key_path_falls_back_to_the_repository_key(self) -> None:
+        # COSIGN_PUBLIC_KEY_PATH is read with .strip(), so a value that is only
+        # whitespace -- what an unset workflow input expands to -- must fall
+        # back to the committed cosign.pub rather than being used as a path.
+        calls: list[list[str]] = []
+
+        def fake_run_cmd(args: list[str], **_kwargs) -> str:
+            calls.append(args)
+            return ""
+
+        with unittest.mock.patch.dict(
+            os.environ, {"COSIGN_PUBLIC_KEY_PATH": "   "}, clear=False
+        ):
+            sign_published_image(
+                image_org="danathar",
+                image_name="zfs-kinoite-complex",
+                image_tag="latest",
+                cosign_private_key="private-key",
+                digest_lookup=lambda _ref: "sha256:stable",
+                command_runner=fake_run_cmd,
+            )
+
+        repo_key = Path(__file__).resolve().parent.parent / "cosign.pub"
+        self.assertEqual(calls[1][0:2], ["cosign", "verify"])
+        self.assertEqual(calls[1][4], str(repo_key))
+
+    def _assert_digest_lookup_result_fails_closed(self, lookup_result: str) -> None:
+        def exploding_run_cmd(*_args, **_kwargs) -> str:
+            raise AssertionError("cosign must not run on an unresolved digest")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            key_path = Path(temp_dir) / "cosign.pub"
+            key_path.write_text("public-key", encoding="utf-8")
+            with unittest.mock.patch.dict(
+                os.environ, {"COSIGN_PUBLIC_KEY_PATH": str(key_path)}, clear=False
+            ), self.assertRaises(CiToolError) as raised:
+                sign_published_image(
+                    image_org="danathar",
+                    image_name="zfs-kinoite-complex",
+                    image_tag="latest",
+                    cosign_private_key="private-key",
+                    digest_lookup=lambda _ref: lookup_result,
+                    command_runner=exploding_run_cmd,
+                )
+
+        self.assertEqual(
+            str(raised.exception),
+            "Failed to resolve digest for docker://ghcr.io/danathar/zfs-kinoite-complex:latest",
+        )
+
+    def test_empty_digest_lookup_result_fails_closed(self) -> None:
+        # An empty lookup result must not be pasted into a digest ref. Without
+        # this guard the ref becomes `ghcr.io/<org>/<name>@`, which is not the
+        # image this run built, and the run would report a successful signing.
+        self._assert_digest_lookup_result_fails_closed("")
+
+    def test_null_digest_lookup_result_fails_closed(self) -> None:
+        # A JSON `null` that reached the caller as the literal string "null" is
+        # the same non-answer as an empty string and must fail the same way.
+        self._assert_digest_lookup_result_fails_closed("null")
 
     def test_signs_and_verifies_digest_for_one_tag(self) -> None:
         calls: list[tuple[list[str], bool, dict[str, str] | None]] = []

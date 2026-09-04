@@ -64,9 +64,41 @@ python3 -m pytest tests/ \
   --cov-branch --cov-report=term-missing
 ```
 
-**Coverage is reported, not gated.** There is no `--cov-fail-under`, and no
-pull request is blocked on the percentage. The number exists so a reviewer can
-read it off the job log instead of reconstructing it by hand.
+**The percentage is reported, not gated.** There is no `--cov-fail-under`, and
+no pull request is blocked on the percentage. The number exists so a reviewer
+can read it off the job log instead of reconstructing it by hand.
+
+### What *is* gated: per-module floors
+
+[`.coverage-thresholds.json`](./.coverage-thresholds.json) records, for each
+measured module, the number of statements the suite reaches today.
+[`tests/check_coverage.py`](./tests/check_coverage.py) enforces those floors in
+`test.yml`, and its module docstring carries the reasoning at length. In short:
+
+- **Counts, not percent.** A percentage falls when code is added, so it
+  punishes growth. A covered-statement count falls only when a test stops
+  reaching lines that used to run.
+- **Per module, not repository-wide.** One well-tested module cannot mask
+  another that stopped being exercised at all.
+- **Both directions.** A measured module with no floor fails, so new code
+  arrives with a recorded decision. A floor naming a module the run did not
+  measure also fails, so the manifest cannot rot after a rename.
+
+Raising a floor is evidenced -- the suite demonstrably reached those lines, and
+the gate prints `could raise` when it does. Lowering one is evidenced by an
+absence, and a deleted test and a deliberately removed code path look identical
+from the count alone. So a lowered floor is a line in a diff with a reason in
+the commit message, never something applied automatically.
+
+This is not a coverage percentage in disguise. If your change legitimately
+removes a code path, the floor moves down with it and you say so.
+
+To run the gate the way `test.yml` does, add `--cov-report=json` to the command
+above and then:
+
+```bash
+python3 tests/check_coverage.py
+```
 
 ### Three tiers, and they answer different questions
 

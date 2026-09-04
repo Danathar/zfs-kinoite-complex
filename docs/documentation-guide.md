@@ -34,9 +34,17 @@ docs/
   maintenance-watchlist.md    <- pins and decisions on a clock that no automation watches
 .github/scripts/
   README.md                   <- workflow step -> command-line interface (CLI) command -> Python module map
+.github/prompts/
+  README.md                   <- catalog of task prompts for the recurring operations here
+  *.prompt.md                 <- one procedure each: diagnose a red build, replay a build, review a safety-critical change
 tests/e2e/
   README.md                   <- what the unmocked end-to-end tier answers, and what it deliberately does not
 ```
+
+The prompt files are **procedures, not descriptions**. They link to `AGENTS.md`
+and `docs/` for what the code is and does, rather than restating it, so there
+stays one copy to keep current. New long-form explanation belongs in `docs/`;
+only steps and the decision at the end belong in a prompt.
 
 ## What To Read First (By Goal)
 

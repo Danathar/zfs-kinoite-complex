@@ -373,6 +373,121 @@ class InstallZfsFromAkmodsCacheTests(unittest.TestCase):
             helper.REGISTRY_TRANSFER_TIMEOUT,
         )
 
+    def test_registry_pull_discards_a_stale_layout_directory(self) -> None:
+        # A layout left behind by an earlier attempt would let `skopeo copy`
+        # land next to blobs from a different akmods image, so the RPMs
+        # unpacked afterwards would not all come from the pinned digest.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            layout_dir = Path(temp_dir) / "akmods-zfs"
+            layout_dir.mkdir()
+            stale_blob = layout_dir / "stale-layer"
+            stale_blob.write_text("from a previous pull", encoding="utf-8")
+
+            with patch.object(helper, "_run_cmd") as run_cmd_mock:
+                helper.copy_oci_layout_from_registry(
+                    "ghcr.io/example/akmods:main-43",
+                    layout_dir=layout_dir,
+                )
+
+            self.assertFalse(stale_blob.exists())
+            self.assertFalse(layout_dir.exists())
+            self.assertEqual(
+                run_cmd_mock.call_args.args[0],
+                [
+                    "skopeo",
+                    "copy",
+                    "--retry-times",
+                    "3",
+                    "docker://ghcr.io/example/akmods:main-43",
+                    f"dir:{layout_dir}",
+                ],
+            )
+
+    def test_image_kernels_from_modules_root_rejects_an_empty_modules_root(self) -> None:
+        # Without this guard the build would carry on and select a supported
+        # kernel from an empty list, so the failure would surface later as an
+        # opaque max() error instead of naming the missing modules root.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            modules_root = Path(temp_dir)
+            (modules_root / "not-a-kernel-dir").touch()
+
+            with self.assertRaisesRegex(
+                RuntimeError, r"No kernel directories found in .*"
+            ) as context:
+                helper.image_kernels_from_modules_root(modules_root)
+
+        self.assertIn(str(modules_root), str(context.exception))
+
+    def test_fedora_major_version_rejects_empty_rpm_output(self) -> None:
+        # An empty `rpm -E %fedora` would otherwise render the akmods image
+        # template as `...:main-`, which resolves to a tag that does not exist
+        # or, worse, to some unrelated tag.
+        with self.assertRaisesRegex(
+            RuntimeError, "Could not determine Fedora major version from rpm -E %fedora"
+        ):
+            helper.fedora_major_version(run_cmd=lambda _args: "   \n")
+
+    def test_discover_zfs_rpms_rejects_a_cache_with_no_installable_rpms(self) -> None:
+        # A cache tree holding only source and debug RPMs means the akmods
+        # build did not publish what this image needs; installing nothing must
+        # not read as success.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            rpm_root = Path(temp_dir)
+            (rpm_root / "zfs-2.4.0-1.fc43.src.rpm").touch()
+            (rpm_root / "zfs-debug-2.4.0-1.fc43.x86_64.rpm").touch()
+
+            with self.assertRaisesRegex(RuntimeError, r"No ZFS RPMs found in .*") as context:
+                helper.discover_zfs_rpms(rpm_root)
+
+            self.assertIn(str(rpm_root), str(context.exception))
+
+    def test_kmod_kernel_release_rejects_a_payload_without_a_zfs_module(self) -> None:
+        # The kernel release is read from the payload path. An RPM whose
+        # listing has no `/lib/modules/<release>/extra/zfs/zfs.ko*` entry
+        # cannot be mapped to a kernel, and guessing from the file name is
+        # exactly what this function exists to avoid.
+        payload_listing = (
+            "/usr/share/doc/kmod-zfs-README\n"
+            "/lib/modules/6.18.16-200.fc43.x86_64/extra/zfs/zunicode.ko\n"
+        )
+        rpm_path = Path("/tmp/kmod-zfs-broken.rpm")
+
+        with (
+            patch.object(helper, "_run_cmd", return_value=payload_listing),
+            self.assertRaisesRegex(
+                RuntimeError, "Could not determine kernel release for"
+            ) as context,
+        ):
+            helper.kmod_kernel_release(rpm_path)
+
+        self.assertIn(str(rpm_path), str(context.exception))
+
+    def test_build_install_plan_rejects_a_cache_with_no_kmod_rpms(self) -> None:
+        # Userspace ZFS RPMs without any kmod-zfs would install a ZFS
+        # toolchain into an image that has no module to load.
+        with self.assertRaisesRegex(RuntimeError, "No kmod-zfs RPMs found in cache image"):
+            helper.build_install_plan(
+                ["6.18.16-200.fc43.x86_64"],
+                [Path("/tmp/zfs-2.4.0.rpm"), Path("/tmp/libzfs-2.4.0.rpm")],
+                rpm_name_lookup=lambda path: path.name.split("-")[0],
+                kernel_release_lookup=lambda _path: "6.18.16-200.fc43.x86_64",
+            )
+
+    def test_require_command_names_the_missing_command(self) -> None:
+        # main() checks the five host tools up front so a missing one fails
+        # before the registry pull, and the message has to say which tool.
+        with (
+            patch.object(helper.shutil, "which", return_value=None),
+            self.assertRaisesRegex(
+                RuntimeError, "Required command is not available: dnf5"
+            ),
+        ):
+            helper._require_command("dnf5")
+
+    def test_require_command_accepts_a_present_command(self) -> None:
+        with patch.object(helper.shutil, "which", return_value="/usr/bin/dnf5"):
+            helper._require_command("dnf5")
+
 
 if __name__ == "__main__":
     unittest.main()

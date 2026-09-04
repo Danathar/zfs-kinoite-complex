@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(python3 -m pytest:*)",
+      "Bash(python3 -m unittest:*)",
+      "Bash(python3 tests/check_coverage.py:*)",
+      "Bash(ruff check:*)",
+      "Bash(python3 -m ci_tools.cli --help:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git ls-files:*)",
+      "Bash(git blame:*)",
+      "Bash(gh run list:*)",
+      "Bash(gh run view:*)",
+      "Bash(gh pr list:*)",
+      "Bash(gh pr view:*)",
+      "Bash(gh pr diff:*)",
+      "Bash(gh issue list:*)",
+      "Bash(gh issue view:*)",
+      "Bash(skopeo inspect:*)",
+      "Bash(cosign verify:*)"
+    ],
+    "ask": [
+      "Bash(gh api:*)",
+      "Bash(git push:*)",
+      "Bash(git commit:*)",
+      "Bash(git rebase:*)",
+      "Bash(git cherry-pick:*)",
+      "Bash(gh pr create:*)",
+      "Bash(gh pr edit:*)",
+      "Bash(gh pr comment:*)",
+      "Bash(gh pr review:*)",
+      "Bash(gh issue create:*)",
+      "Bash(gh issue close:*)",
+      "Bash(gh run rerun:*)",
+      "Bash(podman build:*)",
+      "Bash(podman run:*)",
+      "Bash(buildah:*)",
+      "Bash(sudo:*)"
+    ],
+    "deny": [
+      "Read(./cosign.key)",
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(./**/*.pem)",
+      "Read(./**/*.p12)",
+      "Read(./**/id_rsa)",
+      "Read(./**/id_ed25519)",
+      "Bash(cosign sign:*)",
+      "Bash(cosign generate-key-pair:*)",
+      "Bash(skopeo copy:*)",
+      "Bash(skopeo delete:*)",
+      "Bash(podman push:*)",
+      "Bash(buildah push:*)",
+      "Bash(gh workflow run:*)",
+      "Bash(gh pr merge:*)",
+      "Bash(gh release:*)",
+      "Bash(gh secret set:*)",
+      "Bash(gh secret delete:*)",
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(git push --delete:*)",
+      "Bash(git tag -d:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(git clean:*)",
+      "Bash(podman system prune:*)",
+      "Bash(podman image prune:*)",
+      "Bash(podman rmi -a:*)",
+      "Bash(podman rmi --all:*)",
+      "Bash(zpool:*)",
+      "Bash(zfs destroy:*)",
+      "Bash(zfs rollback:*)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=$(jq -r \".tool_input.file_path // empty\"); case \"$f\" in *.py) command -v ruff >/dev/null 2>&1 || exit 0; out=$(cd \"$CLAUDE_PROJECT_DIR\" 2>/dev/null || exit 0; ruff check \"$f\" 2>&1) || { printf \"%s\\n\" \"$out\" >&2; exit 2; };; esac; exit 0"
+          }
+        ]
+      }
+    ]
+  },
+  "_note_deny_publishing": "Everything that moves a published artifact is denied outright rather than gated behind `ask`: cosign sign, skopeo copy/delete, podman/buildah push, gh release, tag deletion, and force push. AGENTS.md section 0 rule 6 says registry tags and git history here are outward-facing and an agent proposes rather than does. `gh pr merge` and `gh workflow run` are on this list for the same reason and it is not obvious why: merging to main triggers build.yml, which builds, signs with this repo's key, and promotes to :latest, and a workflow_dispatch of build.yml defaults to promote_to_stable=true. Both are one command away from moving :latest, so neither is a prompt the maintainer should be able to click through while distracted.",
+  "_note_gh_api": "gh api is in `ask`, never `allow`. Permission rules match by command prefix, and `gh api` switches to POST as soon as -f/-F is present and honours -X for any method. An allow rule such as Bash(gh api repos/:*) would therefore approve mutations, including the workflow-dispatch endpoint that gh workflow run is denied for.",
+  "_note_zpool": "zpool is denied wholesale rather than by subcommand. This repository is about ZFS, so a pool is plausibly attached to whatever machine an agent is running on, and the read-only subcommands are not worth the risk of a prefix rule that also matches zpool destroy or zpool labelclear.",
+  "_note_hook": "The PostToolUse hook runs ruff on any .py file just written, and exits 2 so the finding is fed back rather than merely printed. It no-ops when ruff is absent, so it never blocks work on a machine without it -- CI is where the lint is enforced, per .github/workflows/test.yml."
+}

@@ -34,11 +34,11 @@ body:
     attributes:
       label: Image digest
       description: >-
-        The digest, not the tag. `:latest` moves, so a tag does not identify what
-        you actually booted. `bootc status` reports it as `Digest:`.
+        Required for anything running on a machine; leave blank only for a local
+        build that failed before producing an image. The digest, not the tag:
+        `:latest` moves, so a tag does not identify what you actually booted.
+        `bootc status` reports it as `Digest:`.
       placeholder: sha256:...
-    validations:
-      required: true
   - type: input
     id: kernel
     attributes:

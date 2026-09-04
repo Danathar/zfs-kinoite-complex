@@ -1,5 +1,5 @@
 name: Coverage gap
-description: A code path that neither the unit suite nor production execution reaches
+description: A code path missed by the unit suite, by production execution, or by both
 title: "[quality] "
 labels:
   - quality
@@ -9,6 +9,7 @@ body:
     attributes:
       value: |
         Read [`CONTRIBUTING.md` → Coverage](https://github.com/Danathar/zfs-kinoite-complex/blob/main/CONTRIBUTING.md#coverage) first.
+        All three tiers in its priority order belong here, not only the top one.
         Two things are explicitly **not** worth filing: the coverage percentage moving,
         and coverage obtained by weakening a fail-closed guard.
   - type: input

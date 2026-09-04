@@ -14,11 +14,34 @@ on:
   push:
     branches:
       - main
+    # Paths that cannot change the image. A push touching only these builds
+    # nothing, because a production build here does not merely burn a runner --
+    # it resolves the current base image and ZFS release, publishes a new
+    # candidate, signs it, and moves `:latest`, so every machine tracking this
+    # repository pulls a new image. Doing that because someone edited
+    # `.editorconfig` is a real cost paid for no change in what ships.
+    #
+    # The rule for adding to this list: the path must be neither copied into
+    # the image nor read by any workflow that builds it. `cosign.pub` is
+    # deliberately absent -- build-image.sh installs it into the image, so a
+    # change there does change what ships. `tests/` and `ruff.toml` are also
+    # absent, deliberately: they cannot alter the image either, but they are
+    # adjacent to code that can, and keeping this list to things that are
+    # obviously inert is what makes it safe to extend.
     paths-ignore:
       - README.md
       - "**/README.md"
       - docs/**
       - "**/*.md"
+      - .editorconfig
+      - .gitignore
+      - LICENSE
+      - .claude/**
+      - .cursor/**
+      - .github/ISSUE_TEMPLATE/**
+      - .github/pull_request_template.md
+      - .github/prompts/**
+      - .github/labeler.yml
 
   workflow_dispatch:
     # `workflow_dispatch` is GitHub's name for a manual run started from the

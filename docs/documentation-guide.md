@@ -40,6 +40,9 @@ docs/
 .github/prompts/
   README.md                   <- catalog of task prompts for the recurring operations here
   *.prompt.md                 <- one procedure each: diagnose a red build, replay a build, review a safety-critical change
+.claude/
+  settings.json               <- permission and hook policy for agent sessions; the deny list is the safety boundary
+  session-summary.md          <- state carried between agent sessions; not a changelog
 .claude/commands/
   README.md                   <- slash commands; thin pointers at .github/prompts/
 .claude/memory/

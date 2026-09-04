@@ -32,6 +32,7 @@ docs/
   zfs-kinoite-testing.md       <- deep technical design + issue history
   akmods-fork-maintenance.md  <- how akmods source refs are selected and pinned
   maintenance-watchlist.md    <- pins and decisions on a clock that no automation watches
+  review-rubric.md            <- what to check on a pull request, ordered by what actually goes wrong
 .github/scripts/
   README.md                   <- workflow step -> command-line interface (CLI) command -> Python module map
 .github/prompts/

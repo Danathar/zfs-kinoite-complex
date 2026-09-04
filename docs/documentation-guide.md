@@ -40,12 +40,24 @@ docs/
 .github/prompts/
   README.md                   <- catalog of task prompts for the recurring operations here
   *.prompt.md                 <- one procedure each: diagnose a red build, replay a build, review a safety-critical change
+.claude/commands/
+  README.md                   <- slash commands; thin pointers at .github/prompts/
+.claude/memory/
+  README.md                   <- what belongs in corrections.md and what does not
+  corrections.md              <- things believed here that turned out to be wrong, with what settles each one
 ```
 
 The prompt files are **procedures, not descriptions**. They link to `AGENTS.md`
 and `docs/` for what the code is and does, rather than restating it, so there
 stays one copy to keep current. New long-form explanation belongs in `docs/`;
 only steps and the decision at the end belong in a prompt.
+
+`.claude/memory/corrections.md` is the one place that records *mistakes* rather
+than design. An entry belongs there when someone confidently believed something
+false and it cost time or nearly caused a bad change -- not when a flag was
+forgotten. It is the practical form of AGENTS.md section 0 rule 3: every entry
+cites the file, command, or run that settles it, because an entry nobody can
+verify is worse than no entry.
 
 ## What To Read First (By Goal)
 

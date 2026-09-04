@@ -177,16 +177,24 @@ quite:
 | --- | --- | --- |
 | `build.yml` | push to `main` | **Nothing.** An agent never pushes to `main`. This is the only path that signs and promotes. |
 | `build-pr.yml` | `pull_request` | A validation build. Its header says it intentionally stops before any push or signing step. |
-| `build-branch.yml` | push to any branch except `main` | **Builds, and publishes an unsigned `br-*` image only when the push is attributed to a human.** Its `Push unsigned branch test image` step is gated on `actor_is_bot != 'true'`, so a bot-attributed push validates locally and pushes nothing. A human-attributed one leaves a throwaway tag: unsigned, refused by machines enforcing this repository's signature policy, never promoted. |
+| `build-branch.yml` | push to any branch except `main` **and except `ai-fix/**`** | **Nothing.** Two independent guards, and it is worth knowing both. Its `Push unsigned branch test image` step is gated on `actor_is_bot != 'true'`, so a bot-attributed push publishes nothing anyway; and `ai-fix/**` is excluded from the trigger, so the workflow does not run for an agent branch at all. |
 
-So the worst case for an agent branch is an unsigned throwaway tag, and only if
-the push is attributed to a human account. It cannot produce a signed image and
-it cannot move `:latest`.
+So an agent branch produces **no artifact at all**. It cannot publish, sign, or
+move `:latest`, and it does not leave a throwaway tag behind.
 
-Whether an agent's push is attributed to a bot is not something to rely on: it
-depends on which credential the agent pushes with, and a push made with
-`GITHUB_TOKEN` does not start a workflow at all. Treat `actor_is_bot` as one
-guard among several rather than the answer.
+The two guards are deliberately not one. `actor_is_bot` depends on which
+credential the agent pushed with, which is a property of the action's internals
+rather than of this repository — and a push made with `GITHUB_TOKEN` does not
+start a workflow at all, so the attribution is not even reached in that case.
+Relying on it alone would mean relying on something this repository does not
+control. The `branches-ignore` exclusion does not care who pushed.
+
+That exclusion is one line, which makes it easy to drop while editing the
+trigger for an unrelated reason. Two assertions in
+`tests/test_workflow_build_container.py` hold it: one that the exclusion is
+present, and one that `ai-fix.yml`'s `branch_prefix` still matches it — because
+changing the prefix in one file alone silently restores the behaviour the
+exclusion removed, and nothing else would notice.
 
 ## If you find a vulnerability
 

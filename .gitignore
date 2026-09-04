@@ -9,3 +9,4 @@ cosign.key
 .claude/
 .claude/*.lock
 .coverage
+coverage.json

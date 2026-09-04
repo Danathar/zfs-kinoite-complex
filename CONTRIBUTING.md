@@ -45,9 +45,9 @@ is only a runner here — the suite is `unittest.TestCase` throughout, so
 `python3 -m unittest discover -s tests` also works with nothing installed at
 all, which is useful when you have no network.
 
-Add `pytest-cov` for the [Coverage](#coverage) section below; `test.yml` does
-not install it yet at the time of writing, so a local coverage run is not yet
-something CI also produces on every PR.
+Add `pytest-cov` for the [Coverage](#coverage) section below. `test.yml`
+installs it too, so the coverage numbers and the per-file gate you see locally
+are the same ones CI produces on every pull request.
 
 `tests/e2e/` is collected by that same command and needs nothing extra. It runs
 the CLI as a real subprocess rather than importing it — see

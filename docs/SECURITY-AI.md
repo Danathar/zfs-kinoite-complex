@@ -65,7 +65,7 @@ update.
 | --- | --- | --- |
 | `SIGNING_SECRET` | the signing steps in `build.yml`, via `publish-native-image` | Anyone can sign an image that verifies against the committed `cosign.pub`, and machines are configured to trust exactly that. **Highest severity in the repository.** |
 | `GITHUB_TOKEN` | every workflow, scoped per job | Short-lived and bounded by that job's `permissions:` block. It is also what pushes to GHCR — `REGISTRY_TOKEN` is `${{ github.token }}`, not a stored credential. |
-| Agent credentials (`ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN`) | Nothing in this repository reads these today. Listed because an agent workflow would, and an inventory that omits a credential class is worse than one that marks it unused. | Billing, not repository access — they buy model calls and cannot themselves write here. |
+| Agent credentials (`ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN`) | [`.github/workflows/ai-fix.yml`](../.github/workflows/ai-fix.yml), which is inert unless one of them is set. Whether either is configured is not visible to a token without admin scope, so this inventory does not assert that they are. | Billing, not repository access — they buy model calls and cannot themselves write here. |
 
 Nothing else in CI is secret.
 

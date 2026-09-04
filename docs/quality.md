@@ -73,6 +73,7 @@ Two properties of the badge pipeline are deliberate:
 | `check-akmods-cache` strict mode | before the candidate build | the build, if the cache does not carry a matching `kmod-zfs` |
 | `sign-image` | before publish | publishing — an unsigned production image is refused outright |
 | `promote-stable` digest re-read | after the copy to `:latest` | promotion, if the copy did not land at the signed digest |
+| `nightly-compliance.yml` | 05:00 UTC daily, and on dispatch | nothing — it reports. See below. |
 
 ### The first three block nothing on their own
 
@@ -102,6 +103,27 @@ path actually runs in production is established by hand today, which does not
 scale as a review practice. That is a known gap, tracked in
 [#10](https://github.com/Danathar/zfs-kinoite-complex/issues/10).
 
+### The nightly job answers a question the others cannot
+
+Every gate above runs when something changes, and every signature check among
+them runs at *publish* time against an image the same run just built.
+[`nightly-compliance.yml`](../.github/workflows/nightly-compliance.yml) asks a
+different question on a clock: **does the artifact a user would pull right now
+still verify against the committed `cosign.pub`?**
+
+A tag can move, a signature can be pruned, a registry can lose something — none
+of which involves a commit, and none of which any other check here would
+notice. It runs an hour before `build.yml`'s 06:00 schedule so a failure is
+visible before the production build rather than tangled up with it, and it uses
+the exact command [`install-and-verify.md`](./install-and-verify.md) gives
+users, `--new-bundle-format=false` included, because verifying differently from
+the documented command would test something users are not doing.
+
+It also re-runs the unit suite and the coverage gate. That is deliberate
+duplication: a dependency of the *runner* can break those with no commit on this
+side, and that failure is worth seeing on its own rather than landing on whoever
+opens the next pull request.
+
 ## The checks that actually protect a booted machine
 
 These are not lint. Each refuses to continue rather than publish something it
@@ -120,7 +142,17 @@ first rule (AGENTS.md section 0 rule 1) is that the fix is the underlying cause
 
 ## Reading a red build
 
-**First, check that it actually failed.** `gh run list --workflow build.yml
+**First, check which workflow went red.** It changes what the failure means, and
+only one of them can publish anything signed:
+
+| Workflow | Runs on | A red run means |
+| --- | --- | --- |
+| `build.yml` | push to `main`, and 06:00 UTC daily | The production path. Nothing was signed or promoted; `:latest` still points at the last good promotion. |
+| `build-pr.yml` | every pull request | Validation only. Its header says it intentionally stops before any push or signing step, so nothing was published either way. |
+| `build-branch.yml` | push to any branch except `main` and `ai-fix/**` | A branch test image. Publishes *unsigned* `br-*` tags, and only for human-attributed pushes. Never promoted. |
+| `test.yml` | every pull request and push to `main` | Lint, unit suite, coverage floors. Blocks nothing automatically — see above. |
+
+**Then check that it actually failed.** `gh run list --workflow build.yml
 --limit 10 --json createdAt,conclusion` distinguishes `failure` from
 `cancelled`, and the badge does not. A run of `cancelled` entries with no
 `failure` among them means someone was merging quickly, not that anything

@@ -32,6 +32,8 @@ docs/
   zfs-kinoite-testing.md       <- deep technical design + issue history
   akmods-fork-maintenance.md  <- how akmods source refs are selected and pinned
   maintenance-watchlist.md    <- pins and decisions on a clock that no automation watches
+  production-boundary-proposal.md <- proposal: what would have to be true to call this production
+  runtime-validation-proposal.md  <- proposal: validating the image after it boots, not just after it builds
   review-rubric.md            <- what to check on a pull request, ordered by what actually goes wrong
   risk-tiers.md               <- how much of that rubric a given change needs, by what it can cause
   SECURITY-AI.md              <- what an agent may do unattended, and which inputs are hostile

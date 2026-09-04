@@ -4,9 +4,14 @@ Reproducible commands, and an honest account of what the numbers are worth on a
 repository this size.
 
 There is no metrics service and no scheduled collector. Adding one would be more
-machinery than the signal justifies — thirteen merged pull requests total at the
-time of writing. What follows is what to run when the question actually comes
-up, and how to avoid drawing a conclusion the data does not support.
+machinery than the signal justifies at this size. What follows is what to run
+when the question actually comes up, and how to avoid drawing a conclusion the
+data does not support.
+
+**Every figure quoted below is dated.** They are worked examples of reading the
+output, not facts about the repository — the commands are the durable part. If a
+number here disagrees with what the command prints, the command is right and the
+number is stale; that is expected, and it is why each one carries a date.
 
 [`docs/quality.md`](./quality.md) is the companion: this page is how to get
 numbers, that one is what the gates and signals mean.
@@ -20,13 +25,14 @@ unmerged=$(gh pr list --state closed --limit 500 --json number,mergedAt \
 printf 'merged %s, closed unmerged %s\n' "$merged" "$unmerged"
 ```
 
-At the time of writing: **13 merged, 0 closed unmerged**.
+As of 2026-09-04: **28 merged, 0 closed unmerged**.
 
 **That is not a 100% acceptance rate in any useful sense.** Every pull request
 here so far was opened by the maintainer or by the repository's own automation,
-and nothing has been rejected because nothing has needed to be. At n=13 on a
-single-maintainer repository, the ratio measures how often the maintainer merges
-their own work.
+and nothing has been rejected because nothing has needed to be. At this size, on
+a single-maintainer repository, the ratio measures how often the maintainer
+merges their own work — and it will keep reading 100% for as long as that stays
+true, which is precisely why it is not worth tracking.
 
 Break it out by author before reading anything into it:
 
@@ -35,8 +41,9 @@ gh pr list --state merged --limit 500 --json author -q \
   '[.[].author.login] | group_by(.) | map({author: .[0], merged: length}) | sort_by(-.merged)[]'
 ```
 
-At the time of writing: 9 `Danathar`, 4 `app/danathar-atomic-hive`. Separate bot
-pull requests from human ones before treating a trend as one.
+As of 2026-09-04 the split is roughly two-thirds `Danathar` to one-third
+`app/danathar-atomic-hive`. Separate bot pull requests from human ones before
+treating a trend as one.
 
 ## Which changes get pushed back on
 
@@ -70,10 +77,10 @@ gh run list --workflow build.yml --event schedule --limit 30 \
 
 ### Read the causes, not the ratio
 
-At the time of writing the last 40 `build.yml` runs were 27 scheduled failures
-against 3 scheduled successes — a number that looks alarming and means almost
-nothing on its own. Classifying nine consecutive failures gives three different
-stories:
+A worked example, from 2026-09-04. The last 40 `build.yml` runs at that point
+were 27 scheduled failures against 3 scheduled successes — a number that looks
+alarming and means almost nothing on its own. Classifying nine consecutive
+failures gave three different stories:
 
 | Dates | Cause | Whose problem |
 | --- | --- | --- |
@@ -81,7 +88,9 @@ stories:
 | 2026-08-30 | `Error: building at STEP "ADD https://copr.fedorainfracloud.org/…"` in the akmods build | Upstream COPR. |
 | 2026-08-31 | `unexpected EOF` pulling the base image from `cdn01.quay.io` | Transient registry/CDN. |
 
-Scheduled builds have succeeded on 2026-09-01, 09-02 and 09-03 since.
+Scheduled builds succeeded again from 2026-09-01 onward. The lesson is the
+classification, not the tally: re-run the command below rather than trusting
+this table.
 
 So "27 of 40 failed" is not one signal. Classify before reporting:
 
@@ -105,9 +114,10 @@ gh run list --workflow test.yml --limit 30 \
   --json conclusion -q '[.[].conclusion] | group_by(.) | map({k:.[0],n:length}) | .[]'
 ```
 
-At the time of writing: 29 success, 1 cancelled, 0 failures. This is the cheap
-gate and it is expected to be green; a failure here is a real signal precisely
-because it is rare.
+As of 2026-09-04 this was overwhelmingly success with a few `cancelled`. It is
+the cheap gate and is expected to be green; a failure here is a real signal
+precisely because it is rare. Note that `cancelled` is common and benign —
+back-to-back merges cancel each other, see [`quality.md`](./quality.md).
 
 ## Coverage
 

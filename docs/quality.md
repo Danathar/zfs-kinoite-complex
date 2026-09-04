@@ -105,8 +105,21 @@ Three things worth knowing before you conclude anything:
    in August 2026 were seven `SIGNING_SECRET` refusals, one upstream COPR
    failure, and one quay.io CDN transfer failure. `docs/metrics.md` has the
    command that classifies them.
-2. **`unexpected EOF` during a blob copy is a registry or CDN failure**, not a
-   repository failure. It is common enough here to be the first thing to rule
-   out.
+2. **Rule out a third-party service before anything else.** Every workflow here
+   pulls from quay.io, pushes to ghcr.io, and bootstraps `cosign` from
+   Sigstore, so three different external services can turn a run red without
+   anything in this repository being wrong. All three shapes have been observed:
+
+   | Message | Where it surfaces | What actually happened |
+   | --- | --- | --- |
+   | `happened during read: unexpected EOF` | pulling the base image, in `Build Candidate Image` or `Build Or Reuse Shared ZFS Akmods Cache` | A quay.io CDN blob transfer died mid-download. |
+   | `writing blob: … received unexpected HTTP status: 500` | pushing, in `Build Branch Image` | ghcr.io returned a server error on a layer upload. |
+   | `Error: trusted root is required when using new bundle format`, preceded by `failed to download https://tuf-repo-cdn.sigstore.dev/…root.json, http status code: 403` | the `Install skopeo and cosign` step, before any of this repo's own code runs | Sigstore's TUF CDN was unavailable, so the installer could not verify the `cosign` binary it downloads. |
+
+   The third one is the trap. Its message names a trusted root and a bundle
+   format, so it reads like a signature-policy problem in this repository — and
+   it is not: it fails in a *tool installation* step, before `sign-image` or
+   `check-akmods-cache` have run at all. Check which step failed before
+   concluding anything about signing. The preceding `403` line is the tell.
 3. **A green pipeline is not a good image.** A successful run proves the build
    completed. Say which run you read, and what it actually proves.

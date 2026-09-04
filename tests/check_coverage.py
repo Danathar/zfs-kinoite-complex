@@ -24,6 +24,24 @@ those lines. Lowering one is evidenced by an absence, and a deleted test and a
 deliberately removed code path look identical from the count alone. So lowering
 a floor stays a decision a person makes in a diff, with a reason in the commit.
 
+The floors only ever cover what `--cov` measures, which left a hole: a file that
+ships and executes but sits outside those paths had no entry anywhere, so it was
+neither measured nor recorded as deliberately unmeasured. `Containerfile` and
+`build_files/build-image.sh` are exactly that -- they run only inside an image
+build, so nothing on the host reaches them.
+
+So the manifest has a second section. Every tracked `*.py`, `*.sh` and
+`Containerfile` outside `tests/` must appear in `floors` (measured, with a
+number) or in `unmeasured` (with a reason). Adding a shipped file and nothing
+else turns the gate red, which is the point: the choice gets made once, in the
+open, instead of drifting. This is the idea aurora-zfs-simple's
+tests/test-coverage.sh gates -- assert a decision, not a number -- combined with
+arch-bootc's per-file floors.
+
+The two sections are mutually exclusive and both are checked in both directions:
+a file in `unmeasured` that coverage *did* measure is an error, because it
+should carry a floor instead.
+
 Run by .github/workflows/test.yml. Also runnable by hand:
 
     python3 -m pytest tests/ --cov=ci_tools --cov=shared \\
@@ -36,6 +54,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -43,13 +62,28 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 THRESHOLDS_PATH = REPO_ROOT / ".coverage-thresholds.json"
 DEFAULT_COVERAGE_REPORT = REPO_ROOT / "coverage.json"
 
+# What counts as a shipped executable, for the completeness check. Workflow and
+# action YAML is deliberately not here: it is configuration rather than a file
+# with statements, twenty-odd entries of "runs only in CI" would be noise, and
+# the properties of it worth pinning are already pinned by
+# tests/test_workflow_build_container.py.
+SHIPPED_SUFFIXES = (".py", ".sh")
+SHIPPED_NAMES = ("Containerfile",)
+EXCLUDED_PREFIXES = ("tests/",)
+
 
 class CoverageGateError(RuntimeError):
     """Raised when the gate cannot run at all, as distinct from a floor failing."""
 
 
-def load_thresholds(path: Path) -> dict[str, int]:
-    """Return the recorded floors, rejecting a file that cannot mean what it says."""
+def load_manifest(path: Path) -> tuple[dict[str, int], dict[str, str]]:
+    """
+    Return `(floors, unmeasured)`, rejecting a file that cannot mean what it says.
+
+    Every rejection here is a gate error rather than a failure: a manifest that
+    cannot be read is not the same as a repository that failed its floors, and
+    conflating them would let a malformed file read as "nothing to check".
+    """
 
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
@@ -58,11 +92,18 @@ def load_thresholds(path: Path) -> dict[str, int]:
     except json.JSONDecodeError as exc:
         raise CoverageGateError(f"{path} is not valid JSON: {exc}") from exc
 
-    if not isinstance(raw, dict) or not raw:
-        raise CoverageGateError(f"{path} must be a non-empty object of path -> minimum")
+    if not isinstance(raw, dict):
+        raise CoverageGateError(f"{path} must be an object with 'floors' and 'unmeasured'")
+
+    raw_floors = raw.get("floors")
+    raw_unmeasured = raw.get("unmeasured", {})
+    if not isinstance(raw_floors, dict) or not raw_floors:
+        raise CoverageGateError(f"{path} must have a non-empty 'floors' object of path -> minimum")
+    if not isinstance(raw_unmeasured, dict):
+        raise CoverageGateError(f"{path}: 'unmeasured' must be an object of path -> reason")
 
     floors: dict[str, int] = {}
-    for module_path, floor in raw.items():
+    for module_path, floor in raw_floors.items():
         # A float or a string here would compare in surprising ways rather than
         # failing, and "80" >= 80 is a TypeError only sometimes.
         if not isinstance(floor, int) or isinstance(floor, bool) or floor < 0:
@@ -70,7 +111,60 @@ def load_thresholds(path: Path) -> dict[str, int]:
                 f"{path}: floor for {module_path} must be a non-negative integer, got {floor!r}"
             )
         floors[module_path] = floor
-    return floors
+
+    unmeasured: dict[str, str] = {}
+    for module_path, reason in raw_unmeasured.items():
+        # An empty reason is the failure this section exists to prevent. Listing
+        # a file as unmeasured with nothing said about why records no decision
+        # at all -- it just silences the check.
+        if not isinstance(reason, str) or not reason.strip():
+            raise CoverageGateError(
+                f"{path}: {module_path} is listed as unmeasured but states no reason"
+            )
+        unmeasured[module_path] = reason.strip()
+
+    both = sorted(set(floors) & set(unmeasured))
+    if both:
+        raise CoverageGateError(
+            f"{path}: {', '.join(both)} appears in both 'floors' and 'unmeasured'"
+        )
+    return floors, unmeasured
+
+
+def shipped_executables(repo_root: Path) -> set[str]:
+    """
+    Return every tracked file that ships and executes, outside `tests/`.
+
+    `git ls-files` rather than a filesystem walk: the tree carries __pycache__
+    and coverage output, and a walk would either pick those up or need a second
+    ignore list that could drift from .gitignore.
+    """
+
+    try:
+        listing = subprocess.run(
+            ["git", "-C", str(repo_root), "ls-files"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=True,
+        ).stdout
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise CoverageGateError(
+            f"Could not list tracked files with git: {exc}. "
+            "The completeness check needs a git checkout."
+        ) from exc
+
+    shipped = set()
+    for line in listing.splitlines():
+        tracked = line.strip()
+        if not tracked or tracked.startswith(EXCLUDED_PREFIXES):
+            continue
+        name = tracked.rsplit("/", 1)[-1]
+        if tracked.endswith(SHIPPED_SUFFIXES) or name in SHIPPED_NAMES:
+            shipped.add(tracked)
+    if not shipped:
+        raise CoverageGateError("git listed no shipped executables; the check cannot be trusted")
+    return shipped
 
 
 def load_covered_counts(path: Path) -> dict[str, tuple[int, int]]:
@@ -105,15 +199,27 @@ def load_covered_counts(path: Path) -> dict[str, tuple[int, int]]:
 def evaluate(
     floors: dict[str, int],
     counts: dict[str, tuple[int, int]],
+    unmeasured: dict[str, str] | None = None,
+    shipped: set[str] | None = None,
 ) -> tuple[list[str], list[str], list[str]]:
     """
-    Compare floors against measured counts.
+    Compare floors against measured counts, and check the manifest is complete.
 
-    Returns (failures, passes, raisable). Both directions are checked so the
-    manifest cannot rot: a module measured with no floor is a failure (new code
-    with no decision recorded), and a floor naming a module the run did not
-    measure is a failure (stale after a rename or deletion).
+    Returns (failures, passes, raisable). Every direction is checked so the
+    manifest cannot rot:
+
+    * a module measured with no floor          -- new code, no decision recorded
+    * a floor naming a module nothing measured -- stale after a rename or delete
+    * a shipped file in neither section        -- the hole this exists to close
+    * an `unmeasured` entry coverage did reach -- it should carry a floor
+    * an `unmeasured` entry that no longer exists
+
+    `unmeasured` and `shipped` default to empty so the floor comparison can be
+    exercised on its own.
     """
+
+    unmeasured = unmeasured or {}
+    shipped = shipped or set()
 
     failures: list[str] = []
     passes: list[str] = []
@@ -147,6 +253,31 @@ def evaluate(
             f"-- add an entry to .coverage-thresholds.json recording what it reaches today"
         )
 
+    for module_path, reason in sorted(unmeasured.items()):
+        if module_path in counts:
+            covered, total = counts[module_path]
+            failures.append(
+                f"{module_path}: listed as unmeasured, but the coverage run reached "
+                f"{covered}/{total} statements -- move it to 'floors' with that number"
+            )
+        elif shipped and module_path not in shipped:
+            failures.append(
+                f"{module_path}: listed as unmeasured but is not a tracked shipped file "
+                f"-- remove the stale entry"
+            )
+        else:
+            passes.append(f"{module_path}: unmeasured by decision -- {reason}")
+
+    # The completeness check, and the reason this section exists: a file that
+    # ships and executes but appears in neither list has had no decision made
+    # about it at all.
+    for module_path in sorted(shipped - set(floors) - set(unmeasured)):
+        failures.append(
+            f"{module_path}: ships and executes but appears in neither 'floors' nor "
+            f"'unmeasured' -- record a floor if the suite reaches it, or say in "
+            f"'unmeasured' why it cannot be measured"
+        )
+
     return failures, passes, raisable
 
 
@@ -165,18 +296,33 @@ def main(argv: list[str] | None = None) -> int:
         "--thresholds",
         type=Path,
         default=THRESHOLDS_PATH,
-        help="Path to the recorded floors.",
+        help="Path to the recorded floors and unmeasured decisions.",
+    )
+    parser.add_argument(
+        "--repo-root",
+        type=Path,
+        default=REPO_ROOT,
+        help="Checkout to enumerate shipped files from.",
+    )
+    parser.add_argument(
+        "--skip-completeness",
+        action="store_true",
+        help=(
+            "Compare floors only, without checking that every shipped file has a "
+            "decision. For use where there is no git checkout; CI never passes it."
+        ),
     )
     args = parser.parse_args(argv)
 
     try:
-        floors = load_thresholds(args.thresholds)
+        floors, unmeasured = load_manifest(args.thresholds)
         counts = load_covered_counts(args.coverage_report)
+        shipped = set() if args.skip_completeness else shipped_executables(args.repo_root)
     except CoverageGateError as exc:
         print(f"coverage: {exc}", file=sys.stderr)
         return 2
 
-    failures, passes, raisable = evaluate(floors, counts)
+    failures, passes, raisable = evaluate(floors, counts, unmeasured, shipped)
 
     for line in passes:
         print(f"coverage: PASS {line}")
@@ -188,10 +334,10 @@ def main(argv: list[str] | None = None) -> int:
     if failures:
         for line in failures:
             print(f"coverage: FAIL {line}", file=sys.stderr)
-        print(f"coverage: {len(failures)} floor(s) failed", file=sys.stderr)
+        print(f"coverage: {len(failures)} per-file check(s) failed", file=sys.stderr)
         return 1
 
-    print(f"coverage: all {len(passes)} per-module floors hold")
+    print(f"coverage: all {len(passes)} per-file decisions hold")
     return 0
 
 

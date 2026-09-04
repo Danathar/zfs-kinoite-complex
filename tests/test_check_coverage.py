@@ -1,7 +1,7 @@
 """
 Script: tests/test_check_coverage.py
 What: Tests for the per-module coverage floor gate.
-Doing: Drives load_thresholds, load_covered_counts, evaluate, and main over hand-built reports and threshold files.
+Doing: Drives load_manifest, load_covered_counts, shipped_executables, evaluate, and main over hand-built reports and manifests.
 Why: A gate that silently passes is worse than no gate, because it reads as evidence.
 Goal: Pin each way the gate is meant to fail, and the message it fails with.
 """
@@ -17,8 +17,9 @@ from check_coverage import (
     CoverageGateError,
     evaluate,
     load_covered_counts,
-    load_thresholds,
+    load_manifest,
     main,
+    shipped_executables,
 )
 
 
@@ -26,6 +27,13 @@ def _write(directory: Path, name: str, document: object) -> Path:
     path = directory / name
     path.write_text(json.dumps(document), encoding="utf-8")
     return path
+
+
+def _manifest(floors: dict[str, int], unmeasured: dict[str, str] | None = None) -> dict:
+    document: dict = {"floors": floors}
+    if unmeasured is not None:
+        document["unmeasured"] = unmeasured
+    return document
 
 
 def _report(files: dict[str, tuple[int, int]]) -> dict[str, object]:
@@ -37,42 +45,74 @@ def _report(files: dict[str, tuple[int, int]]) -> dict[str, object]:
     }
 
 
-class LoadThresholdsTests(unittest.TestCase):
-    def test_reads_integer_floors(self) -> None:
+class LoadManifestTests(unittest.TestCase):
+    def test_reads_integer_floors_and_reasoned_unmeasured_entries(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            path = _write(Path(temp_dir), "thresholds.json", {"a.py": 12, "b.py": 0})
-            self.assertEqual(load_thresholds(path), {"a.py": 12, "b.py": 0})
+            path = _write(
+                Path(temp_dir),
+                "thresholds.json",
+                _manifest({"a.py": 12, "b.py": 0}, {"Containerfile": "runs only in a build"}),
+            )
+            floors, unmeasured = load_manifest(path)
+            self.assertEqual(floors, {"a.py": 12, "b.py": 0})
+            self.assertEqual(unmeasured, {"Containerfile": "runs only in a build"})
+
+    def test_unmeasured_is_optional(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = _write(Path(temp_dir), "thresholds.json", _manifest({"a.py": 1}))
+            self.assertEqual(load_manifest(path)[1], {})
 
     def test_a_missing_file_is_a_gate_error_naming_the_path(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             missing = Path(temp_dir) / "absent.json"
             with self.assertRaises(CoverageGateError) as caught:
-                load_thresholds(missing)
+                load_manifest(missing)
             self.assertIn(str(missing), str(caught.exception))
 
-    def test_an_empty_object_is_rejected(self) -> None:
+    def test_an_empty_floors_object_is_rejected(self) -> None:
         # An empty manifest would otherwise pass every check while gating
         # nothing at all -- the failure mode this whole file exists to prevent.
         with tempfile.TemporaryDirectory() as temp_dir:
-            path = _write(Path(temp_dir), "thresholds.json", {})
+            path = _write(Path(temp_dir), "thresholds.json", _manifest({}))
             with self.assertRaises(CoverageGateError) as caught:
-                load_thresholds(path)
-            self.assertIn("non-empty object", str(caught.exception))
+                load_manifest(path)
+            self.assertIn("non-empty 'floors'", str(caught.exception))
 
     def test_a_non_integer_floor_is_rejected_rather_than_compared(self) -> None:
         for floor in ("80", 80.5, None, True):
             with self.subTest(floor=floor), tempfile.TemporaryDirectory() as temp_dir:
-                path = _write(Path(temp_dir), "thresholds.json", {"a.py": floor})
+                path = _write(Path(temp_dir), "thresholds.json", _manifest({"a.py": floor}))
                 with self.assertRaises(CoverageGateError) as caught:
-                    load_thresholds(path)
+                    load_manifest(path)
                 self.assertIn("non-negative integer", str(caught.exception))
+
+    def test_an_unmeasured_entry_with_no_reason_is_rejected(self) -> None:
+        # Listing a file as unmeasured and saying nothing records no decision;
+        # it only silences the check. This is the whole value of the section.
+        for reason in ("", "   ", None, 5):
+            with self.subTest(reason=reason), tempfile.TemporaryDirectory() as temp_dir:
+                path = _write(
+                    Path(temp_dir), "thresholds.json", _manifest({"a.py": 1}, {"x.sh": reason})
+                )
+                with self.assertRaises(CoverageGateError) as caught:
+                    load_manifest(path)
+                self.assertIn("states no reason", str(caught.exception))
+
+    def test_a_file_in_both_sections_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = _write(
+                Path(temp_dir), "thresholds.json", _manifest({"a.py": 1}, {"a.py": "because"})
+            )
+            with self.assertRaises(CoverageGateError) as caught:
+                load_manifest(path)
+            self.assertIn("appears in both", str(caught.exception))
 
     def test_invalid_json_is_reported_as_such(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             path = Path(temp_dir) / "thresholds.json"
             path.write_text("{not json", encoding="utf-8")
             with self.assertRaises(CoverageGateError) as caught:
-                load_thresholds(path)
+                load_manifest(path)
             self.assertIn("not valid JSON", str(caught.exception))
 
 
@@ -134,6 +174,57 @@ class EvaluateTests(unittest.TestCase):
         self.assertEqual(len(passes), 1)
         self.assertEqual(raisable, ["a.py: floor 5, reached 8"])
 
+    def test_a_shipped_file_in_neither_section_fails(self) -> None:
+        # The hole this section exists to close: a file that ships and executes
+        # but has had no decision recorded about it at all.
+        failures, _, _ = evaluate(
+            {"a.py": 1},
+            {"a.py": (1, 1)},
+            unmeasured={},
+            shipped={"a.py", "build_files/build-image.sh"},
+        )
+        self.assertEqual(len(failures), 1)
+        self.assertIn("build_files/build-image.sh", failures[0])
+        self.assertIn("neither 'floors' nor 'unmeasured'", failures[0])
+
+    def test_an_unmeasured_entry_the_run_actually_measured_fails(self) -> None:
+        # It should carry a floor instead. Left as-is it would silence a file
+        # the suite genuinely reaches.
+        failures, _, _ = evaluate(
+            {"a.py": 1},
+            {"a.py": (1, 1), "b.py": (4, 5)},
+            unmeasured={"b.py": "cannot be measured"},
+            shipped={"a.py", "b.py"},
+        )
+        self.assertTrue(any("move it to 'floors' with that number" in f for f in failures))
+
+    def test_a_stale_unmeasured_entry_fails(self) -> None:
+        failures, _, _ = evaluate(
+            {"a.py": 1},
+            {"a.py": (1, 1)},
+            unmeasured={"deleted.sh": "was never measurable"},
+            shipped={"a.py"},
+        )
+        self.assertEqual(len(failures), 1)
+        self.assertIn("not a tracked shipped file", failures[0])
+
+    def test_a_reasoned_unmeasured_entry_passes_and_shows_the_reason(self) -> None:
+        failures, passes, _ = evaluate(
+            {"a.py": 1},
+            {"a.py": (1, 1)},
+            unmeasured={"Containerfile": "runs only inside an image build"},
+            shipped={"a.py", "Containerfile"},
+        )
+        self.assertEqual(failures, [])
+        self.assertTrue(
+            any("unmeasured by decision -- runs only inside an image build" in p for p in passes)
+        )
+
+    def test_completeness_is_not_checked_when_no_shipped_set_is_given(self) -> None:
+        # --skip-completeness, and the floor-only tests above, rely on this.
+        failures, _, _ = evaluate({"a.py": 1}, {"a.py": (1, 1)})
+        self.assertEqual(failures, [])
+
     def test_a_module_with_no_statements_is_reported_as_fully_covered(self) -> None:
         # An __init__.py has zero statements; a naive percentage would divide by
         # zero rather than report it.
@@ -147,9 +238,10 @@ class MainExitStatusTests(unittest.TestCase):
         directory = Path(temp_dir)
         return [
             "--thresholds",
-            str(_write(directory, "thresholds.json", floors)),
+            str(_write(directory, "thresholds.json", _manifest(floors))),
             "--coverage-report",
             str(_write(directory, "coverage.json", _report(files))),
+            "--skip-completeness",
         ]
 
     def test_exits_zero_when_every_floor_holds(self) -> None:
@@ -175,15 +267,55 @@ class MainExitStatusTests(unittest.TestCase):
             self.assertEqual(main(argv), 2)
 
 
-class RecordedThresholdsTests(unittest.TestCase):
-    def test_the_checked_in_manifest_parses_and_is_not_empty(self) -> None:
-        repo_root = Path(__file__).resolve().parent.parent
-        floors = load_thresholds(repo_root / ".coverage-thresholds.json")
+class RecordedManifestTests(unittest.TestCase):
+    """
+    The checked-in manifest against the checked-in tree.
+
+    These run in the ordinary suite, so a shipped file added without a decision
+    fails here as well as in the CI gate step -- which matters because the gate
+    step needs a coverage run and this does not.
+    """
+
+    REPO_ROOT = Path(__file__).resolve().parent.parent
+
+    def test_the_manifest_parses_and_records_both_kinds_of_decision(self) -> None:
+        floors, unmeasured = load_manifest(self.REPO_ROOT / ".coverage-thresholds.json")
         self.assertGreater(len(floors), 1)
-        # Every module under the measured roots has a threshold; this asserts
-        # only that the file is real, since the completeness check itself needs
-        # a coverage run and lives in .github/workflows/test.yml.
         self.assertIn("ci_tools/common.py", floors)
+        # The two files that ship and execute but cannot be measured from the
+        # host. If this ever becomes empty, the section has stopped doing
+        # anything and the completeness check below is the only thing left.
+        self.assertIn("Containerfile", unmeasured)
+        self.assertIn("build_files/build-image.sh", unmeasured)
+
+    def test_every_shipped_file_in_this_tree_has_a_recorded_decision(self) -> None:
+        floors, unmeasured = load_manifest(self.REPO_ROOT / ".coverage-thresholds.json")
+        shipped = shipped_executables(self.REPO_ROOT)
+
+        self.assertEqual(
+            shipped - set(floors) - set(unmeasured),
+            set(),
+            "ships and executes but has no entry in .coverage-thresholds.json",
+        )
+        self.assertEqual(
+            set(unmeasured) - shipped,
+            set(),
+            "listed as unmeasured but is not a tracked shipped file",
+        )
+
+    def test_shipped_executables_finds_the_files_it_should_and_skips_tests(self) -> None:
+        shipped = shipped_executables(self.REPO_ROOT)
+
+        self.assertIn("Containerfile", shipped)
+        self.assertIn("build_files/build-image.sh", shipped)
+        self.assertIn("ci_tools/cli.py", shipped)
+        # tests/ is excluded: test files are not shipped, and this file would
+        # otherwise demand a decision about itself.
+        self.assertNotIn("tests/check_coverage.py", shipped)
+        self.assertFalse({path for path in shipped if path.startswith("tests/")})
+        # Workflow YAML is deliberately out of scope; see the note in
+        # check_coverage.py on why.
+        self.assertFalse({path for path in shipped if path.endswith((".yml", ".yaml"))})
 
 
 if __name__ == "__main__":

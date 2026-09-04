@@ -48,6 +48,8 @@ docs/
 .claude/memory/
   README.md                   <- what belongs in corrections.md and what does not
   corrections.md              <- things believed here that turned out to be wrong, with what settles each one
+tests/e2e/
+  README.md                   <- what the unmocked end-to-end tier answers, and what it deliberately does not
 ```
 
 The prompt files are **procedures, not descriptions**. They link to `AGENTS.md`

@@ -164,10 +164,17 @@ quite:
 | --- | --- | --- |
 | `build.yml` | push to `main` | **Nothing.** An agent never pushes to `main`. This is the only path that signs and promotes. |
 | `build-pr.yml` | `pull_request` | A validation build. Its header says it intentionally stops before any push or signing step. |
-| `build-branch.yml` | push to any branch except `main` | **Publishes an unsigned `br-*` image.** This is real: it is a throwaway test artifact, machines enforcing this repository's signature policy refuse to pull it, and it must never be promoted — but a registry tag does appear. |
+| `build-branch.yml` | push to any branch except `main` **and except `ai-fix/**`** | **Nothing.** It would otherwise publish an unsigned `br-*` throwaway tag, so agent branches are excluded from its trigger. |
 
-So the bounded-but-nonzero consequence of an agent branch is an unsigned
-throwaway tag. It cannot produce a signed image, and it cannot move `:latest`.
+So an agent branch produces **no artifact at all**. It cannot publish, sign, or
+move `:latest`, and it does not even leave a throwaway tag behind.
+
+That exclusion is one line in `build-branch.yml`'s `branches-ignore`, which
+makes it easy to drop while editing that trigger for an unrelated reason. Two
+assertions in `tests/test_workflow_build_container.py` hold it: one that the
+exclusion is present, and one that `ai-fix.yml`'s `branch_prefix` still matches
+it — because changing the prefix in one file alone silently restores the
+behaviour the exclusion removed, and nothing else would notice.
 
 ## If you find a vulnerability
 

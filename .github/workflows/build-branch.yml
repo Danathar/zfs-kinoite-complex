@@ -7,10 +7,20 @@ name: Build Branch Image
 # the shared akmods cache and never sign anything -- the production signing key
 # lives in a `main`-restricted environment they cannot reach. Human-authored
 # branches publish UNSIGNED `br-*` test images for throwaway VMs only.
+#
+# `ai-fix/**` is excluded on purpose. Those branches are pushed by the agent in
+# ai-fix.yml, and publishing a registry tag -- even an unsigned throwaway one --
+# is more than opening a pull request should cost. Nothing is lost: build-pr.yml
+# still validates the pull request the agent opens, and it publishes nothing. So
+# an agent branch produces no artifact at all, which is what
+# docs/SECURITY-AI.md's "What an agent branch can actually cause here" says.
+# tests/test_workflow_build_container.py pins this, because it is one line and
+# would be easy to drop while editing the trigger for an unrelated reason.
 on:
   push:
     branches-ignore:
       - main
+      - 'ai-fix/**'
     paths-ignore:
       - README.md
       - "**/README.md"

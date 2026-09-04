@@ -11,9 +11,16 @@ installs whatever RPMs that cache provides.
 Goal: Make a re-introduced override, or a digest that silently drifts from ci/defaults.json,
 fail here rather than in production.
 
-Deliberately parses with plain text matching rather than PyYAML: the CI test job installs
-only pytest and ruff (see .github/workflows/test.yml), and these assertions do not need a
-real YAML parse.
+Mostly parses with plain text matching rather than PyYAML: most of these assertions do
+not need a real YAML parse, and a substring check is the stronger statement when the
+claim is "this string appears nowhere in the file".
+
+One assertion is the exception. The ai-fix branch exclusion is a value inside a trigger,
+and the same string appears in a comment a few lines above it, so a substring check would
+pass on the comment alone -- exactly the false green this file exists to prevent. That one
+parses. PyYAML is a pytest dependency and is present in CI (see .github/workflows/test.yml,
+which installs pytest, pytest-cov and ruff), but the import is guarded so the suite still
+runs under `python3 -m unittest discover -s tests` with nothing installed.
 """
 
 from __future__ import annotations
@@ -22,6 +29,11 @@ import json
 import re
 import unittest
 from pathlib import Path
+
+try:
+    import yaml
+except ModuleNotFoundError:  # pragma: no cover - exercised only without pytest installed
+    yaml = None
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW_DIR = REPO_ROOT / ".github" / "workflows"
@@ -140,6 +152,110 @@ class BranchIsolationTests(unittest.TestCase):
     def test_branch_publish_is_explicitly_unsigned(self) -> None:
         self.assertIn('allow_unsigned: "true"', self._branch_workflow())
 
+    def test_agent_branches_never_reach_the_branch_publisher(self) -> None:
+        # An ai-fix/* branch is pushed by the agent in ai-fix.yml. Without this
+        # exclusion, opening a pull request would also publish an unsigned br-*
+        # tag to the registry -- more than "propose a change" should cost, and
+        # the one nonzero consequence docs/SECURITY-AI.md had to admit to before
+        # it was closed. build-pr.yml still validates the pull request and
+        # publishes nothing, so nothing is lost by excluding these here.
+        #
+        # Asserted against the parsed trigger rather than the file text: a
+        # substring check would pass on the pattern appearing in a comment,
+        # which is exactly where it also appears in this file.
+        if yaml is None:
+            self.skipTest("PyYAML is not installed; this assertion needs a real parse")
+        workflow = yaml.safe_load(self._branch_workflow())
+        # PyYAML resolves the unquoted key `on:` to the boolean True.
+        branches_ignore = workflow[True]["push"]["branches-ignore"]
+        self.assertIn(
+            "ai-fix/**",
+            branches_ignore,
+            "build-branch.yml must not build or publish agent-authored branches; "
+            "see the comment on its `on:` block and docs/SECURITY-AI.md.",
+        )
+        self.assertIn("main", branches_ignore, "the pre-existing main exclusion must remain")
+
+class AgentWorkflowIsolationTests(unittest.TestCase):
+    """
+    What .github/workflows/ai-fix.yml is allowed to reach.
+
+    That workflow hands write access to an agent started from a label or a
+    comment. docs/SECURITY-AI.md sets out what it may and may not do; these
+    assertions are the mechanical half, so a later edit that quietly widens it
+    fails here rather than in a registry.
+    """
+
+    def _agent_workflow(self) -> str:
+        return (WORKFLOW_DIR / "ai-fix.yml").read_text(encoding="utf-8")
+
+    def test_agent_workflow_never_references_the_signing_secret(self) -> None:
+        # `secrets.SIGNING_SECRET`, not the bare name: the workflow's own header
+        # explains why it has no access to the key, so the bare string appears
+        # in a comment and always will.
+        self.assertNotIn("secrets.SIGNING_SECRET", self._agent_workflow())
+
+    def test_agent_workflow_cannot_push_an_image(self) -> None:
+        # `packages: write` is what a GHCR push needs. Its absence is why
+        # `contents: write` here is a bounded grant rather than an open one.
+        #
+        # Parsed, not grepped: the workflow header explains why the permission
+        # is excluded, so the literal string is in the file and always will be.
+        # A substring check passes on that comment while the job quietly holds
+        # the permission -- the exact false green this module exists to prevent.
+        if yaml is None:
+            self.skipTest("PyYAML is not installed; this assertion needs a real parse")
+
+        workflow = yaml.safe_load(self._agent_workflow())
+        for job_name, job in workflow["jobs"].items():
+            with self.subTest(job=job_name):
+                self.assertNotIn("packages", job.get("permissions", {}))
+
+    def test_agent_workflow_refuses_bot_senders(self) -> None:
+        # danathar-atomic-hive[bot] applies `ai-fix-requested` to every ACMM
+        # issue it opens. Without this, an external system starts agents here on
+        # its own schedule. See docs/SECURITY-AI.md, "Inputs to treat as
+        # untrusted".
+        self.assertIn("allowed_bots: ''", self._agent_workflow())
+
+    def test_agent_workflow_is_not_triggered_from_a_head_ref(self) -> None:
+        # `issues` and `issue_comment` run the default branch's copy of the
+        # workflow. The pull_request_review family runs the *head's* copy, so a
+        # job holding `contents: write` would be reachable by adding a trigger
+        # on a branch -- a real escalation, not a theoretical one.
+        text = self._agent_workflow()
+        for trigger in ("pull_request_review:", "pull_request_review_comment:", "pull_request:"):
+            with self.subTest(trigger=trigger):
+                self.assertNotIn(trigger, text)
+
+    def test_agent_branch_prefix_matches_the_branch_publisher_exclusion(self) -> None:
+        """
+        The two halves of "an agent branch publishes nothing" must agree.
+
+        build-branch.yml excludes `ai-fix/**` from its trigger, and ai-fix.yml
+        tells the action to push branches under `ai-fix/`. Changing the prefix
+        in one file without the other silently restores the behaviour the
+        exclusion was added to remove -- an agent branch publishing an unsigned
+        br-* tag -- and nothing else in the repository would notice.
+        """
+        if yaml is None:
+            self.skipTest("PyYAML is not installed; this assertion needs a real parse")
+
+        agent = yaml.safe_load(self._agent_workflow())
+        prefix = agent["jobs"]["fix"]["steps"][-1]["with"]["branch_prefix"]
+        self.assertEqual(prefix, "ai-fix/")
+
+        branch_workflow = yaml.safe_load((WORKFLOW_DIR / "build-branch.yml").read_text("utf-8"))
+        excluded = branch_workflow[True]["push"]["branches-ignore"]
+        self.assertIn(
+            f"{prefix.rstrip('/')}/**",
+            excluded,
+            "ai-fix.yml pushes branches under a prefix that build-branch.yml does not "
+            "exclude, so agent branches would publish an unsigned br-* image again",
+        )
+
+
+class SigningPolicyTests(unittest.TestCase):
     def test_build_yml_never_allows_unsigned_publish(self) -> None:
         text = (WORKFLOW_DIR / "build.yml").read_text(encoding="utf-8")
         self.assertNotIn(

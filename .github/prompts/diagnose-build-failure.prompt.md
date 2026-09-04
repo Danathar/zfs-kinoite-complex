@@ -21,8 +21,14 @@ gh run list --workflow build.yml --limit 10 --json createdAt,conclusion,event
 The build badge shows the most recent *completed* run, and a **cancelled** run
 renders as `failing` exactly like a real failure. `build.yml` sets
 `cancel-in-progress: true`, so back-to-back merges to `main` each cancel the
-run before them. A column of `cancelled` with no `failure` in it means someone
-was merging quickly — stop here and say so.
+run before them.
+
+A column of `cancelled` with no `failure` is a *hypothesis*, not a conclusion.
+Check the `event` and the timing before reporting it: `push` runs bunched a few
+minutes apart are a merge burst, but `schedule` and `workflow_dispatch` runs can
+also be cancelled, and `gh run cancel` means a person stopped the production
+workflow on purpose. Reporting "someone was merging quickly" when an operator
+cancelled a run deliberately buries the more interesting question.
 
 ## 1. Which workflow, and does it publish?
 
@@ -53,7 +59,7 @@ response to each is different:
 | The message says | What actually happened | What to do |
 | --- | --- | --- |
 | `does not provide a kmod-zfs for primary kernel <k> at ZFS version <v> even after a rebuild` | The akmods cache resolves its own OpenZFS version independently of this repo, and the two disagree. Continuing would label the image `org.zfs-kinoite-complex.zfs-version=<v>` while shipping something else. | Upstream problem. Establish whether the ZFS line supports that kernel yet. Do **not** loosen the match. |
-| `Promoted digest mismatch: ... produced <a>, expected <b>` | `skopeo copy` did not preserve the digest, so `:latest` would point at something other than what was signed. | Stop. This is the promotion guard working. Investigate skopeo behavior; never bypass. |
+| `Promoted digest mismatch: ... produced <a>, expected <b>` | `skopeo copy` did not preserve the digest. **The copy already happened** — `promote_stable.py` copies, then re-reads the destination — so if the destination named is `:latest`, the tag has already moved to the unexpected digest. | **Check which destination the message names.** For an audit tag, stop and investigate. For `:latest`, treat it as live and **escalate immediately**: report what `:latest` currently resolves to, what the last known-good signed digest was, and that machines tracking it will pull whatever is there now. Restoring the tag is a promotion, so it is the maintainer's to perform — propose it, do not do it (AGENTS.md section 0 rule 6). Never bypass the guard itself. |
 | `Failed to resolve digest for <ref>` / `Missing digest in skopeo inspect output for <ref>` | A registry read returned a manifest with no digest — usually a transient registry or CDN failure, sometimes a deleted tag. | Check whether the ref still exists. If it does, this is very likely transient (see step 4). |
 | `SIGNING_SECRET is empty; cannot sign published image.` | The signing job ran without its secret, typically because the run came from a context that does not get one. | Confirm the trigger. A branch or fork run is not supposed to sign. |
 | `Missing required verification key file: <path>` | `cosign.pub` is not where the signing or promotion step expects it. | A repository problem, not upstream. |
@@ -71,10 +77,17 @@ in this repository, and all three shapes have been seen:
 | `writing blob: … received unexpected HTTP status: 500` | ghcr.io server error on a layer upload. |
 | `Error: trusted root is required when using new bundle format` | Sigstore's TUF CDN was unavailable — look for `failed to download https://tuf-repo-cdn.sigstore.dev/…root.json, http status code: 403` just above it. |
 
-**The third one is a trap.** It names a trusted root and a bundle format, so it
-reads like a signing problem here. It is not — it fails in the `Install skopeo
-and cosign` step, before `sign-image` or `check-akmods-cache` run at all. Always
-check *which step* failed before concluding anything about signing.
+**The third one is a trap, twice over.** It names a trusted root and a bundle
+format, so it reads like a signing problem here. It is not — it fails while
+*installing* `cosign`, not while using it.
+
+But do not then conclude that nothing ran. `install-signing-tools` is invoked in
+three separate `build.yml` jobs — `preflight`, `sign-akmods-cache` and
+`promote-stable` — and again inside `publish-native-image`, which runs *after*
+the transient image has been pushed. A 403 in `preflight`'s copy means almost
+nothing happened; the same 403 in `promote-stable`'s means the candidate was
+already built, signed and published. **Identify which job's installer failed
+before describing the state of the run.**
 
 For any of them: say so, name the job and the step, and note that a re-run is
 the maintainer's call — this repo does not retry automatically, and a re-run of

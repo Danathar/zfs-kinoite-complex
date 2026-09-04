@@ -47,18 +47,26 @@ response to each is different:
 | `Missing required verification key file: <path>` | `cosign.pub` is not where the signing or promotion step expects it. | A repository problem, not upstream. |
 | `Replay lock file not found: <path>` | Replay mode was requested with no lock file. | See [`replay-a-build.prompt.md`](replay-a-build.prompt.md). |
 
-## 3. Rule out a transient before proposing anything
+## 3. Rule out a third-party service before proposing anything
 
-Registry and CDN failures are common here and look alarming. The signature is a
-`podman`/`skopeo` blob transfer dying mid-download:
+Every workflow here pulls from quay.io, pushes to ghcr.io, and bootstraps
+`cosign` from Sigstore. Any of the three can turn a run red with nothing wrong
+in this repository, and all three shapes have been seen:
 
-```
-happened during read: unexpected EOF
-```
+| Message | What happened |
+| --- | --- |
+| `happened during read: unexpected EOF` | A quay.io CDN blob transfer died mid-download. |
+| `writing blob: … received unexpected HTTP status: 500` | ghcr.io server error on a layer upload. |
+| `Error: trusted root is required when using new bundle format` | Sigstore's TUF CDN was unavailable — look for `failed to download https://tuf-repo-cdn.sigstore.dev/…root.json, http status code: 403` just above it. |
 
-That is a quay.io or ghcr.io transfer failure, not a repository failure. Say so,
-name the job, and note that a re-run is the maintainer's call — this repo does
-not retry automatically, and a re-run of `build.yml` publishes.
+**The third one is a trap.** It names a trusted root and a bundle format, so it
+reads like a signing problem here. It is not — it fails in the `Install skopeo
+and cosign` step, before `sign-image` or `check-akmods-cache` run at all. Always
+check *which step* failed before concluding anything about signing.
+
+For any of them: say so, name the job and the step, and note that a re-run is
+the maintainer's call — this repo does not retry automatically, and a re-run of
+`build.yml` publishes.
 
 ## 4. Distinguish "the pipeline is green" from "the image is good"
 

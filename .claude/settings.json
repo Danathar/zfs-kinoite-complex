@@ -21,7 +21,15 @@
       "Bash(gh issue list:*)",
       "Bash(gh issue view:*)",
       "Bash(skopeo inspect:*)",
-      "Bash(cosign verify:*)"
+      "Bash(cosign verify:*)",
+      "Bash(git grep:*)",
+      "Bash(git ls-tree:*)",
+      "Bash(git merge-base:*)",
+      "Bash(gh search:*)",
+      "Bash(gh label list:*)",
+      "Bash(podman ps:*)",
+      "Bash(podman images:*)",
+      "Bash(shellcheck:*)"
     ],
     "ask": [
       "Bash(gh api:*)",

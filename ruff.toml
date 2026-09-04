@@ -1,0 +1,16 @@
+# Ruff configuration for this repository.
+#
+# This lives in ruff.toml rather than pyproject.toml because there is no Python
+# package here to describe: `ci_tools/` and `shared/` are run as modules by
+# workflow steps, never built or installed. pyproject.toml held nothing but this
+# table, so it named a project that does not exist.
+#
+# CI runs the equivalent of `ruff check ci_tools/ shared/ tests/ files/
+# containerfiles/` with the version pinned in .github/workflows/test.yml.
+
+line-length = 100
+
+[lint.per-file-ignores]
+# sys.path must be extended before these imports so the shared/ package is
+# importable both inside the built image and from a plain script invocation.
+"containerfiles/zfs-akmods/install_zfs_from_akmods_cache.py" = ["E402"]

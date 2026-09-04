@@ -32,6 +32,8 @@ docs/
   zfs-kinoite-testing.md       <- deep technical design + issue history
   akmods-fork-maintenance.md  <- how akmods source refs are selected and pinned
   maintenance-watchlist.md    <- pins and decisions on a clock that no automation watches
+  quality.md                  <- what each badge, gate, and fail-closed refusal actually means
+  metrics.md                  <- reproducible commands, and what the numbers are worth at this scale
 .github/scripts/
   README.md                   <- workflow step -> command-line interface (CLI) command -> Python module map
 .github/prompts/
@@ -101,3 +103,7 @@ only steps and the decision at the end belong in a prompt.
    will surface, in [`docs/maintenance-watchlist.md`](./maintenance-watchlist.md).
 10. Put contribution process -- how to submit a change, run tests, read coverage --
     in [`../CONTRIBUTING.md`](../CONTRIBUTING.md).
+11. Put "what does this signal mean" in [`docs/quality.md`](./quality.md), and
+    "how do I get this number" in [`docs/metrics.md`](./metrics.md). Both are
+    written to resist over-reading: a figure that cannot support a conclusion
+    belongs there with the reason it cannot, rather than being left out.

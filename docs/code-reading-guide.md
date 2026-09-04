@@ -119,9 +119,16 @@ python3 -m pytest tests/ -v
 
 Tests use `unittest.TestCase` with `unittest.mock.patch` and have no external
 dependencies beyond `pytest` as the test runner. Every CI tool module in
-`ci_tools/` has a corresponding `tests/test_<module_name>.py` file. All external
-calls (subprocess, registry, filesystem) are mocked so tests run without network
-access or container tooling.
+`ci_tools/` has a corresponding `tests/test_<module_name>.py` file. In those
+files all external calls (subprocess, registry, filesystem) are mocked, so they
+run without network access or container tooling.
+
+`tests/e2e/` is the exception and mocks nothing: it runs
+`python3 -m ci_tools.cli <command>` as a real subprocess and asserts on exit
+status and the files the command actually writes. It still needs no network or
+container tooling, because the commands it exercises are the ones whose work is
+environment-in, file-out. [`tests/e2e/README.md`](../tests/e2e/README.md) says
+which contracts that tier exists to hold and which it cannot reach.
 
 Tests run automatically in CI via
 [`.github/workflows/test.yml`](../.github/workflows/test.yml) on every pull

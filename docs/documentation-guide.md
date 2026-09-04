@@ -34,6 +34,8 @@ docs/
   maintenance-watchlist.md    <- pins and decisions on a clock that no automation watches
 .github/scripts/
   README.md                   <- workflow step -> command-line interface (CLI) command -> Python module map
+tests/e2e/
+  README.md                   <- what the unmocked end-to-end tier answers, and what it deliberately does not
 ```
 
 ## What To Read First (By Goal)

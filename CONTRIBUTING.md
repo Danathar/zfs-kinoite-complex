@@ -46,6 +46,11 @@ Add `pytest-cov` for the [Coverage](#coverage) section below; `test.yml` does
 not install it yet at the time of writing, so a local coverage run is not yet
 something CI also produces on every PR.
 
+`tests/e2e/` is collected by that same command and needs nothing extra. It runs
+the CLI as a real subprocess rather than importing it — see
+[`tests/e2e/README.md`](./tests/e2e/README.md) — and moves no coverage
+number, because the code it exercises runs in a child process.
+
 ## Coverage
 
 CI reports coverage on every pull request and push to `main` once
@@ -63,26 +68,36 @@ python3 -m pytest tests/ \
 pull request is blocked on the percentage. The number exists so a reviewer can
 read it off the job log instead of reconstructing it by hand.
 
-### Two tiers, and they answer different questions
+### Three tiers, and they answer different questions
 
-This repository has one *measured* tier and one *real but unmeasured* tier.
-They are not interchangeable, and neither one alone means "tested".
+This repository has one *measured* tier, one *unmeasured but unmocked* tier,
+and one *real but unmeasured* tier. They are not interchangeable, and no one of
+them alone means "tested".
 
 | | What it measures | Where it runs | Instrumented? |
 |---|---|---|---|
 | **Unit coverage** | Decision logic, with **every** external call mocked | `test.yml`, on every PR and push | Yes |
+| **End-to-end (`tests/e2e/`)** | The process boundary a workflow step depends on: exit status, and the `GITHUB_OUTPUT` file a later step reads | `test.yml`, on every PR and push | **No** — the code under test runs in a child process |
 | **Production execution** | The same modules against a real registry, real `cosign`, real `git` remote, real `podman` | `build.yml`, `build-pr.yml`, `build-branch.yml`, `akmods-failure-triage.yml` — daily | **No** |
 
 The first row is the important caveat. As
 [`docs/code-reading-guide.md`](./docs/code-reading-guide.md#running-tests)
-states, all subprocess, registry, and filesystem calls are mocked so the suite
-runs without network access or container tooling. That is the right design for
-a fast suite, but it means **a module at 100% unit coverage may never have had
-its real-world path exercised**, and a module in the 60s may be running
-against a live registry several times a day.
+states, all subprocess, registry, and filesystem calls are mocked there so the
+suite runs without network access or container tooling. That is the right
+design for a fast suite, but it means **a module at 100% unit coverage may
+never have had its real-world path exercised**, and a module in the 60s may be
+running against a live registry several times a day.
 
-So the two tiers are close to orthogonal. Read them together or you will draw
-the wrong conclusion from either.
+The second row exists because of a specific blind spot in the first, and
+[`tests/e2e/README.md`](./tests/e2e/README.md) states it: an in-process test
+calls `main()`, so it never observes the exit status. A guard that reports a
+problem on stderr and then exits `0` does not stop a workflow step running
+under `set -e`, and the unit suite passes on it either way. That tier reaches
+no registry, `cosign`, `podman`, or `git`, so it is not a substitute for the
+third row.
+
+So the tiers are close to orthogonal. Read them together or you will draw the
+wrong conclusion from any one of them.
 
 ### Establishing whether a path runs in production
 

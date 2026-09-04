@@ -1,0 +1,80 @@
+---
+description: Work out why a production build is red, with evidence, and say which fix applies
+mode: agent
+---
+
+# Diagnose a failed build
+
+**Goal:** name the cause with evidence, and say which fix applies.
+**Not the goal:** make the build green by any means available.
+
+A red run here is usually a fail-closed check doing exactly its job. Several of
+the checks below have no "fix" in this repository at all — the correct outcome
+is to stop and report what upstream did.
+
+## 0. Which workflow, and does it publish?
+
+```bash
+gh run list --limit 20 --json databaseId,name,event,conclusion,headBranch
+```
+
+`Build And Promote Main Image` (`build.yml`) is the only one that signs and
+promotes `:latest`. `build-pr.yml` and `build-branch.yml` do not promote, and
+`build-branch.yml` publishes unsigned. If the red run is one of those two,
+nothing reached `:latest` and the urgency is lower — say so.
+
+## 1. Find the step, not the job
+
+```bash
+gh run view <run-id> --log-failed | tail -60
+```
+
+Every workflow step that decides anything runs `python3 -m ci_tools.cli
+<command>`, and a known refusal exits 1 with one line on stderr. That line is
+the diagnosis. Read it before forming a theory.
+
+## 2. Match the message to the guard
+
+These are the fail-closed refusals. Each names a real condition, and the
+response to each is different:
+
+| The message says | What actually happened | What to do |
+| --- | --- | --- |
+| `does not provide a kmod-zfs for primary kernel <k> at ZFS version <v> even after a rebuild` | The akmods cache resolves its own OpenZFS version independently of this repo, and the two disagree. Continuing would label the image `org.zfs-kinoite-complex.zfs-version=<v>` while shipping something else. | Upstream problem. Establish whether the ZFS line supports that kernel yet. Do **not** loosen the match. |
+| `Promoted digest mismatch: ... produced <a>, expected <b>` | `skopeo copy` did not preserve the digest, so `:latest` would point at something other than what was signed. | Stop. This is the promotion guard working. Investigate skopeo behavior; never bypass. |
+| `Failed to resolve digest for <ref>` / `Missing digest in skopeo inspect output for <ref>` | A registry read returned a manifest with no digest — usually a transient registry or CDN failure, sometimes a deleted tag. | Check whether the ref still exists. If it does, this is very likely transient (see step 3). |
+| `SIGNING_SECRET is empty; cannot sign published image.` | The signing job ran without its secret, typically because the run came from a context that does not get one. | Confirm the trigger. A branch or fork run is not supposed to sign. |
+| `Missing required verification key file: <path>` | `cosign.pub` is not where the signing or promotion step expects it. | A repository problem, not upstream. |
+| `Replay lock file not found: <path>` | Replay mode was requested with no lock file. | See [`replay-a-build.prompt.md`](replay-a-build.prompt.md). |
+
+## 3. Rule out a transient before proposing anything
+
+Registry and CDN failures are common here and look alarming. The signature is a
+`podman`/`skopeo` blob transfer dying mid-download:
+
+```
+happened during read: unexpected EOF
+```
+
+That is a quay.io or ghcr.io transfer failure, not a repository failure. Say so,
+name the job, and note that a re-run is the maintainer's call — this repo does
+not retry automatically, and a re-run of `build.yml` publishes.
+
+## 4. Distinguish "the pipeline is green" from "the image is good"
+
+If you re-check after a re-run, say **which run** you read. A successful run
+proves the build completed. It is not evidence the image is safe to boot
+(AGENTS.md section 0 rule 4).
+
+## 5. What the answer looks like
+
+State, in this order:
+
+1. Which run and which step, with the link.
+2. The guard message, quoted.
+3. Whether the cause is upstream, transient, or in this repository.
+4. The fix — or that there is no fix here and what has to change upstream.
+
+If step 3 is "upstream" or "transient", **stop there**. Proposing a code change
+to get past a guard that is correctly refusing is the failure mode this
+repository cares most about.

@@ -20,7 +20,9 @@ from ci_tools.resolve_build_inputs import (
     _load_lock_file,
     _resolve_default_akmods_ref,
     choose_base_image_tag,
+    detect_base_image_kernel_releases,
     extract_source_tag,
+    resolve_build_inputs,
     resolve_configured_inputs,
 )
 
@@ -484,6 +486,237 @@ class LockFileReplayValidationTests(unittest.TestCase):
                 self.assertRaises(CiToolError),
             ):
                 resolve_configured_inputs()
+
+
+class DetectBaseImageKernelReleasesTests(unittest.TestCase):
+    """
+    The `/lib/modules` probe runs on every scheduled build, but only its happy
+    path does. The empty-result guard fails closed so a base image that carries
+    no kernel directory can never be pinned as "the supported primary kernel",
+    and nothing else in the pipeline re-checks that.
+    """
+
+    def test_returns_kernel_releases_in_natural_sort_order(self) -> None:
+        with patch(
+            "ci_tools.resolve_build_inputs.run_cmd",
+            return_value="6.16.4-200.fc43.x86_64\n6.16.10-200.fc43.x86_64\n",
+        ) as run_cmd_mock:
+            detected = detect_base_image_kernel_releases("ghcr.io/example/base@sha256:deadbeef")
+
+        self.assertEqual(
+            detected,
+            ["6.16.4-200.fc43.x86_64", "6.16.10-200.fc43.x86_64"],
+        )
+        argv = run_cmd_mock.call_args.args[0]
+        # The probe must read the image's own filesystem, not a metadata label:
+        # installonly kernels can leave more than one kernel in the merged root.
+        self.assertIn("ghcr.io/example/base@sha256:deadbeef", argv)
+        self.assertIn("/lib/modules", argv[-1])
+
+    def test_empty_module_directory_listing_raises_with_image_ref(self) -> None:
+        with (
+            # `find ... -printf '%f\n'` prints nothing when no directory matches.
+            patch("ci_tools.resolve_build_inputs.run_cmd", return_value=""),
+            self.assertRaises(CiToolError) as caught,
+        ):
+            detect_base_image_kernel_releases("ghcr.io/example/base@sha256:deadbeef")
+
+        self.assertEqual(
+            str(caught.exception),
+            "No installed kernel directories found in ghcr.io/example/base@sha256:deadbeef",
+        )
+
+
+class ResolveBuildInputsRegistryGuardTests(unittest.TestCase):
+    """
+    `resolve_build_inputs()` runs on every scheduled build, so its happy path is
+    exercised in production daily. Its four registry guards are not: they only
+    fire when skopeo returns a manifest missing a name, digest, or the
+    `ostree.linux` label, which a green build never produces. Each one refuses
+    to continue rather than pin an image by a value it could not read.
+    """
+
+    BASE_REF = "ghcr.io/example/kinoite:43"
+    BUILD_REF = "ghcr.io/example/build:latest"
+    BASE_DIGEST = "sha256:deadbeef"
+    VERSION_LABEL = "43.20260901.1"
+
+    def _env(self, **overrides: str) -> dict:
+        env = {
+            "USE_INPUT_LOCK": "false",
+            "LOCK_FILE": "ci/inputs.lock.json",
+            "BUILD_CONTAINER_REF": self.BUILD_REF,
+            "DEFAULT_BASE_IMAGE": self.BASE_REF,
+            "DEFAULT_ZFS_MINOR_VERSION": "2.4",
+            "DEFAULT_AKMODS_REF": "a" * 40,
+            "AKMODS_UPSTREAM_REF": "",
+            "AKMODS_UPSTREAM_TRACK": "",
+            "AKMODS_UPSTREAM_REPO": "",
+        }
+        env.update(overrides)
+        return env
+
+    def _base_inspect(self, **overrides) -> dict:
+        payload = {
+            "Name": "ghcr.io/example/kinoite",
+            "Digest": self.BASE_DIGEST,
+            "Labels": {
+                "ostree.linux": "6.16.10-200.fc43.x86_64",
+                "org.opencontainers.image.version": self.VERSION_LABEL,
+            },
+        }
+        payload.update(overrides)
+        return payload
+
+    def _resolve(self, *, base_inspect: dict, build_inspect: dict):
+        def inspect_json(ref: str) -> dict:
+            return base_inspect if "kinoite" in ref else build_inspect
+
+        with (
+            patch.dict(os.environ, self._env(), clear=False),
+            patch("ci_tools.resolve_build_inputs.skopeo_inspect_json", side_effect=inspect_json),
+            patch(
+                "ci_tools.resolve_build_inputs.skopeo_inspect_digest",
+                side_effect=lambda ref: (
+                    self.BASE_DIGEST if ref.endswith(f":{self.VERSION_LABEL}") else "sha256:other"
+                ),
+            ),
+            patch(
+                "ci_tools.resolve_build_inputs.run_cmd",
+                return_value="6.16.4-200.fc43.x86_64\n6.16.10-200.fc43.x86_64\n",
+            ),
+            patch(
+                "ci_tools.resolve_build_inputs.resolve_latest_zfs_version",
+                return_value="2.4.1",
+            ),
+        ):
+            return resolve_build_inputs()
+
+    def _build_inspect(self) -> dict:
+        return {"Name": "ghcr.io/example/build", "Digest": "sha256:cafef00d"}
+
+    def test_resolves_pinned_refs_and_newest_kernel_on_the_happy_path(self) -> None:
+        resolution = self._resolve(
+            base_inspect=self._base_inspect(),
+            build_inspect=self._build_inspect(),
+        )
+        inputs = resolution.inputs
+
+        self.assertEqual(inputs.base_image_pinned, f"ghcr.io/example/kinoite@{self.BASE_DIGEST}")
+        self.assertEqual(inputs.base_image_tag, self.VERSION_LABEL)
+        self.assertEqual(inputs.build_container_pinned, "ghcr.io/example/build@sha256:cafef00d")
+        # The newest installed kernel wins, not the label, and not list order.
+        self.assertEqual(inputs.kernel_release, "6.16.10-200.fc43.x86_64")
+        self.assertEqual(
+            inputs.detected_kernel_releases,
+            ("6.16.4-200.fc43.x86_64", "6.16.10-200.fc43.x86_64"),
+        )
+        self.assertEqual(inputs.version, "43")
+        self.assertEqual(inputs.zfs_version, "2.4.1")
+        self.assertEqual(resolution.label_kernel_release, "6.16.10-200.fc43.x86_64")
+
+    def test_base_image_without_digest_raises_before_any_pinning(self) -> None:
+        with self.assertRaises(CiToolError) as caught:
+            self._resolve(
+                base_inspect=self._base_inspect(Digest=""),
+                build_inspect=self._build_inspect(),
+            )
+
+        self.assertEqual(
+            str(caught.exception),
+            f"Failed to resolve base image digest for {self.BASE_REF}",
+        )
+
+    def test_base_image_without_name_raises_before_any_pinning(self) -> None:
+        with self.assertRaises(CiToolError) as caught:
+            self._resolve(
+                base_inspect=self._base_inspect(Name=""),
+                build_inspect=self._build_inspect(),
+            )
+
+        self.assertEqual(
+            str(caught.exception),
+            f"Failed to resolve base image digest for {self.BASE_REF}",
+        )
+
+    def test_base_image_without_ostree_linux_label_raises(self) -> None:
+        # Without this label there is no declared kernel to compare the
+        # detected ones against, so the run cannot report a label/directory
+        # mismatch at all.
+        with self.assertRaises(CiToolError) as caught:
+            self._resolve(
+                base_inspect=self._base_inspect(
+                    Labels={"org.opencontainers.image.version": self.VERSION_LABEL}
+                ),
+                build_inspect=self._build_inspect(),
+            )
+
+        self.assertEqual(
+            str(caught.exception),
+            f"Failed to read ostree.linux label from {self.BASE_REF}",
+        )
+
+    def test_build_container_without_digest_raises(self) -> None:
+        with self.assertRaises(CiToolError) as caught:
+            self._resolve(
+                base_inspect=self._base_inspect(),
+                build_inspect={"Name": "ghcr.io/example/build", "Digest": ""},
+            )
+
+        self.assertEqual(
+            str(caught.exception),
+            f"Failed to resolve build container digest for {self.BUILD_REF}",
+        )
+
+
+class AkmodsRepoUrlRequiredTests(unittest.TestCase):
+    """
+    A non-SHA akmods ref has to be resolved through `git ls-remote`, which needs
+    a repository URL. Both guards keep an unresolvable ref from reaching the
+    build as if it were a commit.
+    """
+
+    def _env(self, **overrides: str) -> dict:
+        wipe = {
+            "DEFAULT_AKMODS_REF": "",
+            "AKMODS_UPSTREAM_REF": "",
+            "AKMODS_UPSTREAM_TRACK": "",
+            "AKMODS_UPSTREAM_REPO": "",
+        }
+        wipe.update(overrides)
+        return wipe
+
+    def test_non_sha_ref_without_repo_url_raises(self) -> None:
+        defaults = {"AKMODS_UPSTREAM_REF": "", "AKMODS_UPSTREAM_TRACK": "", "AKMODS_UPSTREAM_REPO": ""}
+        with (
+            patch.dict(os.environ, self._env(AKMODS_UPSTREAM_REF="main"), clear=False),
+            patch("ci_tools.resolve_build_inputs.load_repo_defaults", return_value=defaults),
+            patch("ci_tools.resolve_build_inputs.git_ls_remote_resolve") as ls_remote,
+            self.assertRaises(CiToolError) as caught,
+        ):
+            _resolve_default_akmods_ref()
+
+        self.assertEqual(
+            str(caught.exception),
+            "AKMODS_UPSTREAM_REPO is required to resolve non-SHA AKMODS_UPSTREAM_REF",
+        )
+        ls_remote.assert_not_called()
+
+    def test_tracking_ref_without_repo_url_raises(self) -> None:
+        defaults = {"AKMODS_UPSTREAM_REF": "", "AKMODS_UPSTREAM_TRACK": "main", "AKMODS_UPSTREAM_REPO": ""}
+        with (
+            patch.dict(os.environ, self._env(), clear=False),
+            patch("ci_tools.resolve_build_inputs.load_repo_defaults", return_value=defaults),
+            patch("ci_tools.resolve_build_inputs.git_ls_remote_resolve") as ls_remote,
+            self.assertRaises(CiToolError) as caught,
+        ):
+            _resolve_default_akmods_ref()
+
+        self.assertEqual(
+            str(caught.exception),
+            "AKMODS_UPSTREAM_REPO is required to resolve AKMODS_UPSTREAM_TRACK",
+        )
+        ls_remote.assert_not_called()
 
 
 if __name__ == "__main__":

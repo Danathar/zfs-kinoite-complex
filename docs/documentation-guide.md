@@ -32,6 +32,7 @@ docs/
   zfs-kinoite-testing.md       <- deep technical design + issue history
   akmods-fork-maintenance.md  <- how akmods source refs are selected and pinned
   maintenance-watchlist.md    <- pins and decisions on a clock that no automation watches
+  review-rubric.md            <- what to check on a pull request, ordered by what actually goes wrong
   quality.md                  <- what each badge, gate, and fail-closed refusal actually means
   metrics.md                  <- reproducible commands, and what the numbers are worth at this scale
 .github/scripts/

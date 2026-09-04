@@ -65,7 +65,7 @@ update.
 | --- | --- | --- |
 | `SIGNING_SECRET` | the signing steps in `build.yml`, via `publish-native-image` | Anyone can sign an image that verifies against the committed `cosign.pub`, and machines are configured to trust exactly that. **Highest severity in the repository.** |
 | `GITHUB_TOKEN` | every workflow, scoped per job | Short-lived and bounded by that job's `permissions:` block. It is also what pushes to GHCR — `REGISTRY_TOKEN` is `${{ github.token }}`, not a stored credential. |
-| Agent credentials (`ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN`) | `.github/workflows/ai-fix.yml`, if set | Billing, not repository access — they buy model calls and cannot themselves write here. |
+| Agent credentials (`ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN`) | Nothing in this repository reads these today. Listed because an agent workflow would, and an inventory that omits a credential class is worse than one that marks it unused. | Billing, not repository access — they buy model calls and cannot themselves write here. |
 
 Nothing else in CI is secret.
 
@@ -152,8 +152,21 @@ Never, by any agent, on any instruction (AGENTS.md section 0 rule 6):
 - dispatch `build.yml` — `promote_to_stable` defaults to `true`
 - apply a label from the approval list above
 
-`.claude/settings.json` denies each of these mechanically rather than relying on
-the agent having read this page.
+`.claude/settings.json` enforces as much of that list as a command-prefix rule
+can, and it is worth knowing exactly how much — assuming more than it delivers
+is its own hazard.
+
+| Rule | How it is enforced |
+| --- | --- |
+| merge, dispatch `build.yml`, `gh release`, force-push, delete a branch or tag | **Denied** outright in `settings.json` |
+| move or delete a registry artifact (`skopeo copy`/`delete`, `podman`/`buildah push`, `cosign sign`) | **Denied** |
+| create, edit, or delete a label | **Denied** (`gh label create`/`edit`/`delete`/`clone`) |
+| ordinary `git push`, `gh pr edit`, `gh pr review` | **`ask`** — a human sees the command before it runs. They cannot be denied outright because each has legitimate uses here, and a prefix rule cannot tell those apart. |
+| **push to `main` specifically** | **Not expressible as a prefix rule.** `git push` to a feature branch is routine; the destination is an argument, not a prefix. This one rests on the agent honouring the rule, on `ask` surfacing the command, and on branch protection if it is ever enabled — `main` is not protected as of this writing. |
+
+So the honest summary: the irreversible, outward-facing operations are denied;
+the reversible ones are promptable; and one rule is a convention rather than a
+control. Do not read the list above as "impossible".
 
 ## What an agent branch can actually cause here
 
@@ -164,10 +177,16 @@ quite:
 | --- | --- | --- |
 | `build.yml` | push to `main` | **Nothing.** An agent never pushes to `main`. This is the only path that signs and promotes. |
 | `build-pr.yml` | `pull_request` | A validation build. Its header says it intentionally stops before any push or signing step. |
-| `build-branch.yml` | push to any branch except `main` | **Publishes an unsigned `br-*` image.** This is real: it is a throwaway test artifact, machines enforcing this repository's signature policy refuse to pull it, and it must never be promoted — but a registry tag does appear. |
+| `build-branch.yml` | push to any branch except `main` | **Builds, and publishes an unsigned `br-*` image only when the push is attributed to a human.** Its `Push unsigned branch test image` step is gated on `actor_is_bot != 'true'`, so a bot-attributed push validates locally and pushes nothing. A human-attributed one leaves a throwaway tag: unsigned, refused by machines enforcing this repository's signature policy, never promoted. |
 
-So the bounded-but-nonzero consequence of an agent branch is an unsigned
-throwaway tag. It cannot produce a signed image, and it cannot move `:latest`.
+So the worst case for an agent branch is an unsigned throwaway tag, and only if
+the push is attributed to a human account. It cannot produce a signed image and
+it cannot move `:latest`.
+
+Whether an agent's push is attributed to a bot is not something to rely on: it
+depends on which credential the agent pushes with, and a push made with
+`GITHUB_TOKEN` does not start a workflow at all. Treat `actor_is_bot` as one
+guard among several rather than the answer.
 
 ## If you find a vulnerability
 

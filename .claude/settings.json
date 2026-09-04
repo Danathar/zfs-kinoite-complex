@@ -60,6 +60,10 @@
       "Bash(gh release:*)",
       "Bash(gh secret set:*)",
       "Bash(gh secret delete:*)",
+      "Bash(gh label create:*)",
+      "Bash(gh label edit:*)",
+      "Bash(gh label delete:*)",
+      "Bash(gh label clone:*)",
       "Bash(git push --force:*)",
       "Bash(git push -f:*)",
       "Bash(git push --delete:*)",
@@ -90,6 +94,6 @@
   },
   "_note_deny_publishing": "Everything that moves a published artifact is denied outright rather than gated behind `ask`: cosign sign, skopeo copy/delete, podman/buildah push, gh release, tag deletion, and force push. AGENTS.md section 0 rule 6 says registry tags and git history here are outward-facing and an agent proposes rather than does. `gh pr merge` and `gh workflow run` are on this list for the same reason and it is not obvious why: merging to main triggers build.yml, which builds, signs with this repo's key, and promotes to :latest, and a workflow_dispatch of build.yml defaults to promote_to_stable=true. Both are one command away from moving :latest, so neither is a prompt the maintainer should be able to click through while distracted.",
   "_note_gh_api": "gh api is in `ask`, never `allow`. Permission rules match by command prefix, and `gh api` switches to POST as soon as -f/-F is present and honours -X for any method. An allow rule such as Bash(gh api repos/:*) would therefore approve mutations, including the workflow-dispatch endpoint that gh workflow run is denied for.",
-  "_note_zpool": "zpool is denied wholesale rather than by subcommand. This repository is about ZFS, so a pool is plausibly attached to whatever machine an agent is running on, and the read-only subcommands are not worth the risk of a prefix rule that also matches zpool destroy or zpool labelclear.",
+  "_note_labels": "gh label create/edit/delete/clone are denied because labels carry authority here: an external system reads `quality`, `security`, `testing`, `hive/*` and `agent/*` as approval to auto-merge on green CI, so minting or renaming a label is a way to manufacture approval. `gh label list` stays allowed -- reading them is how you check what one means before using it. `gh issue edit` and `gh pr edit` can also attach a label and are left in `ask` rather than denied, because both have ordinary uses; the prompt in ai-fix.yml carries the rule those cannot express. See docs/SECURITY-AI.md, \"Labels carry authority\".", "_note_zpool": "zpool is denied wholesale rather than by subcommand. This repository is about ZFS, so a pool is plausibly attached to whatever machine an agent is running on, and the read-only subcommands are not worth the risk of a prefix rule that also matches zpool destroy or zpool labelclear.",
   "_note_hook": "The PostToolUse hook runs ruff on any .py file just written, and exits 2 so the finding is fed back rather than merely printed. It no-ops when ruff is absent, so it never blocks work on a machine without it -- CI is where the lint is enforced, per .github/workflows/test.yml."
 }

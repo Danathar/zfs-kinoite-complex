@@ -28,10 +28,20 @@ on exit status and stderr rather than on a raised exception.
 ## What is deliberately not here
 
 **Anything needing a network, a registry, `cosign`, `podman`, or `git`.** The
-suite has to stay runnable with nothing installed, so the commands exercised
-here are the ones whose work is env-in, file-out: `export-repo-defaults`,
-`compute-candidate-tag`, `compose-branch-image-tag`, `compute-branch-metadata`,
+suite has to stay runnable with nothing installed, so the only commands ever
+dispatched here are the ones whose work is env-in, file-out:
+`export-repo-defaults`, `compute-candidate-tag`, `compute-branch-metadata`,
 `export-registry-context`, and `write-build-inputs-manifest`.
+
+That constraint is stricter than it looks, and the command-wiring test is where
+it bites. Checking "does the CLI accept this name?" by running the name would
+dispatch it, and `akmods-build-and-publish` with no environment set falls
+through to `just build`, `just login`, `just push` and `just manifest` whenever
+`/tmp/akmods` exists — an absolute path, so no choice of working directory
+isolates it. A test must not be able to publish anything (AGENTS.md section 0
+rule 6). So that test provokes an *invalid* choice instead and reads the
+accepted names out of argparse's error, which is produced during parsing,
+before any handler is reached.
 
 `sign-image`, `promote-stable`, `check-akmods-cache` and the akmods commands
 are in CONTRIBUTING's second tier — real production execution, uninstrumented.

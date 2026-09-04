@@ -108,6 +108,33 @@ def _workflow_invoked_commands() -> dict[str, set[str]]:
     return invoked
 
 
+def _parser_accepted_commands() -> set[str]:
+    """
+    Ask the real parser, in a real process, which command names it accepts.
+
+    Deliberately obtained by provoking an invalid choice rather than by running
+    each command. Running them is not safe: the CLI dispatches as soon as the
+    parser accepts a name, and `akmods-build-and-publish` with no environment
+    set falls through to `just build`, `just login`, `just push` and
+    `just manifest` whenever /tmp/akmods happens to exist -- an absolute path,
+    so no choice of working directory isolates it. A test must not be able to
+    publish anything (AGENTS.md section 0 rule 6).
+
+    An unknown name is rejected during parsing, before any handler is reached,
+    and argparse names every accepted choice when it does.
+    """
+
+    result = _run_cli("definitely-not-a-command", env={})
+    match = re.search(r"choose from ([^)]*)\)", result.stderr)
+    if match is None:
+        raise AssertionError(
+            "could not read the accepted commands out of argparse's error:\n" + result.stderr
+        )
+    accepted = {name.strip().strip("'\"") for name in match.group(1).split(",")}
+    accepted.discard("")
+    return accepted
+
+
 class CommandWiringTests(unittest.TestCase):
     """
     Both directions of the workflow-to-CLI mapping.
@@ -122,21 +149,20 @@ class CommandWiringTests(unittest.TestCase):
         invoked = _workflow_invoked_commands()
         self.assertTrue(invoked, "found no `python3 -m ci_tools.cli` invocations under .github/")
 
-        # Run from a scratch directory, not the checkout. Every command here is
-        # started with an empty environment and stops at its first require_env,
-        # except classify-akmods-failure, which has no required variable and
-        # writes artifacts/akmods-failure.json relative to the working
-        # directory. Probing from the repo root would leave that file behind.
-        with tempfile.TemporaryDirectory() as temp_dir:
-            for command, sources in sorted(invoked.items()):
-                with self.subTest(command=command):
-                    result = _run_cli(command, env={}, cwd=Path(temp_dir))
-                    self.assertNotIn(
-                        "invalid choice",
-                        result.stderr,
-                        f"{command} is invoked by {', '.join(sorted(sources))} "
-                        f"but the CLI does not accept it",
-                    )
+        accepted = _parser_accepted_commands()
+        # Guard the guard: if argparse ever changes its message, the regex above
+        # could match something small and every assertion below would pass on an
+        # empty set.
+        self.assertGreater(len(accepted), 1, f"implausible accepted-command set: {accepted}")
+
+        for command, sources in sorted(invoked.items()):
+            with self.subTest(command=command):
+                self.assertIn(
+                    command,
+                    accepted,
+                    f"{command} is invoked by {', '.join(sorted(sources))} "
+                    f"but the CLI does not accept it",
+                )
 
     def test_every_registered_command_is_invoked_by_something_under_github(self) -> None:
         # A command nobody calls is either dead or a workflow step that was

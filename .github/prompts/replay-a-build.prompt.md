@@ -85,12 +85,40 @@ privileged container — before the diagnostic replay is ever dispatched. That i
 a production change made in service of an investigation, and it needs an
 explicit maintainer decision, not a step in a runbook.
 
-## 4. Dispatch
+## 4. Stop here if you are an agent
 
-The lock file you filled in must be on the ref the run checks out. `gh workflow
-run` without `--ref` runs the default branch's copy, which still has
-`REPLACE_ME` in `ci/inputs.lock.json` — the run then fails in
-`resolve_build_inputs`. Push the populated lock on a reviewed branch and name it:
+Everything above is preparation: read the artifact, fill in the lock, work out
+whether the build-container guard will fire. **The dispatch itself is the
+maintainer's.** It starts the production workflow, and AGENTS.md section 0 rule
+6 puts that out of an agent's hands. Hand over the filled-in lock, the command
+you would run, and the two hazards below.
+
+## 5. For the maintainer: what dispatching actually costs
+
+The lock file must be on the ref the run checks out. `gh workflow run` without
+`--ref` runs the default branch's copy, which still has `REPLACE_ME` in
+`ci/inputs.lock.json` — the run then fails in `resolve_build_inputs`. So the
+populated lock has to be pushed somewhere the run can see it, and that push is
+also yours to make.
+
+**Two hazards before you dispatch on a branch:**
+
+- **The signing environment.** `sign-akmods-cache` and `build-candidate-image`
+  declare `environment: production-signing`.
+  [`production-boundary-proposal.md`](../../docs/production-boundary-proposal.md)
+  lists restricting that environment to `main` as a required setting, so where
+  that restriction is in place a `replay/*` dispatch cannot reach the signing
+  secret and the candidate build fails.
+- **The shared cache moves first.** `build-zfs-akmods` runs before either
+  signing job, and `build.yml` does not override `allow_cache_rebuild`, whose
+  default is `true`. On a cache miss it republishes the shared
+  `main-<fedora>` akmods tag — *before* the signing job is reached. So a
+  branch dispatch can leave a rebuilt shared cache behind and then fail, which
+  is the worst of both outcomes.
+
+Given both, prefer replaying from `main` with a reviewed lock, or accept that a
+branch replay is partial and may mutate the shared cache. Either way it is a
+decision, not a runbook step.
 
 ```bash
 gh workflow run build.yml \
@@ -114,7 +142,7 @@ supply-chain input, replaced by a run you were treating as diagnostic. Check
 whether a rebuild would be triggered before dispatching, and get explicit
 authorization if it would.
 
-## 5. Report
+## 6. Report
 
 Say which run you replayed, which inputs the lock held, whether the replay
 reproduced the behavior, and — explicitly — whether you promoted. If the replay

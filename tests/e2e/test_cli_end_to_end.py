@@ -357,6 +357,71 @@ class BuildInputsManifestEndToEndTests(unittest.TestCase):
             )
 
 
+class ClassifyAkmodsFailureEndToEndTests(unittest.TestCase):
+    """
+    The classify step's process contract, which is the opposite of every other
+    step's: it runs under `if: failure()` purely to explain a failure that has
+    already happened, so it must exit 0 whatever it finds. A nonzero status here
+    would replace the akmods build's own failure message with this step's.
+    """
+
+    def test_a_classified_failure_exits_zero_and_writes_the_uploaded_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            work_dir = Path(temp_dir)
+            # cwd matters: the payload path is relative, and the upload step
+            # collects `artifacts/akmods-failure.json` from the step's working
+            # directory.
+            log_dir = work_dir / "artifacts"
+            log_dir.mkdir()
+            (log_dir / "akmods-build.log").write_text(
+                "ZFS_META_VERSION='2.4.1'\nZFS_META_KVER_MAX='6.19'\nconfigure: exit 1\n",
+                encoding="utf-8",
+            )
+            output_path = work_dir / "github-output"
+
+            result = _run_cli(
+                "classify-akmods-failure",
+                env={
+                    "AKMODS_FAILURE_LOG": "artifacts/akmods-build.log",
+                    "KERNEL_RELEASE": "7.0.4-200.fc44.x86_64",
+                    "AKMODS_UPSTREAM_REF": "c" * 40,
+                    "FEDORA_VERSION": "44",
+                    "AKMODS_FAILURE_PAYLOAD_PATH": "artifacts/akmods-failure.json",
+                    "GITHUB_OUTPUT": str(output_path),
+                },
+                cwd=work_dir,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            payload_path = work_dir / "artifacts" / "akmods-failure.json"
+            self.assertTrue(payload_path.is_file(), "no artifacts/akmods-failure.json was written")
+            payload = json.loads(payload_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["failure_kind"], "upstream-compat")
+
+            outputs = _parse_github_file(output_path)
+            self.assertEqual(outputs["failure_kind"], "upstream-compat")
+            self.assertEqual(outputs["sticky_key"], payload["key"])
+
+    def test_a_missing_log_still_exits_zero_so_the_build_failure_is_what_shows(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            work_dir = Path(temp_dir)
+            output_path = work_dir / "github-output"
+
+            result = _run_cli(
+                "classify-akmods-failure",
+                env={
+                    "AKMODS_FAILURE_LOG": "artifacts/akmods-build.log",  # never written
+                    "KERNEL_RELEASE": "7.0.4-200.fc44.x86_64",
+                    "GITHUB_OUTPUT": str(output_path),
+                },
+                cwd=work_dir,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertNotIn("Traceback (most recent call last)", result.stderr)
+            self.assertEqual(_parse_github_file(output_path)["failure_kind"], "unknown")
+
+
 class ProcessContractTests(unittest.TestCase):
     """
     The two exit statuses every workflow step depends on.

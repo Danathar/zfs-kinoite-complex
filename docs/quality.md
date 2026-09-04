@@ -72,8 +72,19 @@ Two properties of the badge pipeline are deliberate:
 | `Evaluate Stable Signal Gate` (`build.yml`) | scheduled and `main` pushes | *skips* the build on a scheduled run when upstream has not moved (`build.yml:97`) — a skip, not a failure |
 | `check-akmods-cache` strict mode | before the candidate build | the build, if the cache does not carry a matching `kmod-zfs` |
 | `sign-image` | before publish | publishing — an unsigned production image is refused outright |
-| `promote-stable` digest re-read | after the copy to `:latest` | promotion, if the copy did not land at the signed digest |
+| `promote-stable` digest re-read | after the copy to `:latest` | the run, not the copy — it detects a bad promotion, it does not prevent one. See the warning above. |
 | `nightly-compliance.yml` | 05:00 UTC daily, and on dispatch | nothing — it reports. See below. |
+
+> **A red `build.yml` does not prove `:latest` is untouched.** The candidate is
+> pushed and signed before the promotion job runs, and `promote_stable.py`
+> copies to `:latest` and *then* re-reads the destination digest to confirm the
+> copy landed on what was signed. So a `Promoted digest mismatch` failure means
+> the copy already happened — the run is red and `:latest` has moved. That
+> ordering is deliberate and correct (you cannot verify a copy you have not
+> made), but it means the guard reports a bad promotion rather than preventing
+> one. **Check the published digest yourself before assuming**, with the command
+> in [`install-and-verify.md`](./install-and-verify.md); do not infer it from
+> the run's colour.
 
 ### The first three block nothing on their own
 
@@ -147,7 +158,7 @@ only one of them can publish anything signed:
 
 | Workflow | Runs on | A red run means |
 | --- | --- | --- |
-| `build.yml` | push to `main`, and 06:00 UTC daily | The production path. Nothing was signed or promoted; `:latest` still points at the last good promotion. |
+| `build.yml` | push to `main`, and 06:00 UTC daily | The production path — **the only one that can have moved `:latest`.** Usually nothing was published, but not always: see the warning below. |
 | `build-pr.yml` | every pull request | Validation only. Its header says it intentionally stops before any push or signing step, so nothing was published either way. |
 | `build-branch.yml` | push to any branch except `main` and `ai-fix/**` | A branch test image. Publishes *unsigned* `br-*` tags, and only for human-attributed pushes. Never promoted. |
 | `test.yml` | every pull request and push to `main` | Lint, unit suite, coverage floors. Blocks nothing automatically — see above. |

@@ -56,9 +56,8 @@ number, because the code it exercises runs in a child process.
 
 ## Coverage
 
-CI reports coverage on every pull request and push to `main` once
-[#12](https://github.com/Danathar/zfs-kinoite-complex/pull/12) lands; until
-then, reproduce the number locally the same way that workflow step will:
+CI reports coverage on every pull request and push to `main`. Reproduce the
+same number locally with the command that workflow step runs:
 
 ```bash
 python3 -m pytest tests/ \

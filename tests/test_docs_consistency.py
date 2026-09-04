@@ -99,38 +99,93 @@ class LinkTests(unittest.TestCase):
         self.assertEqual(broken, [], "link anchors naming no such heading")
 
 
+def mapped_paths() -> set[str]:
+    """
+    Return the repository-relative paths the documentation map declares.
+
+    The map is a directory tree: an unindented line ending in `/` opens a
+    directory, indented lines below it are files in that directory, and an
+    unindented line that is a filename is a repository-root file.
+
+    Paths, not basenames. A basename comparison cannot see a file listed under
+    the wrong directory, and the map had exactly that defect -- `quality.md` and
+    `metrics.md` stranded below the `docs/reflections/` header, so the map
+    claimed they lived there. Every basename existed somewhere, so a basename
+    check passed while the map was wrong.
+    """
+
+    mapped: set[str] = set()
+    directory = ""
+    for line in DOC_MAP.read_text(encoding="utf-8").splitlines():
+        if not line.strip() or line.startswith("```"):
+            continue
+        entry = line.split("<-")[0].strip()
+        if not entry:
+            continue
+        indented = line.startswith(" ")
+        if not indented and entry.endswith("/"):
+            directory = entry
+            continue
+        if not entry.endswith(".md") and not entry.endswith(".mdc"):
+            continue
+        if indented:
+            mapped.add(f"{directory}{entry}")
+        else:
+            directory = ""
+            mapped.add(entry)
+    return mapped
+
+
 class DocumentationMapTests(unittest.TestCase):
     """
-    docs/documentation-guide.md calls itself the map. A map missing a road is
-    worse than no map, because it is consulted instead of looking.
+    docs/documentation-guide.md calls itself the map. A map missing a road, or
+    showing one in the wrong place, is worse than no map -- it is consulted
+    instead of looking.
     """
 
+    def test_the_map_parses_into_something_plausible(self) -> None:
+        mapped = mapped_paths()
+        self.assertGreater(len(mapped), 20, f"implausibly small map: {mapped}")
+        self.assertIn("docs/quality.md", mapped)
+        self.assertIn("tests/e2e/README.md", mapped)
+
     def test_every_doc_appears_in_the_documentation_map(self) -> None:
-        listed = set(re.findall(r"([A-Za-z0-9_.-]+\.md)", DOC_MAP.read_text(encoding="utf-8")))
-        actual = {path.name for path in DOCS_DIR.glob("*.md")}
+        mapped = mapped_paths()
+        actual = {
+            str(path.relative_to(REPO_ROOT))
+            for path in tracked_markdown()
+            if path.parent == DOCS_DIR
+        }
         self.assertEqual(
-            sorted(actual - listed),
+            sorted(actual - mapped),
             [],
-            "documents in docs/ that the documentation guide's tree does not list",
+            "documents in docs/ that the documentation guide's tree does not list at that path",
         )
 
-    def test_the_map_does_not_name_documents_that_are_gone(self) -> None:
-        # `\.md(?![A-Za-z])` and not `\.md`: the map also lists
-        # `zfs-kinoite-complex.mdc`, and an unanchored suffix match happily
-        # reads that as a `.md` file that does not exist.
-        listed = set(
-            re.findall(
-                r"^\s{2,}([A-Za-z0-9_.-]+\.md)(?![A-Za-z])",
-                DOC_MAP.read_text(encoding="utf-8"),
-                re.MULTILINE,
-            )
+    def test_the_map_places_every_entry_where_the_file_actually_is(self) -> None:
+        # The direction that catches misplacement rather than omission.
+        #
+        # `.mdc` as well as `.md`: the map lists the Cursor rule file, which is
+        # a document by every measure except its extension.
+        listing = subprocess.run(
+            ["git", "-C", str(REPO_ROOT), "ls-files", "*.md", "*.mdc"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=True,
+        ).stdout.split()
+        actual = set(listing)
+        # `YYYY-MM-DD-*.md` and `*.prompt.md` are patterns, not files.
+        stale = sorted(
+            path
+            for path in mapped_paths() - actual
+            if "YYYY-" not in path and "*" not in path
         )
-        # Every tracked markdown file, not just docs/ -- the map deliberately
-        # also lists co-located READMEs and the files under .claude/.
-        actual = {path.name for path in tracked_markdown()}
-        # `YYYY-MM-DD-*.md` in the reflections block is a pattern, not a file.
-        stale = sorted(name for name in listed - actual if not name.startswith("YYYY-"))
-        self.assertEqual(stale, [], "the documentation map names files that no longer exist")
+        self.assertEqual(
+            stale,
+            [],
+            "the documentation map lists these paths, but no such file exists there",
+        )
 
 
 class WorkflowCoverageTests(unittest.TestCase):

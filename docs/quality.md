@@ -25,6 +25,32 @@ the published image is still installable and still boots — it just has not bee
 refreshed. That is a very different situation from a red build with a stale last
 good build, which means machines tracking `:latest` are drifting.
 
+**A cancelled run reads as a failed one.** The **build** badge is GitHub's own,
+and it reports the most recent *completed* run — where "completed" includes
+cancelled. A cancelled run renders as `failing`, identically to a real failure.
+
+That is not hypothetical here, because `build.yml` is built to cancel itself:
+
+```yaml
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref || github.run_id }}
+  cancel-in-progress: true
+```
+
+So **merging several pull requests to `main` in quick succession turns the badge
+red**, and it stays red until the last run finishes. Each merge starts a run and
+cancels the one before it. Nothing is wrong, the guard is doing exactly what its
+comment says — never letting two `main` runs race to publish — and the signed
+`:latest` from the last completed promotion is still there the whole time.
+
+Two ways to avoid inflicting it on yourself: space the merges out, or merge the
+documentation-only pull requests last, since `build.yml`'s `paths-ignore`
+(`**/*.md`, `docs/**`) means those start no run at all.
+
+Note the asymmetry with this repo's own badges. `write_akmods_badge.py`
+deliberately refuses to let a cancelled or skipped run change the OpenZFS/kernel
+badge. GitHub's build badge has no such rule, and this repo does not control it.
+
 Two properties of the badge pipeline are deliberate:
 
 - **It refuses to guess.** `write_akmods_badge.py` leaves the previous badge
@@ -94,7 +120,13 @@ first rule (AGENTS.md section 0 rule 1) is that the fix is the underlying cause
 
 ## Reading a red build
 
-Start with the failing step's stderr line, not the log body. A known refusal
+**First, check that it actually failed.** `gh run list --workflow build.yml
+--limit 10 --json createdAt,conclusion` distinguishes `failure` from
+`cancelled`, and the badge does not. A run of `cancelled` entries with no
+`failure` among them means someone was merging quickly, not that anything
+broke.
+
+Then start with the failing step's stderr line, not the log body. A known refusal
 exits 1 with one line, and that line is the diagnosis.
 [`.github/prompts/diagnose-build-failure.prompt.md`](../.github/prompts/diagnose-build-failure.prompt.md)
 is the procedure, including the table mapping each refusal to what to do.

@@ -32,14 +32,16 @@ docs/
   zfs-kinoite-testing.md       <- deep technical design + issue history
   akmods-fork-maintenance.md  <- how akmods source refs are selected and pinned
   maintenance-watchlist.md    <- pins and decisions on a clock that no automation watches
+  production-boundary-proposal.md <- proposal: what would have to be true to call this production
+  runtime-validation-proposal.md  <- proposal: validating the image after it boots, not just after it builds
   review-rubric.md            <- what to check on a pull request, ordered by what actually goes wrong
   risk-tiers.md               <- how much of that rubric a given change needs, by what it can cause
   SECURITY-AI.md              <- what an agent may do unattended, and which inputs are hostile
+  quality.md                  <- what each badge, gate, and fail-closed refusal actually means
+  metrics.md                  <- reproducible commands, and what the numbers are worth at this scale
 docs/reflections/
   README.md                   <- what earns a retrospective entry, and how it differs from corrections.md
   YYYY-MM-DD-*.md             <- one durable lesson each, append-only
-  quality.md                  <- what each badge, gate, and fail-closed refusal actually means
-  metrics.md                  <- reproducible commands, and what the numbers are worth at this scale
 .github/scripts/
   README.md                   <- workflow step -> command-line interface (CLI) command -> Python module map
 .github/copilot-instructions.md <- short-form orientation for GitHub Copilot

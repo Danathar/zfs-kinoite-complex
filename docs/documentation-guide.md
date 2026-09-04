@@ -34,7 +34,16 @@ docs/
   maintenance-watchlist.md    <- pins and decisions on a clock that no automation watches
 .github/scripts/
   README.md                   <- workflow step -> command-line interface (CLI) command -> Python module map
+.github/copilot-instructions.md <- short-form orientation for GitHub Copilot
+.cursor/rules/
+  zfs-kinoite-complex.mdc     <- the same short form, for Cursor
 ```
+
+The last two are **pointers, not documents**. Both say to read
+[`../AGENTS.md`](../AGENTS.md) section 0 first and deliberately do not restate
+it: a second copy of that content is exactly the kind of thing that drifts out
+of date here. If one of them contradicts `AGENTS.md`, `AGENTS.md` is right and
+the pointer is the bug.
 
 ## What To Read First (By Goal)
 

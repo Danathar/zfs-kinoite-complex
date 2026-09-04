@@ -4,6 +4,34 @@ Newest first. See [`README.md`](README.md) for what belongs here.
 
 ---
 
+## Merging several pull requests in a row turns the build badge red
+
+**Believed:** `build.yml`'s `concurrency: cancel-in-progress: true` makes
+back-to-back merges harmless. The older run is cancelled, the newest one
+publishes, so rapid merges just collapse into a single production build.
+
+**True:** they do collapse, and publishing is unaffected — but the GitHub
+workflow badge reports the most recent *completed* run, and a **cancelled** run
+renders as `failing`, identically to a real failure. Ten merges in about
+forty-five minutes left ten cancelled runs, and the badge read `failing` until
+the final run finished, with a current signed `:latest` published the whole
+time. Note the asymmetry: `ci_tools/write_akmods_badge.py` deliberately refuses
+to let a cancelled run change this repo's own badges. GitHub's build badge has
+no such rule and this repo does not control it.
+
+**Established by:** the badge SVG's own `<title>` (`Build And Promote Main Image
+- failing`) read against `gh run list --workflow build.yml --limit 25`, which
+showed 8 `success`, 10 `cancelled`, and **0 `failure`** — every real failure in
+that window dating from 2026-08-26 to 08-31.
+
+**Avoid by:** spacing merges to `main`, or merging the documentation-only pull
+requests last, since `build.yml`'s `paths-ignore` (`**/*.md`, `docs/**`) means
+those start no run at all. And when the badge is red, check `conclusion` before
+reading a single log line — `cancelled` and `failure` look the same from
+outside.
+
+---
+
 ## Checking that the CLI accepts a command by *running* it can publish
 
 **Believed:** to verify that every `python3 -m ci_tools.cli <command>` a

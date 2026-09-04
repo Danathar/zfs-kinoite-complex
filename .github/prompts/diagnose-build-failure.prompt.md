@@ -12,7 +12,19 @@ A red run here is usually a fail-closed check doing exactly its job. Several of
 the checks below have no "fix" in this repository at all — the correct outcome
 is to stop and report what upstream did.
 
-## 0. Which workflow, and does it publish?
+## 0. Did it fail, or was it cancelled?
+
+```bash
+gh run list --workflow build.yml --limit 10 --json createdAt,conclusion,event
+```
+
+The build badge shows the most recent *completed* run, and a **cancelled** run
+renders as `failing` exactly like a real failure. `build.yml` sets
+`cancel-in-progress: true`, so back-to-back merges to `main` each cancel the
+run before them. A column of `cancelled` with no `failure` in it means someone
+was merging quickly — stop here and say so.
+
+## 1. Which workflow, and does it publish?
 
 ```bash
 gh run list --limit 20 --json databaseId,name,event,conclusion,headBranch
@@ -23,7 +35,7 @@ promotes `:latest`. `build-pr.yml` and `build-branch.yml` do not promote, and
 `build-branch.yml` publishes unsigned. If the red run is one of those two,
 nothing reached `:latest` and the urgency is lower — say so.
 
-## 1. Find the step, not the job
+## 2. Find the step, not the job
 
 ```bash
 gh run view <run-id> --log-failed | tail -60
@@ -33,7 +45,7 @@ Every workflow step that decides anything runs `python3 -m ci_tools.cli
 <command>`, and a known refusal exits 1 with one line on stderr. That line is
 the diagnosis. Read it before forming a theory.
 
-## 2. Match the message to the guard
+## 3. Match the message to the guard
 
 These are the fail-closed refusals. Each names a real condition, and the
 response to each is different:
@@ -42,12 +54,12 @@ response to each is different:
 | --- | --- | --- |
 | `does not provide a kmod-zfs for primary kernel <k> at ZFS version <v> even after a rebuild` | The akmods cache resolves its own OpenZFS version independently of this repo, and the two disagree. Continuing would label the image `org.zfs-kinoite-complex.zfs-version=<v>` while shipping something else. | Upstream problem. Establish whether the ZFS line supports that kernel yet. Do **not** loosen the match. |
 | `Promoted digest mismatch: ... produced <a>, expected <b>` | `skopeo copy` did not preserve the digest, so `:latest` would point at something other than what was signed. | Stop. This is the promotion guard working. Investigate skopeo behavior; never bypass. |
-| `Failed to resolve digest for <ref>` / `Missing digest in skopeo inspect output for <ref>` | A registry read returned a manifest with no digest — usually a transient registry or CDN failure, sometimes a deleted tag. | Check whether the ref still exists. If it does, this is very likely transient (see step 3). |
+| `Failed to resolve digest for <ref>` / `Missing digest in skopeo inspect output for <ref>` | A registry read returned a manifest with no digest — usually a transient registry or CDN failure, sometimes a deleted tag. | Check whether the ref still exists. If it does, this is very likely transient (see step 4). |
 | `SIGNING_SECRET is empty; cannot sign published image.` | The signing job ran without its secret, typically because the run came from a context that does not get one. | Confirm the trigger. A branch or fork run is not supposed to sign. |
 | `Missing required verification key file: <path>` | `cosign.pub` is not where the signing or promotion step expects it. | A repository problem, not upstream. |
 | `Replay lock file not found: <path>` | Replay mode was requested with no lock file. | See [`replay-a-build.prompt.md`](replay-a-build.prompt.md). |
 
-## 3. Rule out a third-party service before proposing anything
+## 4. Rule out a third-party service before proposing anything
 
 Every workflow here pulls from quay.io, pushes to ghcr.io, and bootstraps
 `cosign` from Sigstore. Any of the three can turn a run red with nothing wrong
@@ -68,21 +80,22 @@ For any of them: say so, name the job and the step, and note that a re-run is
 the maintainer's call — this repo does not retry automatically, and a re-run of
 `build.yml` publishes.
 
-## 4. Distinguish "the pipeline is green" from "the image is good"
+## 5. Distinguish "the pipeline is green" from "the image is good"
 
 If you re-check after a re-run, say **which run** you read. A successful run
 proves the build completed. It is not evidence the image is safe to boot
 (AGENTS.md section 0 rule 4).
 
-## 5. What the answer looks like
+## 6. What the answer looks like
 
 State, in this order:
 
 1. Which run and which step, with the link.
 2. The guard message, quoted.
-3. Whether the cause is upstream, transient, or in this repository.
+3. Whether the run was cancelled rather than failed, or the cause is upstream,
+   transient, or in this repository.
 4. The fix — or that there is no fix here and what has to change upstream.
 
-If step 3 is "upstream" or "transient", **stop there**. Proposing a code change
+If item 3 is anything other than "in this repository", **stop there**. Proposing a code change
 to get past a guard that is correctly refusing is the failure mode this
 repository cares most about.

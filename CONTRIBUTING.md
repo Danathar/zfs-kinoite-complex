@@ -81,6 +81,18 @@ measured module, the number of statements the suite reaches today.
 - **Both directions.** A measured module with no floor fails, so new code
   arrives with a recorded decision. A floor naming a module the run did not
   measure also fails, so the manifest cannot rot after a rename.
+- **Every shipped file, not only the measured ones.** The floors can only cover
+  what `--cov` measures, which left a hole: a file that ships and executes but
+  sits outside those paths had no entry anywhere. So the manifest has a second
+  section, `unmeasured`, and every tracked `*.py`, `*.sh` and `Containerfile`
+  outside `tests/` must appear in one section or the other. An entry there
+  needs a **reason**, not just a listing — an empty reason is rejected, because
+  it records no decision and only silences the check.
+
+Today `unmeasured` holds `Containerfile` and `build_files/build-image.sh`: both
+run only inside an image build, so nothing on the host reaches them. If you add
+a shipped file and nothing else, the gate goes red. That is the point — the
+choice gets made once, in the open, rather than drifting.
 
 Raising a floor is evidenced -- the suite demonstrably reached those lines, and
 the gate prints `could raise` when it does. Lowering one is evidenced by an

@@ -21,8 +21,11 @@ signals mean, that one is how to get numbers.
 | **OpenZFS/kernel status** | `status` branch payload written by `akmods-failure-triage.yml` | If the build is red, is it because ZFS cannot be built for the current kernel? |
 
 **Read them together.** A red **build** with a recent **last good build** means
-the published image is still installable and still boots — it just has not been
-refreshed. That is a very different situation from a red build with a stale last
+the published image is still there and has not been refreshed. It does **not**
+mean the image boots: that badge is derived from the `Created` field on the
+published image, so it reports the artifact's age and nothing else.
+[`safety-model.md`](./safety-model.md) is explicit that CI never boots the image
+or imports a pool, so no badge here can tell you it works on a machine. That is a very different situation from a red build with a stale last
 good build, which means machines tracking `:latest` are drifting.
 
 **A cancelled run reads as a failed one.** The **build** badge is GitHub's own,
@@ -101,8 +104,17 @@ publish itself.
 **`Python Unit Tests` cannot reach the image.** Everything under `tests/` except
 `tests/e2e/` mocks every external call, and `tests/e2e/` runs the CLI as a
 subprocess but touches no registry, `cosign`, `podman`, or `git`. The
-`Containerfile`, `build_files/`, and the image-side scripts only execute inside
-an image build. A green suite is not evidence for a change to any of them.
+`Containerfile` and `build_files/build-image.sh` execute only inside an image
+build, against a real RPM database and module tree — they are the two entries in
+`.coverage-thresholds.json`'s `unmeasured` section, and a green suite is not
+evidence for a change to either.
+
+The image-side *Python* is a different case and worth separating, because
+conflating the two understates what is covered. `install_zfs_from_akmods_cache.py`
+and `configure_signing_policy.py` are both exercised from the host with their
+external calls mocked, and both carry coverage floors. What a green suite does
+not prove about them is the part that was mocked: the real RPM database, the
+real module tree, the real `skopeo` output.
 
 **Coverage floors measure the unit tier only.** A module at 100% may never have
 had its real-world path exercised, and a module in the 60s may be running

@@ -96,10 +96,15 @@ jobs:
           echo "" >> "${GITHUB_STEP_SUMMARY}"
           echo "\`${IMAGE}\` is \`${digest}\`" >> "${GITHUB_STEP_SUMMARY}"
 
+          # Verify the digest that was just inspected, not the tag. If `:latest`
+          # moves between the two commands -- a concurrent production run is
+          # enough -- the summary would record digest A while cosign resolved
+          # and verified digest B, and the job would claim the recorded artifact
+          # verified without ever checking it.
           cosign verify \
             --key cosign.pub \
             --new-bundle-format=false \
-            "${IMAGE}"
+            "${IMAGE%:*}@${digest}"
 
           echo "" >> "${GITHUB_STEP_SUMMARY}"
           echo "Signature verifies against the committed \`cosign.pub\`." \

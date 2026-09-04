@@ -90,7 +90,12 @@ Do not strip or tidy them; write in the same register.
 
 ## What cannot be tested from the host
 
-The `Containerfile`, `build_files/`, and the image-side scripts only run inside
-an image build against a real RPM database and module tree. Nothing on a
-developer machine reaches them. A green local suite is not evidence for a change
-to any of them — say how it was verified, or say plainly that it was not.
+The `Containerfile` and `build_files/build-image.sh` run only inside an image
+build against a real RPM database and module tree. Nothing on a developer
+machine reaches them, and a green local suite is not evidence for a change to
+either — say how it was verified, or say plainly that it was not.
+
+The image-side Python is not in that category. `install_zfs_from_akmods_cache.py`
+and `configure_signing_policy.py` do have host-side tests, with their external
+calls mocked, and both carry coverage floors. What the suite does not prove
+about them is whatever the mock stood in for.

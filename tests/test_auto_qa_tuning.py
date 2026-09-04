@@ -32,6 +32,12 @@ JOB_RE = re.compile(r"^  (?P<job>[A-Za-z0-9_-]+):\s*$")
 TIMEOUT_RE = re.compile(r"^    timeout-minutes:\s*(?P<minutes>\d+)\s*$")
 
 
+def workflow_files() -> list[Path]:
+    """Every workflow file, both suffixes GitHub accepts."""
+
+    return sorted(list(WORKFLOW_DIR.glob("*.yml")) + list(WORKFLOW_DIR.glob("*.yaml")))
+
+
 def declared_timeouts() -> dict[tuple[str, str], int]:
     """Return `{(workflow, job): minutes}` as recorded in the tuning file."""
 
@@ -46,7 +52,10 @@ def actual_timeouts() -> dict[tuple[str, str], int]:
     """Return `{(workflow, job): minutes}` as written in the workflow files."""
 
     found: dict[tuple[str, str], int] = {}
-    for path in sorted(WORKFLOW_DIR.glob("*.yml")):
+    # Both suffixes: GitHub accepts `.yaml`, and globbing only `.yml` would let
+    # a whole workflow file escape every completeness check below while they
+    # all stayed green.
+    for path in sorted(workflow_files()):
         job = None
         for line in path.read_text(encoding="utf-8").splitlines():
             job_match = JOB_RE.match(line)

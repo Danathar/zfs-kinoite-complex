@@ -43,6 +43,40 @@ Keep `cosign.pub`, `SIGNING_SECRET`, the `production-signing` environment, and
 GHCR package permissions aligned. Verify that branch and environment rules
 prevent untrusted branch runs from reaching the production signing key.
 
+### Open: the `production-signing` environment is not branch-restricted
+
+[`production-boundary-proposal.md`](./production-boundary-proposal.md) lists
+"environment rules restricting the signing jobs to `main`" as a **required
+setting**, and its verification checklist says `production-signing` must be
+"unavailable to branch and pull-request runs".
+[`zfs-kinoite-testing.md`](./zfs-kinoite-testing.md) goes further and states as
+fact that signing happens "inside the `production-signing` environment that only
+`main` refs can reach".
+
+As checked on 2026-09-04 that restriction is not configured:
+
+```bash
+gh api repos/Danathar/zfs-kinoite-complex/environments \
+  --jq '.environments[] | "\(.name): rules=\(.protection_rules|length) branch_policy=\(.deployment_branch_policy)"'
+# production-signing: rules=0 branch_policy=null
+```
+
+`deployment_branch_policy: null` means any ref may deploy to it.
+
+**Exposure today is limited, and only by workflow content rather than by the
+setting.** No branch-reachable workflow declares that environment:
+`build-branch.yml` never references `SIGNING_SECRET` at all, which
+`tests/test_workflow_build_container.py` pins. So nothing currently reaches the
+key from a branch. What is missing is the second layer the docs claim exists —
+if any workflow ever declared `environment: production-signing` on a
+branch-reachable path, the setting would not stop it.
+
+This cannot be checked from CI without an admin-scoped token, which is why it
+belongs here rather than in a test. Two things to decide: configure the
+restriction, or correct the two documents that assert it is already in place.
+Leaving both as they are is the one option that should not stand, because a
+documented boundary nobody enforces is worse than an acknowledged gap.
+
 ## Runtime validation
 
 CI does not import a real pool or boot the image. Before relying on a new

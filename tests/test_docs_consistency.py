@@ -199,7 +199,11 @@ class WorkflowCoverageTests(unittest.TestCase):
         """
         prose = "\n".join(doc.read_text(encoding="utf-8") for doc in tracked_markdown())
         undocumented = [
-            path.name for path in sorted(WORKFLOW_DIR.glob("*.yml")) if path.name not in prose
+            path.name
+            for path in sorted(
+                list(WORKFLOW_DIR.glob("*.yml")) + list(WORKFLOW_DIR.glob("*.yaml"))
+            )
+            if path.name not in prose
         ]
         self.assertEqual(undocumented, [], "workflows named in no document")
 

@@ -5,8 +5,16 @@ mode: agent
 
 # Replay a build
 
-**Goal:** rebuild with the exact inputs a past run used, so a difference in
-behavior is attributable to something other than the inputs.
+**Goal:** rebuild with the pinned inputs a past run used, so a difference in
+behavior is attributable to something other than those inputs.
+
+**This is a partial replay, not an exact one, and the difference matters.** The
+lock file pins the base image, the build container and the ZFS version. It does
+not pin the akmods source: `AKMODS_UPSTREAM_REF` is empty by default, so
+`_resolve_default_akmods_ref()` resolves the tracked `main` ref afresh on every
+run. If upstream advanced since the run you are reproducing, the replay builds
+different source. Say so in the result rather than concluding from a
+non-reproduction that the cause was not in the inputs.
 
 Read this before starting: replay mode is reachable **only** from a manual
 `workflow_dispatch`. `CONTRIBUTING.md` names it as the worked example of a path
@@ -68,10 +76,53 @@ through a reviewed pull request. That container runs `--privileged` as root with
 Do not work around this by editing the lock file to match the current container.
 That produces a green run that proves nothing.
 
-## 4. Dispatch
+**And be aware what the prescribed fix costs before proposing it.** Changing
+`DEFAULT_BUILD_CONTAINER_IMAGE` in `ci/defaults.json` plus the workflow
+`container:` literals is a change to `main`, and a push to `main` starts
+`build.yml`. That run is not a `workflow_dispatch`, so the promotion condition is
+satisfied and it will build, sign and move `:latest` using the *historical*
+privileged container — before the diagnostic replay is ever dispatched. That is
+a production change made in service of an investigation, and it needs an
+explicit maintainer decision, not a step in a runbook.
+
+## 4. Stop here if you are an agent
+
+Everything above is preparation: read the artifact, fill in the lock, work out
+whether the build-container guard will fire. **The dispatch itself is the
+maintainer's.** It starts the production workflow, and AGENTS.md section 0 rule
+6 puts that out of an agent's hands. Hand over the filled-in lock, the command
+you would run, and the two hazards below.
+
+## 5. For the maintainer: what dispatching actually costs
+
+The lock file must be on the ref the run checks out. `gh workflow run` without
+`--ref` runs the default branch's copy, which still has `REPLACE_ME` in
+`ci/inputs.lock.json` — the run then fails in `resolve_build_inputs`. So the
+populated lock has to be pushed somewhere the run can see it, and that push is
+also yours to make.
+
+**Two hazards before you dispatch on a branch:**
+
+- **The signing environment.** `sign-akmods-cache` and `build-candidate-image`
+  declare `environment: production-signing`.
+  [`production-boundary-proposal.md`](../../docs/production-boundary-proposal.md)
+  lists restricting that environment to `main` as a required setting, so where
+  that restriction is in place a `replay/*` dispatch cannot reach the signing
+  secret and the candidate build fails.
+- **The shared cache moves first.** `build-zfs-akmods` runs before either
+  signing job, and `build.yml` does not override `allow_cache_rebuild`, whose
+  default is `true`. On a cache miss it republishes the shared
+  `main-<fedora>` akmods tag — *before* the signing job is reached. So a
+  branch dispatch can leave a rebuilt shared cache behind and then fail, which
+  is the worst of both outcomes.
+
+Given both, prefer replaying from `main` with a reviewed lock, or accept that a
+branch replay is partial and may mutate the shared cache. Either way it is a
+decision, not a runbook step.
 
 ```bash
 gh workflow run build.yml \
+  --ref replay/<what-you-are-investigating> \
   -f use_input_lock=true \
   -f lock_file=ci/inputs.lock.json \
   -f promote_to_stable=false
@@ -81,7 +132,17 @@ gh workflow run build.yml \
 default is `true`. A replay that promotes moves `:latest` to an image built for
 diagnosis, which `bootc upgrade` then pulls onto whatever is tracking it.
 
-## 5. Report
+**It does not make the replay read-only, though.** `promote_to_stable=false`
+suppresses the promotion job and nothing else. `build.yml` calls
+`prepare-main-akmods` without overriding `allow_cache_rebuild`, whose default is
+`true`, so if the locked kernel and ZFS inputs do not match what the shared cache
+currently holds, the replay **rebuilds and republishes the shared
+`main-<fedora>` akmods tag** before building its candidate. That is a production
+supply-chain input, replaced by a run you were treating as diagnostic. Check
+whether a rebuild would be triggered before dispatching, and get explicit
+authorization if it would.
+
+## 6. Report
 
 Say which run you replayed, which inputs the lock held, whether the replay
 reproduced the behavior, and — explicitly — whether you promoted. If the replay

@@ -63,19 +63,37 @@ gh api repos/Danathar/zfs-kinoite-complex/environments \
 
 `deployment_branch_policy: null` means any ref may deploy to it.
 
-**Exposure today is limited, and only by workflow content rather than by the
-setting.** No branch-reachable workflow declares that environment:
-`build-branch.yml` never references `SIGNING_SECRET` at all, which
-`tests/test_workflow_build_container.py` pins. So nothing currently reaches the
-key from a branch. What is missing is the second layer the docs claim exists —
-if any workflow ever declared `environment: production-signing` on a
-branch-reachable path, the setting would not stop it.
+**A branch can already reach the signing key today.** `build.yml` itself is the
+path, not a hypothetical future workflow:
+
+- It carries a `workflow_dispatch` trigger, and `gh workflow run build.yml --ref
+  <branch>` runs *that branch's* copy of the file.
+- `sign-akmods-cache` and `build-candidate-image` both declare `environment:
+  production-signing` and consume `secrets.SIGNING_SECRET`.
+- No job in `build.yml` guards on `github.ref`. The only ref-shaped expression in
+  the file is the `concurrency` group key, which gates nothing.
+- `promote-stable` is conditioned on `github.event.inputs.promote_to_stable ==
+  'true'`, and that input **defaults to `true`**.
+
+So a dispatch against an arbitrary branch signs a candidate with the production
+key and copies it to `:latest` by default. `deployment_branch_policy: null` is
+the reason nothing stops it.
+
+What bounds this is repository write access rather than the environment:
+dispatching a workflow needs a token with `actions: write`, so it is not a route
+open to fork pull requests. But the environment restriction is precisely the
+control meant to make the signing key harder to reach than ordinary write
+access, and it is absent. `build-branch.yml` is separately clean — it never
+references `SIGNING_SECRET`, which `tests/test_workflow_build_container.py` pins
+— but auditing only that workflow would hide the live path through `build.yml`.
 
 This cannot be checked from CI without an admin-scoped token, which is why it
-belongs here rather than in a test. Two things to decide: configure the
-restriction, or correct the two documents that assert it is already in place.
-Leaving both as they are is the one option that should not stand, because a
-documented boundary nobody enforces is worse than an acknowledged gap.
+belongs here rather than in a test. Three ways to close it: configure the
+environment's branch policy, add a `github.ref` guard to the signing and
+promotion jobs in `build.yml` so the workflow enforces it itself, or correct the
+two documents that assert the boundary is already in place. Leaving it as it
+stands is the one option that should not, because a documented boundary nobody
+enforces is worse than an acknowledged gap.
 
 ## Runtime validation
 

@@ -9,6 +9,9 @@ test machine or a real pool someone attached to try it — and they override the
 general guidance that follows them, and they override this page too.
 
 If a term is unfamiliar, check [`docs/glossary.md`](./docs/glossary.md) first.
+If you are on the other side of a change,
+[`docs/review-rubric.md`](./docs/review-rubric.md) is what a review here checks
+and in what order.
 
 ## Submitting a change
 

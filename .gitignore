@@ -6,7 +6,10 @@ docs/private/
 cosign.key
 .DS_Store
 .codex
-.claude/
-.claude/*.lock
+# Everything under .claude/ is per-machine session state, except the two
+# directories below, which are shared and reviewed like any other file.
+.claude/*
+!.claude/commands/
+!.claude/memory/
 .coverage
 coverage.json

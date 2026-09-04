@@ -32,11 +32,19 @@ docs/
   zfs-kinoite-testing.md       <- deep technical design + issue history
   akmods-fork-maintenance.md  <- how akmods source refs are selected and pinned
   maintenance-watchlist.md    <- pins and decisions on a clock that no automation watches
+  review-rubric.md            <- what to check on a pull request, ordered by what actually goes wrong
+  quality.md                  <- what each badge, gate, and fail-closed refusal actually means
+  metrics.md                  <- reproducible commands, and what the numbers are worth at this scale
 .github/scripts/
   README.md                   <- workflow step -> command-line interface (CLI) command -> Python module map
 .github/prompts/
   README.md                   <- catalog of task prompts for the recurring operations here
   *.prompt.md                 <- one procedure each: diagnose a red build, replay a build, review a safety-critical change
+.claude/commands/
+  README.md                   <- slash commands; thin pointers at .github/prompts/
+.claude/memory/
+  README.md                   <- what belongs in corrections.md and what does not
+  corrections.md              <- things believed here that turned out to be wrong, with what settles each one
 tests/e2e/
   README.md                   <- what the unmocked end-to-end tier answers, and what it deliberately does not
 ```
@@ -45,6 +53,13 @@ The prompt files are **procedures, not descriptions**. They link to `AGENTS.md`
 and `docs/` for what the code is and does, rather than restating it, so there
 stays one copy to keep current. New long-form explanation belongs in `docs/`;
 only steps and the decision at the end belong in a prompt.
+
+`.claude/memory/corrections.md` is the one place that records *mistakes* rather
+than design. An entry belongs there when someone confidently believed something
+false and it cost time or nearly caused a bad change -- not when a flag was
+forgotten. It is the practical form of AGENTS.md section 0 rule 3: every entry
+cites the file, command, or run that settles it, because an entry nobody can
+verify is worse than no entry.
 
 ## What To Read First (By Goal)
 
@@ -103,3 +118,7 @@ only steps and the decision at the end belong in a prompt.
    will surface, in [`docs/maintenance-watchlist.md`](./maintenance-watchlist.md).
 10. Put contribution process -- how to submit a change, run tests, read coverage --
     in [`../CONTRIBUTING.md`](../CONTRIBUTING.md).
+11. Put "what does this signal mean" in [`docs/quality.md`](./quality.md), and
+    "how do I get this number" in [`docs/metrics.md`](./metrics.md). Both are
+    written to resist over-reading: a figure that cannot support a conclusion
+    belongs there with the reason it cannot, rather than being left out.

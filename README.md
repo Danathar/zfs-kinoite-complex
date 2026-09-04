@@ -82,6 +82,9 @@ Start here depending on what you want:
 | read the deep design history and validation notes | [`docs/zfs-kinoite-testing.md`](./docs/zfs-kinoite-testing.md) |
 | change which akmods commit is built | [`docs/akmods-fork-maintenance.md`](./docs/akmods-fork-maintenance.md) |
 | contribute a change | [`CONTRIBUTING.md`](./CONTRIBUTING.md) |
+| review someone else's change | [`docs/review-rubric.md`](./docs/review-rubric.md) |
+| know what green means here, and what it does not | [`docs/quality.md`](./docs/quality.md) |
+| get a number out of this repo without over-reading it | [`docs/metrics.md`](./docs/metrics.md) |
 | look up a term | [`docs/glossary.md`](./docs/glossary.md) |
 | see the whole documentation map | [`docs/documentation-guide.md`](./docs/documentation-guide.md) |
 

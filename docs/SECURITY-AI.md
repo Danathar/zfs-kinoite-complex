@@ -65,7 +65,7 @@ update.
 | --- | --- | --- |
 | `SIGNING_SECRET` | the signing steps in `build.yml`, via `publish-native-image` | Anyone can sign an image that verifies against the committed `cosign.pub`, and machines are configured to trust exactly that. **Highest severity in the repository.** |
 | `GITHUB_TOKEN` | every workflow, scoped per job | Short-lived and bounded by that job's `permissions:` block. It is also what pushes to GHCR — `REGISTRY_TOKEN` is `${{ github.token }}`, not a stored credential. |
-| Agent credentials (`ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN`) | `.github/workflows/ai-fix.yml`, if set | Billing, not repository access — they buy model calls and cannot themselves write here. |
+| Agent credentials (`ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN`) | Nothing in this repository reads these today. Listed because an agent workflow would, and an inventory that omits a credential class is worse than one that marks it unused. | Billing, not repository access — they buy model calls and cannot themselves write here. |
 
 Nothing else in CI is secret.
 
@@ -152,8 +152,21 @@ Never, by any agent, on any instruction (AGENTS.md section 0 rule 6):
 - dispatch `build.yml` — `promote_to_stable` defaults to `true`
 - apply a label from the approval list above
 
-`.claude/settings.json` denies each of these mechanically rather than relying on
-the agent having read this page.
+`.claude/settings.json` enforces as much of that list as a command-prefix rule
+can, and it is worth knowing exactly how much — assuming more than it delivers
+is its own hazard.
+
+| Rule | How it is enforced |
+| --- | --- |
+| merge, dispatch `build.yml`, `gh release`, force-push, delete a branch or tag | **Denied** outright in `settings.json` |
+| move or delete a registry artifact (`skopeo copy`/`delete`, `podman`/`buildah push`, `cosign sign`) | **Denied** |
+| create, edit, or delete a label | **Denied** (`gh label create`/`edit`/`delete`/`clone`) |
+| ordinary `git push`, `gh pr edit`, `gh pr review` | **`ask`** — a human sees the command before it runs. They cannot be denied outright because each has legitimate uses here, and a prefix rule cannot tell those apart. |
+| **push to `main` specifically** | **Not expressible as a prefix rule.** `git push` to a feature branch is routine; the destination is an argument, not a prefix. This one rests on the agent honouring the rule, on `ask` surfacing the command, and on branch protection if it is ever enabled — `main` is not protected as of this writing. |
+
+So the honest summary: the irreversible, outward-facing operations are denied;
+the reversible ones are promptable; and one rule is a convention rather than a
+control. Do not read the list above as "impossible".
 
 ## What an agent branch can actually cause here
 
@@ -164,17 +177,24 @@ quite:
 | --- | --- | --- |
 | `build.yml` | push to `main` | **Nothing.** An agent never pushes to `main`. This is the only path that signs and promotes. |
 | `build-pr.yml` | `pull_request` | A validation build. Its header says it intentionally stops before any push or signing step. |
-| `build-branch.yml` | push to any branch except `main` **and except `ai-fix/**`** | **Nothing.** It would otherwise publish an unsigned `br-*` throwaway tag, so agent branches are excluded from its trigger. |
+| `build-branch.yml` | push to any branch except `main` **and except `ai-fix/**`** | **Nothing.** Two independent guards, and it is worth knowing both. Its `Push unsigned branch test image` step is gated on `actor_is_bot != 'true'`, so a bot-attributed push publishes nothing anyway; and `ai-fix/**` is excluded from the trigger, so the workflow does not run for an agent branch at all. |
 
 So an agent branch produces **no artifact at all**. It cannot publish, sign, or
-move `:latest`, and it does not even leave a throwaway tag behind.
+move `:latest`, and it does not leave a throwaway tag behind.
 
-That exclusion is one line in `build-branch.yml`'s `branches-ignore`, which
-makes it easy to drop while editing that trigger for an unrelated reason. Two
-assertions in `tests/test_workflow_build_container.py` hold it: one that the
-exclusion is present, and one that `ai-fix.yml`'s `branch_prefix` still matches
-it — because changing the prefix in one file alone silently restores the
-behaviour the exclusion removed, and nothing else would notice.
+The two guards are deliberately not one. `actor_is_bot` depends on which
+credential the agent pushed with, which is a property of the action's internals
+rather than of this repository — and a push made with `GITHUB_TOKEN` does not
+start a workflow at all, so the attribution is not even reached in that case.
+Relying on it alone would mean relying on something this repository does not
+control. The `branches-ignore` exclusion does not care who pushed.
+
+That exclusion is one line, which makes it easy to drop while editing the
+trigger for an unrelated reason. Two assertions in
+`tests/test_workflow_build_container.py` hold it: one that the exclusion is
+present, and one that `ai-fix.yml`'s `branch_prefix` still matches it — because
+changing the prefix in one file alone silently restores the behaviour the
+exclusion removed, and nothing else would notice.
 
 ## If you find a vulnerability
 

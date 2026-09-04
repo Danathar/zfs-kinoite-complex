@@ -39,6 +39,12 @@
           - 'containerfiles/zfs-akmods/install_zfs_from_akmods_cache.py'
           - 'files/scripts/configure_signing_policy.py'
           - 'cosign.pub'
+          # docs/risk-tiers.md classes this file's ZFS line and base-image
+          # values as Tier 3, and a path-based matcher cannot see which key
+          # changed. So the whole file is safety-critical: DEFAULT_ZFS_MINOR_VERSION
+          # is a pool-compatibility decision, and DEFAULT_BUILD_CONTAINER_IMAGE
+          # pins the privileged container that builds the akmods cache.
+          - 'ci/defaults.json'
 
 'area/build':
   - changed-files:

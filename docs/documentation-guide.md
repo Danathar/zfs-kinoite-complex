@@ -37,13 +37,21 @@ docs/
 .github/copilot-instructions.md <- short-form orientation for GitHub Copilot
 .cursor/rules/
   zfs-kinoite-complex.mdc     <- the same short form, for Cursor
+.github/prompts/
+  README.md                   <- catalog of task prompts for the recurring operations here
+  *.prompt.md                 <- one procedure each: diagnose a red build, replay a build, review a safety-critical change
 ```
 
-The last two are **pointers, not documents**. Both say to read
-[`../AGENTS.md`](../AGENTS.md) section 0 first and deliberately do not restate
-it: a second copy of that content is exactly the kind of thing that drifts out
-of date here. If one of them contradicts `AGENTS.md`, `AGENTS.md` is right and
-the pointer is the bug.
+`copilot-instructions.md` and the Cursor rule are **pointers, not documents**.
+Both say to read [`../AGENTS.md`](../AGENTS.md) section 0 first and deliberately
+do not restate it: a second copy of that content is exactly the kind of thing
+that drifts out of date here. If one of them contradicts `AGENTS.md`,
+`AGENTS.md` is right and the pointer is the bug.
+
+The prompt files are **procedures, not descriptions**. They link to `AGENTS.md`
+and `docs/` for what the code is and does, rather than restating it, so there
+stays one copy to keep current. New long-form explanation belongs in `docs/`;
+only steps and the decision at the end belong in a prompt.
 
 ## What To Read First (By Goal)
 

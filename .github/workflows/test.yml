@@ -51,4 +51,19 @@ jobs:
             --cov=containerfiles/zfs-akmods \
             --cov=files/scripts \
             --cov-branch \
-            --cov-report=term-missing
+            --cov-report=term-missing \
+            --cov-report=json
+
+      # The gate is per module and counts statements, not percent. A repository
+      # percentage moves whenever code is added, and one well-tested module can
+      # mask another that stopped being exercised at all. A covered-statement
+      # count only falls when a test stops reaching lines that used to run,
+      # which is the thing worth failing a pull request over.
+      #
+      # This does not gate on the percentage the step above prints, and there is
+      # still no --cov-fail-under. The floors live in .coverage-thresholds.json;
+      # tests/check_coverage.py explains why raising one is automatic-able and
+      # lowering one is not.
+      - name: Check per-module coverage floors
+        shell: bash
+        run: python3 tests/check_coverage.py

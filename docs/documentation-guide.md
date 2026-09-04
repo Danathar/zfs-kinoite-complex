@@ -33,6 +33,8 @@ docs/
   akmods-fork-maintenance.md  <- how akmods source refs are selected and pinned
   maintenance-watchlist.md    <- pins and decisions on a clock that no automation watches
   review-rubric.md            <- what to check on a pull request, ordered by what actually goes wrong
+  risk-tiers.md               <- how much of that rubric a given change needs, by what it can cause
+  SECURITY-AI.md              <- what an agent may do unattended, and which inputs are hostile
   quality.md                  <- what each badge, gate, and fail-closed refusal actually means
   metrics.md                  <- reproducible commands, and what the numbers are worth at this scale
 .github/scripts/

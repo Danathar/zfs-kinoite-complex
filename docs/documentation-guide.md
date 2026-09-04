@@ -35,6 +35,9 @@ docs/
   review-rubric.md            <- what to check on a pull request, ordered by what actually goes wrong
   risk-tiers.md               <- how much of that rubric a given change needs, by what it can cause
   SECURITY-AI.md              <- what an agent may do unattended, and which inputs are hostile
+docs/reflections/
+  README.md                   <- what earns a retrospective entry, and how it differs from corrections.md
+  YYYY-MM-DD-*.md             <- one durable lesson each, append-only
   quality.md                  <- what each badge, gate, and fail-closed refusal actually means
   metrics.md                  <- reproducible commands, and what the numbers are worth at this scale
 .github/scripts/
@@ -68,7 +71,13 @@ and `docs/` for what the code is and does, rather than restating it, so there
 stays one copy to keep current. New long-form explanation belongs in `docs/`;
 only steps and the decision at the end belong in a prompt.
 
-`.claude/memory/corrections.md` is the one place that records *mistakes* rather
+`docs/reflections/` and `.claude/memory/corrections.md` both record mistakes
+rather than design, and they are not the same thing. A correction is short and
+citable -- believed, true, established by, avoid by -- and fixes one fact. A
+reflection is retrospective and changes how a *class* of work is done. Its own
+README has the table.
+
+`.claude/memory/corrections.md` is the place that records *mistakes* rather
 than design. An entry belongs there when someone confidently believed something
 false and it cost time or nearly caused a bad change -- not when a flag was
 forgotten. It is the practical form of AGENTS.md section 0 rule 3: every entry

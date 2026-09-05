@@ -1,14 +1,16 @@
 """
 Script: tests/test_install_zfs_from_akmods_cache.py
 What: Tests the helper that installs cached ZFS RPMs into the build root.
-Doing: Exercises the primary-kernel planning rules without invoking `dnf5` or mutating the host.
+Doing: Exercises the primary-kernel planning rules, and main()'s ordering of them, without invoking `dnf5` or mutating the host.
 Why: The old inline Containerfile shell block was hard to reason about and almost impossible to unit test.
 Goal: Keep the simplified primary-kernel contract explicit and reviewable.
 """
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import json
 import subprocess
 import sys
@@ -487,6 +489,266 @@ class InstallZfsFromAkmodsCacheTests(unittest.TestCase):
     def test_require_command_accepts_a_present_command(self) -> None:
         with patch.object(helper.shutil, "which", return_value="/usr/bin/dnf5"):
             helper._require_command("dnf5")
+
+
+# The kernel the plan below is built for, and one older release that shares the
+# image with it. Two entries so the multi-kernel notice has something to name.
+PRIMARY_KERNEL = "6.18.16-200.fc43.x86_64"
+OLDER_KERNEL = "6.18.9-200.fc43.x86_64"
+
+INSTALL_PLAN = helper.InstallPlan(
+    detected_kernel_releases=[OLDER_KERNEL, PRIMARY_KERNEL],
+    managed_rpms=[Path("/tmp/rpms/libzfs-2.4.0.rpm"), Path("/tmp/rpms/zfs-2.4.0.rpm")],
+    supported_kernel_release=PRIMARY_KERNEL,
+    supported_kmod_rpm=Path(f"/tmp/rpms/kmod-zfs-{PRIMARY_KERNEL}-2.4.0.rpm"),
+)
+
+AKMODS_IMAGE = "ghcr.io/example/zfs-kinoite-complex-akmods:main-43"
+LAYER_FILES = [Path("/tmp/akmods-zfs/blobs/sha256/aaaa"), Path("/tmp/akmods-zfs/blobs/sha256/bbbb")]
+DISCOVERED_RPMS = [Path("/tmp/rpms/kmods/zfs/kmod-zfs-2.4.0.rpm")]
+
+
+class MainOrchestrationTests(unittest.TestCase):
+    """
+    What main() does with the functions tested above: the order, and the wiring.
+
+    Every step is covered in isolation elsewhere in this file, but nothing
+    asserted how they are joined together, and the joining is what runs in
+    production. This script is a `RUN` step in the Containerfile reached by no
+    `ci_tools.cli` command, so `tests/e2e/` never executes it either -- an
+    argument handed to the wrong step, or a step moved ahead of the preflight,
+    would pass the entire suite and first appear as a failed image build.
+    """
+
+    @contextlib.contextmanager
+    def _staged_build(self, *, image_kernels, plan=INSTALL_PLAN, missing_command=None, plan_error=None):
+        """
+        Run main() against recorded stand-ins for every collaborator it calls.
+
+        Yields the call log as `(name, args)` pairs in the order main() made
+        them, which is the property most of these tests are about. Nothing here
+        touches a registry, `dnf5`, or `/lib/modules`.
+        """
+
+        calls: list[tuple[str, tuple]] = []
+
+        def record(name, result=None, raises=None):
+            def stand_in(*args, **kwargs):
+                calls.append((name, args))
+                if raises is not None:
+                    raise raises
+                return result
+
+            return stand_in
+
+        def fake_require(name):
+            calls.append(("_require_command", (name,)))
+            if missing_command is not None and name == missing_command:
+                raise RuntimeError(f"Required command is not available: {name}")
+
+        stand_ins = {
+            "_require_command": fake_require,
+            "resolve_akmods_image": record("resolve_akmods_image", AKMODS_IMAGE),
+            "image_kernels_from_modules_root": record(
+                "image_kernels_from_modules_root", list(image_kernels)
+            ),
+            "copy_oci_layout_from_registry": record("copy_oci_layout_from_registry"),
+            "load_layer_files_from_oci_layout": record(
+                "load_layer_files_from_oci_layout", list(LAYER_FILES)
+            ),
+            "unpack_layer_tarballs": record("unpack_layer_tarballs"),
+            "discover_zfs_rpms": record("discover_zfs_rpms", list(DISCOVERED_RPMS)),
+            "build_install_plan": record("build_install_plan", plan, raises=plan_error),
+            "dnf5_install": record("dnf5_install"),
+            "validate_installed_modules": record("validate_installed_modules"),
+        }
+
+        with contextlib.ExitStack() as stack:
+            for attribute, stand_in in stand_ins.items():
+                stack.enter_context(patch.object(helper, attribute, stand_in))
+            yield calls
+
+    @staticmethod
+    def _names(calls):
+        return [name for name, _args in calls]
+
+    @staticmethod
+    def _args_of(calls, name):
+        for called, args in calls:
+            if called == name:
+                return args
+        raise AssertionError(f"main() never called {name}: {[n for n, _ in calls]}")
+
+    def test_every_host_tool_is_checked_before_anything_is_pulled_or_installed(self) -> None:
+        with (
+            self._staged_build(image_kernels=[PRIMARY_KERNEL]) as calls,
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            helper.main()
+
+        checked = [args[0] for name, args in calls if name == "_require_command"]
+        self.assertEqual(checked, ["python3", "rpm", "dnf5", "skopeo", "depmod"])
+
+        # The preflight is only fail-fast if it finishes first. A tool checked
+        # after the pull means a build that downloads the cache image and then
+        # discovers it cannot use it.
+        names = self._names(calls)
+        self.assertEqual(
+            names[: len(checked)],
+            ["_require_command"] * len(checked),
+            f"work is interleaved with the preflight: {names}",
+        )
+        self.assertNotIn("_require_command", names[len(checked) :])
+
+    def test_a_missing_host_tool_stops_the_build_before_the_registry_pull(self) -> None:
+        with (
+            self._staged_build(image_kernels=[PRIMARY_KERNEL], missing_command="depmod") as calls,
+            self.assertRaisesRegex(RuntimeError, "Required command is not available: depmod"),
+        ):
+            helper.main()
+
+        self.assertNotIn("copy_oci_layout_from_registry", self._names(calls))
+        self.assertNotIn("dnf5_install", self._names(calls))
+
+    def test_the_cache_image_is_unpacked_before_the_plan_is_built_from_it(self) -> None:
+        with (
+            self._staged_build(image_kernels=[OLDER_KERNEL, PRIMARY_KERNEL]) as calls,
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            helper.main()
+
+        self.assertEqual(
+            self._names(calls)[len(["python3", "rpm", "dnf5", "skopeo", "depmod"]) :],
+            [
+                "resolve_akmods_image",
+                "image_kernels_from_modules_root",
+                "copy_oci_layout_from_registry",
+                "load_layer_files_from_oci_layout",
+                "unpack_layer_tarballs",
+                "discover_zfs_rpms",
+                "build_install_plan",
+                "dnf5_install",
+                "validate_installed_modules",
+            ],
+        )
+
+        # Each step has to receive what the previous one produced. These are the
+        # arguments a refactor can silently transpose: both unpack_layer_tarballs
+        # and build_install_plan take two positionals of plausible-looking types.
+        self.assertEqual(self._args_of(calls, "copy_oci_layout_from_registry"), (AKMODS_IMAGE,))
+        self.assertEqual(
+            self._args_of(calls, "load_layer_files_from_oci_layout"), (helper.LAYOUT_DIR,)
+        )
+        self.assertEqual(
+            self._args_of(calls, "unpack_layer_tarballs"), (LAYER_FILES, helper.EXTRACT_ROOT)
+        )
+        self.assertEqual(
+            self._args_of(calls, "build_install_plan"),
+            ([OLDER_KERNEL, PRIMARY_KERNEL], DISCOVERED_RPMS),
+        )
+
+    def test_the_kmod_is_installed_last_and_only_for_the_supported_kernel(self) -> None:
+        with (
+            self._staged_build(image_kernels=[OLDER_KERNEL, PRIMARY_KERNEL]) as calls,
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            helper.main()
+
+        (installed,) = self._args_of(calls, "dnf5_install")
+        # Shared RPMs first, then the one kmod. `dnf5 install` is order
+        # insensitive, but the list is also the record of what this image got:
+        # a second kmod appearing here would mean the primary-kernel contract
+        # was widened without anyone deciding to widen it.
+        self.assertEqual(installed, [*INSTALL_PLAN.managed_rpms, INSTALL_PLAN.supported_kmod_rpm])
+        self.assertEqual(
+            [rpm for rpm in installed if rpm.name.startswith("kmod-zfs")],
+            [INSTALL_PLAN.supported_kmod_rpm],
+        )
+
+    def test_the_installed_module_is_validated_for_the_kernel_the_plan_chose(self) -> None:
+        with (
+            self._staged_build(image_kernels=[OLDER_KERNEL, PRIMARY_KERNEL]) as calls,
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            helper.main()
+
+        # Not the newest kernel in the image, not `uname -r`: the release the
+        # plan selected. Passing anything else makes depmod run for a kernel the
+        # image will not boot first, and the missing-module check pass by luck.
+        self.assertEqual(
+            self._args_of(calls, "validate_installed_modules"),
+            (INSTALL_PLAN.supported_kernel_release,),
+        )
+        names = self._names(calls)
+        self.assertLess(names.index("dnf5_install"), names.index("validate_installed_modules"))
+
+    def test_the_plan_is_the_source_of_truth_for_the_kernel_not_the_modules_root(self) -> None:
+        # build_install_plan picks the newest detected kernel today, so for a
+        # real cache the plan's choice and `max(image_kernels)` agree and a
+        # main() that recomputed the value would look correct. They are two
+        # different sources, and only one of them applied the fail-closed rules
+        # that pair a kernel with an actual kmod RPM. This plan names the older
+        # kernel so the two answers differ and the assertion has teeth.
+        older_target = helper.InstallPlan(
+            detected_kernel_releases=[OLDER_KERNEL, PRIMARY_KERNEL],
+            managed_rpms=list(INSTALL_PLAN.managed_rpms),
+            supported_kernel_release=OLDER_KERNEL,
+            supported_kmod_rpm=Path(f"/tmp/rpms/kmod-zfs-{OLDER_KERNEL}-2.4.0.rpm"),
+        )
+
+        with (
+            self._staged_build(
+                image_kernels=[OLDER_KERNEL, PRIMARY_KERNEL], plan=older_target
+            ) as calls,
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            helper.main()
+
+        self.assertEqual(self._args_of(calls, "validate_installed_modules"), (OLDER_KERNEL,))
+        (installed,) = self._args_of(calls, "dnf5_install")
+        self.assertEqual(installed[-1], older_target.supported_kmod_rpm)
+
+    def test_a_plan_that_cannot_be_built_installs_nothing(self) -> None:
+        # build_install_plan is where every fail-closed rule lives. main() has
+        # to let that exception out untouched: a partially installed image root
+        # is worse than a failed build.
+        error = RuntimeError("No kmod-zfs RPM for supported primary kernel")
+        with (
+            self._staged_build(image_kernels=[PRIMARY_KERNEL], plan_error=error) as calls,
+            self.assertRaises(RuntimeError) as raised,
+        ):
+            helper.main()
+
+        self.assertIs(raised.exception, error)
+        self.assertNotIn("dnf5_install", self._names(calls))
+        self.assertNotIn("validate_installed_modules", self._names(calls))
+
+    def test_multiple_image_kernels_are_reported_with_the_primary_one_named(self) -> None:
+        stdout = io.StringIO()
+        with (
+            self._staged_build(image_kernels=[PRIMARY_KERNEL, OLDER_KERNEL]),
+            contextlib.redirect_stdout(stdout),
+        ):
+            helper.main()
+
+        printed = stdout.getvalue()
+        self.assertIn("Detected multiple kernels in the base image", printed)
+        self.assertIn(PRIMARY_KERNEL, printed)
+        self.assertIn(OLDER_KERNEL, printed)
+        # The kernel named as primary is chosen by version order, not by the
+        # order the modules root happened to list. This input is deliberately
+        # newest-first so a `[-1]` would name the older release.
+        self.assertIn(f"supports only the primary kernel {PRIMARY_KERNEL}", printed)
+
+    def test_a_single_kernel_image_prints_no_multi_kernel_notice(self) -> None:
+        stdout = io.StringIO()
+        with (
+            self._staged_build(image_kernels=[PRIMARY_KERNEL]),
+            contextlib.redirect_stdout(stdout),
+        ):
+            helper.main()
+
+        self.assertNotIn("Detected multiple kernels", stdout.getvalue())
 
 
 if __name__ == "__main__":

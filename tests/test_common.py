@@ -20,14 +20,17 @@ from ci_tools.common import (
     GIT_REMOTE_TIMEOUT,
     REGISTRY_METADATA_TIMEOUT,
     REGISTRY_TRANSFER_TIMEOUT,
+    SECRET_ARG_FLAGS,
     CiToolError,
     cosign_verify,
     git_ls_remote_resolve,
     is_missing_image_error,
+    redact_command_args,
     run_cmd,
     run_json_cmd,
     skopeo_copy,
     skopeo_inspect_digest,
+    skopeo_inspect_json,
     skopeo_inspect_json_optional,
     write_github_env,
     write_github_outputs,
@@ -408,6 +411,175 @@ class CommonTests(unittest.TestCase):
                     "LITERAL_EOF": "contains EOF text",
                 },
             )
+
+
+class CredentialArgvTests(unittest.TestCase):
+    """
+    Where the registry credential lands in the argv these helpers build.
+
+    `redact_command_args` keeps secrets out of a failure message, and that is
+    well covered -- but it only redacts values sitting behind a flag named in
+    `SECRET_ARG_FLAGS`. A credential appended positionally is redacted by
+    nothing and prints verbatim into the job log the first time the command
+    fails. So the redaction tests cannot stand in for these: the mutation they
+    cannot catch is exactly the one that moves the value out from behind its
+    flag.
+
+    Every caller of `skopeo_inspect_json` and `skopeo_copy` mocks the helper
+    rather than the process, so until now nothing executed the two lines that
+    assemble those flags.
+    """
+
+    _CREDS = "Danathar:registry-token-value"
+    _SECRET = "registry-token-value"
+
+    def assert_secret_is_redactable(self, argv: list[str], secret: str) -> None:
+        """Assert every occurrence of `secret` sits behind a redacted flag."""
+        self.assertTrue(
+            any(secret in arg for arg in argv),
+            f"{secret!r} does not appear in {argv!r}; the test is asserting nothing",
+        )
+        for index, arg in enumerate(argv):
+            if secret not in arg:
+                continue
+            if "=" in arg and arg.split("=", 1)[0] in SECRET_ARG_FLAGS:
+                continue
+            self.assertGreater(
+                index, 0, f"{arg!r} is the command name, so no flag can precede it"
+            )
+            self.assertIn(
+                argv[index - 1],
+                SECRET_ARG_FLAGS,
+                f"{arg!r} is preceded by {argv[index - 1]!r}, which redaction ignores",
+            )
+        # The property all of the above exists to produce.
+        self.assertNotIn(secret, " ".join(redact_command_args(argv)))
+
+    def test_skopeo_inspect_json_puts_the_credential_behind_creds(self) -> None:
+        with patch("ci_tools.common.run_json_cmd") as run_json_cmd_mock:
+            skopeo_inspect_json(
+                "docker://ghcr.io/example/image:tag", creds=self._CREDS
+            )
+
+        argv = run_json_cmd_mock.call_args.args[0]
+        self.assertEqual(
+            argv,
+            [
+                "skopeo",
+                "inspect",
+                "--creds",
+                self._CREDS,
+                "docker://ghcr.io/example/image:tag",
+            ],
+        )
+        self.assert_secret_is_redactable(argv, self._SECRET)
+        self.assertEqual(
+            run_json_cmd_mock.call_args.kwargs["timeout"], REGISTRY_METADATA_TIMEOUT
+        )
+
+    def test_skopeo_inspect_json_omits_creds_when_none_is_given(self) -> None:
+        # The anonymous form has to stay anonymous: `--creds` with an empty
+        # value is not the same request, and skopeo rejects it.
+        with patch("ci_tools.common.run_json_cmd") as run_json_cmd_mock:
+            skopeo_inspect_json("docker://ghcr.io/example/image:tag")
+
+        self.assertEqual(
+            run_json_cmd_mock.call_args.args[0],
+            ["skopeo", "inspect", "docker://ghcr.io/example/image:tag"],
+        )
+
+    def test_skopeo_copy_puts_the_credential_behind_src_and_dest_creds(self) -> None:
+        with patch("ci_tools.common.run_cmd") as run_cmd_mock:
+            skopeo_copy("docker://src:tag", "docker://dst:tag", creds=self._CREDS)
+
+        argv = run_cmd_mock.call_args.args[0]
+        # Both ends are authenticated: a copy between two references in the
+        # same private registry needs the credential on each side. Assert the
+        # flags exist before indexing off them, so dropping one reads as a
+        # failed assertion rather than a ValueError from `.index`.
+        self.assertIn("--src-creds", argv)
+        self.assertIn("--dest-creds", argv)
+        self.assertEqual(argv[argv.index("--src-creds") + 1], self._CREDS)
+        self.assertEqual(argv[argv.index("--dest-creds") + 1], self._CREDS)
+        # Source and destination stay last, after the flags.
+        self.assertEqual(argv[-2:], ["docker://src:tag", "docker://dst:tag"])
+        self.assert_secret_is_redactable(argv, self._SECRET)
+
+    def test_skopeo_copy_omits_credential_flags_when_none_is_given(self) -> None:
+        with patch("ci_tools.common.run_cmd") as run_cmd_mock:
+            skopeo_copy("docker://src:tag", "docker://dst:tag")
+
+        argv = run_cmd_mock.call_args.args[0]
+        self.assertNotIn("--src-creds", argv)
+        self.assertNotIn("--dest-creds", argv)
+
+
+class RunCmdEnvironmentTests(unittest.TestCase):
+    """
+    `run_cmd`s environment merge and its no-capture return.
+
+    The merge exists for one caller: `sign_image` passes `COSIGN_PASSWORD` and
+    `COSIGN_PRIVATE_KEY` so cosign reads the key as `env://COSIGN_PRIVATE_KEY`
+    instead of from argv, which is what keeps the private key out of the
+    process table. `tests/test_sign_image.py` substitutes a fake command
+    runner and asserts the kwargs it receives, so the merge itself never ran
+    under test. Dropping the `dict(os.environ)` half hands cosign two
+    variables and no `PATH`; dropping the `update` half means the key never
+    arrives at all.
+    """
+
+    def test_env_overrides_are_layered_on_top_of_the_process_environment(self) -> None:
+        with patch.dict(os.environ, {"AMBIENT": "from-os-environ"}, clear=False), patch(
+            "ci_tools.common.subprocess.run"
+        ) as subprocess_run:
+            subprocess_run.return_value = subprocess.CompletedProcess([], 0, stdout="ok")
+            run_cmd(["cosign", "sign"], env={"COSIGN_PASSWORD": "injected"})
+
+        command_env = subprocess_run.call_args.kwargs["env"]
+        self.assertEqual(command_env["COSIGN_PASSWORD"], "injected")
+        # Without the inherited half, the child would run with no PATH.
+        self.assertEqual(command_env["AMBIENT"], "from-os-environ")
+        self.assertIn("PATH", command_env)
+
+    def test_env_overrides_win_over_a_variable_of_the_same_name(self) -> None:
+        with patch.dict(os.environ, {"COSIGN_PASSWORD": "stale"}, clear=False), patch(
+            "ci_tools.common.subprocess.run"
+        ) as subprocess_run:
+            subprocess_run.return_value = subprocess.CompletedProcess([], 0, stdout="ok")
+            run_cmd(["cosign", "sign"], env={"COSIGN_PASSWORD": "fresh"})
+
+        self.assertEqual(
+            subprocess_run.call_args.kwargs["env"]["COSIGN_PASSWORD"], "fresh"
+        )
+
+    def test_the_merge_does_not_mutate_the_process_environment(self) -> None:
+        # The override is command-specific by contract: a secret handed to one
+        # child must not leak into every later command in the same job.
+        with patch("ci_tools.common.subprocess.run") as subprocess_run:
+            subprocess_run.return_value = subprocess.CompletedProcess([], 0, stdout="ok")
+            run_cmd(["cosign", "sign"], env={"COSIGN_PRIVATE_KEY": "key-material"})
+
+        self.assertNotIn("COSIGN_PRIVATE_KEY", os.environ)
+
+    def test_no_env_argument_inherits_the_environment_untouched(self) -> None:
+        with patch("ci_tools.common.subprocess.run") as subprocess_run:
+            subprocess_run.return_value = subprocess.CompletedProcess([], 0, stdout="ok")
+            run_cmd(["skopeo", "inspect", "example"])
+
+        # None means "inherit", which is not the same as passing a copy.
+        self.assertIsNone(subprocess_run.call_args.kwargs["env"])
+
+    def test_not_capturing_output_returns_an_empty_string(self) -> None:
+        # Every `skopeo copy`, every `just` target and the cosign sign call go
+        # through this path. `subprocess.run` leaves `stdout` as None when it
+        # is not capturing, so returning `result.stdout` here would hand the
+        # caller a None where the signature promises a str.
+        with patch("ci_tools.common.subprocess.run") as subprocess_run:
+            subprocess_run.return_value = subprocess.CompletedProcess([], 0, stdout=None)
+            result = run_cmd(["skopeo", "copy", "a", "b"], capture_output=False)
+
+        self.assertEqual(result, "")
+        self.assertIs(subprocess_run.call_args.kwargs["capture_output"], False)
 
 
 if __name__ == "__main__":

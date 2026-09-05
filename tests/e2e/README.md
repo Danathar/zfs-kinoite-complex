@@ -31,7 +31,8 @@ on exit status and stderr rather than on a raised exception.
 suite has to stay runnable with nothing installed, so the only commands ever
 dispatched here are the ones whose work is env-in, file-out:
 `export-repo-defaults`, `compute-candidate-tag`, `compute-branch-metadata`,
-`export-registry-context`, and `write-build-inputs-manifest`.
+`compose-branch-image-tag`, `export-registry-context`, and
+`write-build-inputs-manifest`.
 
 That constraint is stricter than it looks, and the command-wiring test is where
 it bites. Checking "does the CLI accept this name?" by running the name would

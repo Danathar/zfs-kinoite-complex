@@ -50,6 +50,19 @@
     },
     {
       "customType": "regex",
+      "description": "Track the digest of the Homebrew payload image recorded in ci/defaults.json. This payload's /system_files is copied wholesale into the published image's root and its services are preset to run on first boot, so it must not float on `latest`: ci_tools/resolve_build_inputs.py resolves this pinned ref each run and the workflows pass it to the Containerfile as BREW_IMAGE. Updates arrive as reviewable PRs here (never automerged, per the pin/pinDigest rule below) instead of silently changing what gets signed and promoted. Digest-only pin, so currentValueTemplate names the tag whose digest is followed.",
+      "managerFilePatterns": [
+        "/^ci/defaults\\.json$/"
+      ],
+      "matchStrings": [
+        "\"DEFAULT_BREW_IMAGE\":\\s*\"ghcr\\.io/ublue-os/brew@(?<currentDigest>sha256:[0-9a-f]{64})\""
+      ],
+      "depNameTemplate": "ghcr.io/ublue-os/brew",
+      "datasourceTemplate": "docker",
+      "currentValueTemplate": "latest"
+    },
+    {
+      "customType": "regex",
       "description": "Track the ruff version pinned for CI linting, so a new release surfaces as a reviewable PR (with its own lint-diff CI run) instead of silently changing default lint rules on an unrelated PR.",
       "managerFilePatterns": [
         "/^\\.github/workflows/test\\.yml$/"

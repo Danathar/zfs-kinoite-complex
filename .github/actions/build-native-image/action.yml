@@ -15,6 +15,9 @@ inputs:
   akmods_image:
     description: Shared akmods cache image ref.
     required: true
+  brew_image:
+    description: Digest-pinned Homebrew payload image ref.
+    required: true
   akmods_upstream_ref:
     description: Resolved akmods fork commit SHA used for this build. Recorded as an OCI image label for provenance.
     required: false
@@ -63,6 +66,7 @@ runs:
         IMAGE_TAG: ${{ inputs.image_tag }}
         BASE_IMAGE: ${{ inputs.base_image }}
         AKMODS_IMAGE: ${{ inputs.akmods_image }}
+        BREW_IMAGE: ${{ inputs.brew_image }}
         IMAGE_REPO: ${{ inputs.image_repo }}
         SIGNING_KEY_FILENAME: ${{ inputs.signing_key_filename }}
         # Recorded as OCI image labels below, as provenance for the run.
@@ -93,11 +97,13 @@ runs:
           -f ./Containerfile \
           --build-arg "BASE_IMAGE=${BASE_IMAGE}" \
           --build-arg "AKMODS_IMAGE=${AKMODS_IMAGE}" \
+          --build-arg "BREW_IMAGE=${BREW_IMAGE}" \
           --build-arg "IMAGE_REPO=${IMAGE_REPO}" \
           --build-arg "SIGNING_KEY_FILENAME=${SIGNING_KEY_FILENAME}" \
           --label "org.zfs-kinoite-complex.akmods-ref=${AKMODS_UPSTREAM_REF}" \
           --label "org.zfs-kinoite-complex.akmods-image=${AKMODS_IMAGE}" \
           --label "org.zfs-kinoite-complex.base-image=${BASE_IMAGE}" \
+          --label "org.zfs-kinoite-complex.brew-image=${BREW_IMAGE}" \
           --label "org.zfs-kinoite-complex.stable-signal-image=${STABLE_SIGNAL_IMAGE}" \
           --label "org.zfs-kinoite-complex.stable-signal-digest=${STABLE_SIGNAL_DIGEST}" \
           --label "org.zfs-kinoite-complex.zfs-version=${ZFS_VERSION}" \

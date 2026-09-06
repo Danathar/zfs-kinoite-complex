@@ -338,6 +338,7 @@ class LockFileAkmodsRefInvariantTests(unittest.TestCase):
                 "LOCK_FILE": str(lock_path),
                 "BUILD_CONTAINER_REF": "ghcr.io/example/build@sha256:cafef00d",
                 "DEFAULT_AKMODS_REF": "a" * 40,
+                "DEFAULT_BREW_IMAGE": "ghcr.io/example/brew@sha256:beefcafe",
             }
             with patch.dict(os.environ, env, clear=False):
                 configured = resolve_configured_inputs()
@@ -366,6 +367,7 @@ class LockFileAkmodsRefInvariantTests(unittest.TestCase):
                 "LOCK_FILE": str(lock_path),
                 "BUILD_CONTAINER_REF": "ghcr.io/example/build@sha256:cafef00d",
                 "DEFAULT_AKMODS_REF": "a" * 40,
+                "DEFAULT_BREW_IMAGE": "ghcr.io/example/brew@sha256:beefcafe",
             }
             with patch.dict(os.environ, env, clear=False):
                 configured = resolve_configured_inputs()
@@ -378,6 +380,7 @@ class LockFileAkmodsRefInvariantTests(unittest.TestCase):
             "LOCK_FILE": "ci/inputs.lock.json",
             "BUILD_CONTAINER_REF": "ghcr.io/example/build@sha256:cafef00d",
             "DEFAULT_AKMODS_REF": "a" * 40,
+            "DEFAULT_BREW_IMAGE": "ghcr.io/example/brew@sha256:beefcafe",
             "DEFAULT_ZFS_MINOR_VERSION": "2.4",
         }
         with patch.dict(os.environ, env, clear=False):
@@ -415,6 +418,7 @@ class LockFileReplayValidationTests(unittest.TestCase):
                 "LOCK_FILE": str(lock_path),
                 "BUILD_CONTAINER_REF": "ghcr.io/example/build@sha256:cafef00d",
                 "DEFAULT_AKMODS_REF": "a" * 40,
+                "DEFAULT_BREW_IMAGE": "ghcr.io/example/brew@sha256:beefcafe",
             }
             with (
                 patch.dict(os.environ, env, clear=False),
@@ -437,6 +441,7 @@ class LockFileReplayValidationTests(unittest.TestCase):
                 "LOCK_FILE": str(lock_path),
                 "BUILD_CONTAINER_REF": "ghcr.io/example/build@sha256:cafef00d",
                 "DEFAULT_AKMODS_REF": "a" * 40,
+                "DEFAULT_BREW_IMAGE": "ghcr.io/example/brew@sha256:beefcafe",
             }
             with (
                 patch.dict(os.environ, env, clear=False),
@@ -459,12 +464,86 @@ class LockFileReplayValidationTests(unittest.TestCase):
                 "LOCK_FILE": str(lock_path),
                 "BUILD_CONTAINER_REF": "ghcr.io/example/build@sha256:cafef00d",
                 "DEFAULT_AKMODS_REF": "a" * 40,
+                "DEFAULT_BREW_IMAGE": "ghcr.io/example/brew@sha256:beefcafe",
             }
             with (
                 patch.dict(os.environ, env, clear=False),
                 self.assertRaises(CiToolError),
             ):
                 resolve_configured_inputs()
+
+    def test_lock_replay_brew_image_placeholder_raises(self) -> None:
+        lock_payload = {
+            "version": 1,
+            "base_image": "ghcr.io/example/base@sha256:deadbeef",
+            "build_container": "ghcr.io/example/build@sha256:cafef00d",
+            "brew_image": "ghcr.io/example/brew@REPLACE_ME",
+            "zfs_minor_version": "2.4",
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            lock_path = Path(temp_dir) / "inputs.lock.json"
+            lock_path.write_text(json.dumps(lock_payload), encoding="utf-8")
+            env = {
+                "USE_INPUT_LOCK": "true",
+                "LOCK_FILE": str(lock_path),
+                "BUILD_CONTAINER_REF": "ghcr.io/example/build@sha256:cafef00d",
+                "DEFAULT_AKMODS_REF": "a" * 40,
+                "DEFAULT_BREW_IMAGE": "ghcr.io/example/brew@sha256:beefcafe",
+            }
+            with (
+                patch.dict(os.environ, env, clear=False),
+                self.assertRaises(CiToolError),
+            ):
+                resolve_configured_inputs()
+
+    def test_lock_replay_uses_the_locked_brew_image(self) -> None:
+        # A replay that pins brew_image must build with that exact payload, not
+        # today's DEFAULT_BREW_IMAGE, or the "replay" ships different content
+        # in / than the run it claims to reproduce.
+        lock_payload = {
+            "version": 1,
+            "base_image": "ghcr.io/example/base@sha256:deadbeef",
+            "build_container": "ghcr.io/example/build@sha256:cafef00d",
+            "brew_image": "ghcr.io/example/brew@sha256:locked",
+            "zfs_minor_version": "2.4",
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            lock_path = Path(temp_dir) / "inputs.lock.json"
+            lock_path.write_text(json.dumps(lock_payload), encoding="utf-8")
+            env = {
+                "USE_INPUT_LOCK": "true",
+                "LOCK_FILE": str(lock_path),
+                "BUILD_CONTAINER_REF": "ghcr.io/example/build@sha256:cafef00d",
+                "DEFAULT_AKMODS_REF": "a" * 40,
+                "DEFAULT_BREW_IMAGE": "ghcr.io/example/brew@sha256:beefcafe",
+            }
+            with patch.dict(os.environ, env, clear=False):
+                configured = resolve_configured_inputs()
+
+        self.assertEqual(configured.brew_image_ref, "ghcr.io/example/brew@sha256:locked")
+
+    def test_lock_replay_empty_brew_image_falls_back_to_default(self) -> None:
+        lock_payload = {
+            "version": 1,
+            "base_image": "ghcr.io/example/base@sha256:deadbeef",
+            "build_container": "ghcr.io/example/build@sha256:cafef00d",
+            "brew_image": "",
+            "zfs_minor_version": "2.4",
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            lock_path = Path(temp_dir) / "inputs.lock.json"
+            lock_path.write_text(json.dumps(lock_payload), encoding="utf-8")
+            env = {
+                "USE_INPUT_LOCK": "true",
+                "LOCK_FILE": str(lock_path),
+                "BUILD_CONTAINER_REF": "ghcr.io/example/build@sha256:cafef00d",
+                "DEFAULT_AKMODS_REF": "a" * 40,
+                "DEFAULT_BREW_IMAGE": "ghcr.io/example/brew@sha256:beefcafe",
+            }
+            with patch.dict(os.environ, env, clear=False):
+                configured = resolve_configured_inputs()
+
+        self.assertEqual(configured.brew_image_ref, "ghcr.io/example/brew@sha256:beefcafe")
 
     def test_lock_replay_build_container_mismatch_raises(self) -> None:
         # The build container is no longer settable per run (it selects the
@@ -485,6 +564,7 @@ class LockFileReplayValidationTests(unittest.TestCase):
                 "LOCK_FILE": str(lock_path),
                 "BUILD_CONTAINER_REF": "ghcr.io/example/build@sha256:cafef00d",
                 "DEFAULT_AKMODS_REF": "a" * 40,
+                "DEFAULT_BREW_IMAGE": "ghcr.io/example/brew@sha256:beefcafe",
             }
             with (
                 patch.dict(os.environ, env, clear=False),
@@ -543,6 +623,7 @@ class ResolveBuildInputsRegistryGuardTests(unittest.TestCase):
 
     BASE_REF = "ghcr.io/example/kinoite:43"
     BUILD_REF = "ghcr.io/example/build:latest"
+    BREW_REF = "ghcr.io/example/brew@sha256:beefcafe"
     BASE_DIGEST = "sha256:deadbeef"
     VERSION_LABEL = "43.20260901.1"
 
@@ -554,6 +635,7 @@ class ResolveBuildInputsRegistryGuardTests(unittest.TestCase):
             "DEFAULT_BASE_IMAGE": self.BASE_REF,
             "DEFAULT_ZFS_MINOR_VERSION": "2.4",
             "DEFAULT_AKMODS_REF": "a" * 40,
+            "DEFAULT_BREW_IMAGE": self.BREW_REF,
             "AKMODS_UPSTREAM_REF": "",
             "AKMODS_UPSTREAM_TRACK": "",
             "AKMODS_UPSTREAM_REPO": "",
@@ -573,9 +655,16 @@ class ResolveBuildInputsRegistryGuardTests(unittest.TestCase):
         payload.update(overrides)
         return payload
 
-    def _resolve(self, *, base_inspect: dict, build_inspect: dict):
+    def _resolve(self, *, base_inspect: dict, build_inspect: dict, brew_inspect: dict | None = None):
+        if brew_inspect is None:
+            brew_inspect = self._brew_inspect()
+
         def inspect_json(ref: str) -> dict:
-            return base_inspect if "kinoite" in ref else build_inspect
+            if "kinoite" in ref:
+                return base_inspect
+            if "brew" in ref:
+                return brew_inspect
+            return build_inspect
 
         with (
             patch.dict(os.environ, self._env(), clear=False),
@@ -600,6 +689,9 @@ class ResolveBuildInputsRegistryGuardTests(unittest.TestCase):
     def _build_inspect(self) -> dict:
         return {"Name": "ghcr.io/example/build", "Digest": "sha256:cafef00d"}
 
+    def _brew_inspect(self) -> dict:
+        return {"Name": "ghcr.io/example/brew", "Digest": "sha256:beefcafe"}
+
     def test_resolves_pinned_refs_and_newest_kernel_on_the_happy_path(self) -> None:
         resolution = self._resolve(
             base_inspect=self._base_inspect(),
@@ -610,6 +702,7 @@ class ResolveBuildInputsRegistryGuardTests(unittest.TestCase):
         self.assertEqual(inputs.base_image_pinned, f"ghcr.io/example/kinoite@{self.BASE_DIGEST}")
         self.assertEqual(inputs.base_image_tag, self.VERSION_LABEL)
         self.assertEqual(inputs.build_container_pinned, "ghcr.io/example/build@sha256:cafef00d")
+        self.assertEqual(inputs.brew_image_pinned, "ghcr.io/example/brew@sha256:beefcafe")
         # The newest installed kernel wins, not the label, and not list order.
         self.assertEqual(inputs.kernel_release, "6.16.10-200.fc43.x86_64")
         self.assertEqual(
@@ -671,6 +764,22 @@ class ResolveBuildInputsRegistryGuardTests(unittest.TestCase):
         self.assertEqual(
             str(caught.exception),
             f"Failed to resolve build container digest for {self.BUILD_REF}",
+        )
+
+    def test_brew_image_without_digest_raises(self) -> None:
+        # The brew payload lands in the published image's root, so a ref this
+        # run cannot pin to a digest must stop the run, not fall through to
+        # whatever the Containerfile's floating default points at.
+        with self.assertRaises(CiToolError) as caught:
+            self._resolve(
+                base_inspect=self._base_inspect(),
+                build_inspect=self._build_inspect(),
+                brew_inspect={"Name": "ghcr.io/example/brew", "Digest": ""},
+            )
+
+        self.assertEqual(
+            str(caught.exception),
+            f"Failed to resolve brew image digest for {self.BREW_REF}",
         )
 
 
@@ -758,6 +867,9 @@ class ResolveBuildInputsMainTests(unittest.TestCase):
             build_container_ref="quay.io/fedora/fedora:43",
             build_container_pinned="quay.io/fedora/fedora@sha256:builder",
             build_container_digest="sha256:builder",
+            brew_image_ref="ghcr.io/ublue-os/brew@sha256:brewref",
+            brew_image_pinned="ghcr.io/ublue-os/brew@sha256:brewpin",
+            brew_image_digest="sha256:brewpin",
             zfs_minor_version="2.4",
             zfs_version="2.4.1",
             akmods_upstream_ref="0123456789abcdef0123456789abcdef01234567",
@@ -814,6 +926,9 @@ class ResolveBuildInputsMainTests(unittest.TestCase):
         self.assertIn("Resolved base image tag: kinoite-main:latest-20260906\n", stdout)
         self.assertIn(
             "Resolved build container: quay.io/fedora/fedora@sha256:builder\n", stdout
+        )
+        self.assertIn(
+            "Resolved brew image: ghcr.io/ublue-os/brew@sha256:brewpin\n", stdout
         )
         self.assertIn("Supported primary kernel release: 6.17.4-200.fc43.x86_64\n", stdout)
         self.assertIn(

@@ -71,6 +71,15 @@ outputs:
   build_container_digest:
     description: Build container digest used for this run.
     value: ${{ steps.resolve.outputs.build_container_digest }}
+  brew_image_ref:
+    description: Homebrew payload image ref before digest pinning.
+    value: ${{ steps.resolve.outputs.brew_image_ref }}
+  brew_image_pinned:
+    description: Digest-pinned Homebrew payload image ref for the final image build.
+    value: ${{ steps.resolve.outputs.brew_image_pinned }}
+  brew_image_digest:
+    description: Homebrew payload image digest used for this run.
+    value: ${{ steps.resolve.outputs.brew_image_digest }}
   zfs_minor_version:
     description: OpenZFS minor line used for this run.
     value: ${{ steps.resolve.outputs.zfs_minor_version }}
@@ -156,6 +165,9 @@ runs:
         BUILD_CONTAINER_REF: ${{ steps.resolve.outputs.build_container_ref }}
         BUILD_CONTAINER_PINNED: ${{ steps.resolve.outputs.build_container_pinned }}
         BUILD_CONTAINER_DIGEST: ${{ steps.resolve.outputs.build_container_digest }}
+        BREW_IMAGE_REF: ${{ steps.resolve.outputs.brew_image_ref }}
+        BREW_IMAGE_PINNED: ${{ steps.resolve.outputs.brew_image_pinned }}
+        BREW_IMAGE_DIGEST: ${{ steps.resolve.outputs.brew_image_digest }}
         ZFS_MINOR_VERSION: ${{ steps.resolve.outputs.zfs_minor_version }}
         ZFS_VERSION: ${{ steps.resolve.outputs.zfs_version }}
         AKMODS_UPSTREAM_REF: ${{ steps.resolve.outputs.akmods_upstream_ref }}

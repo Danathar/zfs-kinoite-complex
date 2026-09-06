@@ -160,10 +160,11 @@ The main workflow resolves and pins:
 
 1. base image ref, digest, and stable tag
 2. build container ref and digest for the akmods job
-3. Fedora major version
-4. every installed kernel found in `/lib/modules`
-5. resolved akmods source commit SHA
-6. ZFS minor version line
+3. Homebrew payload image ref and digest (from `DEFAULT_BREW_IMAGE` in `ci/defaults.json`)
+4. Fedora major version
+5. every installed kernel found in `/lib/modules`
+6. resolved akmods source commit SHA
+7. ZFS minor version line
 
 Those values are written to a saved workflow output file named `build-inputs-<run_id>` so the same input set can be replayed later.
 
@@ -291,7 +292,7 @@ The final image is defined by the repository root [`Containerfile`](../Container
 It does four important things:
 
 1. starts from the pinned `BASE_IMAGE`
-2. imports Homebrew from the `ublue-os/brew` payload because Fedora Kinoite does not ship it
+2. imports Homebrew from the `ublue-os/brew` payload because Fedora Kinoite does not ship it; CI pins this payload too, passing the digest-pinned `DEFAULT_BREW_IMAGE` from `ci/defaults.json` as `BREW_IMAGE` and recording it in the `org.zfs-kinoite-complex.brew-image` label
 3. runs [`build_files/build-image.sh`](../build_files/build-image.sh)
 4. runs `bootc container lint`
 

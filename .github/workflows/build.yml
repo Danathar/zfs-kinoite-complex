@@ -131,6 +131,7 @@ jobs:
       build_container_ref: ${{ steps.prepare.outputs.build_container_ref }}
       build_container_pinned: ${{ steps.prepare.outputs.build_container_pinned }}
       build_container_digest: ${{ steps.prepare.outputs.build_container_digest }}
+      brew_image_pinned: ${{ steps.prepare.outputs.brew_image_pinned }}
       zfs_minor_version: ${{ steps.prepare.outputs.zfs_minor_version }}
       zfs_version: ${{ steps.prepare.outputs.zfs_version }}
       akmods_upstream_ref: ${{ steps.prepare.outputs.akmods_upstream_ref }}
@@ -360,6 +361,7 @@ jobs:
           image_tag: ${{ steps.tags.outputs.candidate_tag }}
           base_image: ${{ needs.build-zfs-akmods.outputs.base_image_pinned }}
           akmods_image: ${{ needs.build-zfs-akmods.outputs.akmods_image_pinned }}
+          brew_image: ${{ needs.build-zfs-akmods.outputs.brew_image_pinned }}
           akmods_upstream_ref: ${{ needs.build-zfs-akmods.outputs.akmods_upstream_ref }}
           stable_signal_image: ${{ needs.preflight.outputs.stable_signal_ref }}
           stable_signal_digest: ${{ needs.preflight.outputs.stable_signal_digest }}

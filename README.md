@@ -1,12 +1,15 @@
 # zfs-kinoite-complex
 
 [![build](https://github.com/Danathar/zfs-kinoite-complex/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/Danathar/zfs-kinoite-complex/actions/workflows/build.yml)
-
+[![tests](https://github.com/Danathar/zfs-kinoite-complex/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/Danathar/zfs-kinoite-complex/actions/workflows/test.yml)
+[![nightly compliance](https://github.com/Danathar/zfs-kinoite-complex/actions/workflows/nightly-compliance.yml/badge.svg?branch=main)](https://github.com/Danathar/zfs-kinoite-complex/actions/workflows/nightly-compliance.yml)
 [![last good build](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FDanathar%2Fzfs-kinoite-complex%2Fstatus%2Flast-good-build-badge.json)](https://github.com/Danathar/zfs-kinoite-complex/pkgs/container/zfs-kinoite-complex)
-
 [![OpenZFS/kernel status](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FDanathar%2Fzfs-kinoite-complex%2Fstatus%2Fakmods-badge.json)](https://github.com/Danathar/zfs-kinoite-complex/issues?q=is%3Aissue+is%3Aopen+label%3Aakmods-failure)
-
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Danathar/zfs-kinoite-complex)
+[![Maintenance assisted by Hivecommons Hive](https://img.shields.io/badge/maintenance%20assisted%20by-Hivecommons%20Hive-1f6feb)](https://github.com/hivecommons/hive)
+[![ACMM L4 Security-Aware](https://img.shields.io/badge/ACMM-L4%20Security--Aware-2da44e)](https://github.com/hivecommons/hive#acmm-levels)
+[![AI assisted](https://img.shields.io/badge/AI-assisted-d29922)](#about-this-project)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 
 ## Why This Repo Exists
 
@@ -35,9 +38,10 @@ is the version it attempts to build and install.
 > working here must read [`CLAUDE.md`](./CLAUDE.md) first.
 
 > [!NOTE]
-> Developed with significant AI assistance. For a simpler, more direct approach to the same
-> problem, see [`aurora-zfs-simple`](https://github.com/Danathar/aurora-zfs-simple) — the minimal
-> expression of the same idea. This repo carries the fuller pipeline: candidate-first promotion,
+> Developed with significant AI assistance — see [About this project](#about-this-project).
+> For a simpler, more direct approach to the same problem, see
+> [`aurora-zfs-simple`](https://github.com/Danathar/aurora-zfs-simple) — the minimal expression
+> of the same idea. This repo carries the fuller pipeline: candidate-first promotion,
 > input pinning, digest resolution, shared akmods caching, image signing, and unit tests
 > throughout.
 
@@ -100,3 +104,36 @@ before redistributing this image or basing a downstream image on it.
 - `Danathar/aurora-zfs-simple`: https://github.com/Danathar/aurora-zfs-simple (simpler daily-driver approach)
 - `ublue-os/brew`: https://github.com/ublue-os/brew
 - OpenZFS releases: https://github.com/openzfs/zfs/releases
+
+## About this project
+
+> [!NOTE]
+> **This project was developed with significant AI assistance and should be treated
+> cautiously.** Read its output the way you would read any unreviewed contribution.
+>
+> It is a third-party image. It is not an official Universal Blue image, is not sanctioned by
+> the Universal Blue project, is not an official Fedora image, is not sanctioned by the Fedora
+> Project, and is not affiliated with OpenZFS.
+>
+> It is provided as-is, with no promise that it is safe for your machines, your pools, or your
+> data. [`docs/safety-model.md`](./docs/safety-model.md) states what this pipeline actually
+> proves and what it does not. The maintainer is not responsible for data loss, unbootable
+> systems, failed builds, or other consequences of using it.
+
+> [!NOTE]
+> **Maintenance on this repository is assisted by
+> [Hivecommons Hive](https://github.com/hivecommons/hive) at ACMM level 4.**
+>
+> The repository is maintained by [@Danathar](https://github.com/Danathar). Hive orchestrates a
+> fleet of AI agents that continuously review this codebase and report what they find as issues
+> here.
+>
+> At **L4 (Security-Aware)** all agents may file issues, and the quality, sec-check and CI
+> agents may additionally open pull requests that carry a `hold` label. The rest stay advisory:
+> they report, they do not act. Every change is still reviewed and merged by a human
+> maintainer.
+>
+> Labels in this repository carry approval authority, and automation here must never apply one.
+> [`docs/SECURITY-AI.md`](./docs/SECURITY-AI.md) records which labels those are and why.
+>
+> Learn more: [Hive](https://github.com/hivecommons/hive) · [Hive Hub](https://hive.kubestellar.io) · [full ACMM policy matrix](https://github.com/hivecommons/hive/blob/v4/src/docs/acmm-policy-matrix.md)

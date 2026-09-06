@@ -24,7 +24,7 @@
     "files/scripts/configure_signing_policy.py": 55,
     "shared/__init__.py": 0,
     "shared/kernel_release.py": 5,
-    "shared/oci_layout.py": 24
+    "shared/oci_layout.py": 26
   },
   "unmeasured": {
     "Containerfile": "Executes only inside an image build. Nothing on the host reaches it, so there is no seam to measure. Its happy path runs on every build.yml, build-pr.yml and build-branch.yml run; its failure branches do not.",

@@ -13,9 +13,15 @@ import tempfile
 import unittest
 import unittest.mock
 from pathlib import Path
+from typing import ClassVar
 
 from ci_tools.common import CiToolError
-from ci_tools.sign_image import image_digest_ref, image_tag_ref, sign_published_image
+from ci_tools.sign_image import (
+    image_digest_ref,
+    image_tag_ref,
+    main,
+    sign_published_image,
+)
 
 
 class SignImageTests(unittest.TestCase):
@@ -310,6 +316,121 @@ class SignImageTests(unittest.TestCase):
         repo_key = Path(__file__).resolve().parent.parent / "cosign.pub"
         self.assertEqual(calls[1][0][4], str(repo_key))
         self.assertEqual(digest_ref, "ghcr.io/danathar/zfs-kinoite-complex@sha256:stable")
+
+
+class SignImageMainTests(unittest.TestCase):
+    """
+    Cover `main()`, the layer between the workflow step's environment and
+    `sign_published_image`.
+
+    Everything above this class calls `sign_published_image` with explicit
+    keywords, so none of it observes which environment variable supplies which
+    argument. That mapping is the whole job of `main()`: a swap of `IMAGE_NAME`
+    and `IMAGE_TAG` here signs a real, valid signature over the wrong image, and
+    the verification step that follows would pass on it.
+    """
+
+    ENV: ClassVar[dict[str, str]] = {
+        "IMAGE_ORG": "danathar",
+        "IMAGE_NAME": "zfs-kinoite-complex",
+        "IMAGE_TAG": "43-20260906",
+        "COSIGN_PRIVATE_KEY": "cosign-private-key-material",
+    }
+
+    def _run_main(self, env: dict[str, str]) -> list[dict[str, str]]:
+        """Run `main()` under `env` and return the recorded signing calls."""
+
+        calls: list[dict[str, str]] = []
+
+        def fake_sign(**kwargs: str) -> str:
+            calls.append(kwargs)
+            return "ghcr.io/danathar/zfs-kinoite-complex@sha256:recorded"
+
+        with (
+            unittest.mock.patch.dict(os.environ, env, clear=True),
+            unittest.mock.patch("ci_tools.sign_image.sign_published_image", fake_sign),
+        ):
+            main()
+
+        return calls
+
+    def test_each_variable_reaches_the_signing_parameter_it_names(self) -> None:
+        # Compared as a whole dict on purpose. Asserting one field at a time
+        # would still pass if two of the others were exchanged, which is the
+        # exact mistake this function can make.
+        calls = self._run_main({**self.ENV, "IMAGE_DIGEST": "sha256:pinned"})
+
+        self.assertEqual(
+            calls,
+            [
+                {
+                    "image_org": "danathar",
+                    "image_name": "zfs-kinoite-complex",
+                    "image_tag": "43-20260906",
+                    "cosign_private_key": "cosign-private-key-material",
+                    "image_digest": "sha256:pinned",
+                }
+            ],
+        )
+
+    def test_an_owner_with_capitals_is_lowercased_before_it_becomes_a_registry_path(
+        self,
+    ) -> None:
+        # GHCR paths are lowercase. `Danathar` is how the org is spelled on
+        # GitHub, and it is what `github.repository_owner` expands to, so the
+        # normalization has to happen here rather than in the workflow.
+        calls = self._run_main({**self.ENV, "IMAGE_ORG": "Danathar"})
+
+        self.assertEqual(calls[0]["image_org"], "danathar")
+
+    def test_a_digest_exported_by_an_earlier_step_is_stripped_before_use(self) -> None:
+        # A digest read back out of `$GITHUB_OUTPUT`, or produced by a shell
+        # command substitution, commonly arrives with a trailing newline.
+        # Unstripped it becomes part of the `@sha256:...` ref and the registry
+        # lookup fails on a ref that looks correct in the log.
+        calls = self._run_main({**self.ENV, "IMAGE_DIGEST": "  sha256:pinned\n"})
+
+        self.assertEqual(calls[0]["image_digest"], "sha256:pinned")
+
+    def test_an_unset_digest_becomes_the_empty_string_that_selects_tag_lookup(
+        self,
+    ) -> None:
+        # `sign_published_image` treats an empty digest as "resolve the tag".
+        # Passing `None` through instead would build the ref `...@None`.
+        calls = self._run_main(dict(self.ENV))
+
+        self.assertEqual(calls[0]["image_digest"], "")
+
+    def test_a_blank_digest_variable_also_selects_tag_lookup(self) -> None:
+        # A workflow that always sets `IMAGE_DIGEST: ${{ steps.x.outputs.d }}`
+        # sets it to the empty string when that step did not run.
+        calls = self._run_main({**self.ENV, "IMAGE_DIGEST": "   "})
+
+        self.assertEqual(calls[0]["image_digest"], "")
+
+    def test_a_missing_required_variable_stops_before_anything_is_signed(self) -> None:
+        def exploding_sign(**_kwargs: str) -> str:
+            raise AssertionError("nothing may be signed with an incomplete environment")
+
+        for missing in sorted(self.ENV):
+            with self.subTest(missing=missing):
+                env = {name: value for name, value in self.ENV.items() if name != missing}
+
+                with (
+                    unittest.mock.patch.dict(os.environ, env, clear=True),
+                    unittest.mock.patch(
+                        "ci_tools.sign_image.sign_published_image", exploding_sign
+                    ),
+                    self.assertRaises(CiToolError) as raised,
+                ):
+                    main()
+
+                # The variable is named so the workflow log says which step
+                # input is missing rather than only that signing failed.
+                self.assertEqual(
+                    str(raised.exception),
+                    f"Missing required environment variable: {missing}",
+                )
 
 
 if __name__ == "__main__":

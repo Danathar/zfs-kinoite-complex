@@ -91,7 +91,7 @@ This page defines terms used across this repository's docs and workflow comments
 ### Image Build Inputs
 
 - `BASE_IMAGE`: base Fedora Kinoite image ref passed to the root `Containerfile`.
-- `BREW_IMAGE`: optional Homebrew OCI image ref that can be uncommented in the `Containerfile` if the base image does not already include brew.
+- `BREW_IMAGE`: Homebrew payload OCI image ref passed to the root `Containerfile`. CI passes the digest-pinned `DEFAULT_BREW_IMAGE` from `ci/defaults.json`; the `Containerfile` default is a local-build convenience only.
 - `IMAGE_REPO`: final OS image repository path used when writing signing policy.
 - `SIGNING_KEY_FILENAME`: public-key filename installed into the image for future signature verification.
 

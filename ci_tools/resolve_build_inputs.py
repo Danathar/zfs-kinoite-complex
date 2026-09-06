@@ -69,6 +69,9 @@ class ResolvedBuildInputs:
     build_container_ref: str
     build_container_pinned: str
     build_container_digest: str
+    brew_image_ref: str
+    brew_image_pinned: str
+    brew_image_digest: str
     zfs_minor_version: str
     zfs_version: str
     akmods_upstream_ref: str
@@ -84,6 +87,7 @@ class ConfiguredBuildInputs:
     lock_file_path: str
     build_container_ref: str
     base_image_ref: str
+    brew_image_ref: str
     zfs_minor_version: str
     # Empty unless a lock file pinned an exact patch version. Replay mode must
     # not re-resolve this from the live OpenZFS release list, or the "replay"
@@ -257,6 +261,9 @@ def write_resolved_build_outputs(inputs: ResolvedBuildInputs) -> None:
             "build_container_ref": inputs.build_container_ref,
             "build_container_pinned": inputs.build_container_pinned,
             "build_container_digest": inputs.build_container_digest,
+            "brew_image_ref": inputs.brew_image_ref,
+            "brew_image_pinned": inputs.brew_image_pinned,
+            "brew_image_digest": inputs.brew_image_digest,
             "zfs_minor_version": inputs.zfs_minor_version,
             "zfs_version": inputs.zfs_version,
             "akmods_upstream_ref": inputs.akmods_upstream_ref,
@@ -315,6 +322,11 @@ def resolve_configured_inputs() -> ConfiguredBuildInputs:
         lock_data = _load_lock_file(lock_file_path)
         base_image_ref = str(lock_data.get("base_image") or "")
         lock_build_container_ref = str(lock_data.get("build_container") or "")
+        # Optional in the lock file: empty falls back to the checked-in default,
+        # like zfs_version. A replay that wants to reproduce the original brew
+        # payload must set this to the pinned ref from the run's build-inputs
+        # artifact.
+        brew_image_ref = str(lock_data.get("brew_image") or "")
         zfs_minor_version = str(lock_data.get("zfs_minor_version") or "")
         locked_zfs_version = str(lock_data.get("zfs_version") or "")
         akmods_upstream_ref = str(lock_data.get("akmods_upstream_ref") or "")
@@ -325,6 +337,8 @@ def resolve_configured_inputs() -> ConfiguredBuildInputs:
             raise CiToolError("Lock file base_image still contains placeholder value")
         if lock_build_container_ref and "REPLACE_ME" in lock_build_container_ref:
             raise CiToolError("Lock file build_container still contains placeholder value")
+        if brew_image_ref and "REPLACE_ME" in brew_image_ref:
+            raise CiToolError("Lock file brew_image still contains placeholder value")
         if lock_build_container_ref and build_container_ref != lock_build_container_ref:
             raise CiToolError(
                 "Replay mismatch: build container "
@@ -338,12 +352,15 @@ def resolve_configured_inputs() -> ConfiguredBuildInputs:
                 "request, or update the lock file to the current build container."
             )
 
+        if not brew_image_ref:
+            brew_image_ref = require_env_or_default("DEFAULT_BREW_IMAGE")
         if not zfs_minor_version:
             zfs_minor_version = require_env_or_default("DEFAULT_ZFS_MINOR_VERSION")
         if not akmods_upstream_ref:
             akmods_upstream_ref = default_akmods_ref
     else:
         base_image_ref = require_env_or_default("DEFAULT_BASE_IMAGE")
+        brew_image_ref = require_env_or_default("DEFAULT_BREW_IMAGE")
         zfs_minor_version = require_env_or_default("DEFAULT_ZFS_MINOR_VERSION")
         locked_zfs_version = ""
         akmods_upstream_ref = default_akmods_ref
@@ -353,6 +370,7 @@ def resolve_configured_inputs() -> ConfiguredBuildInputs:
         lock_file_path=lock_file_path,
         build_container_ref=build_container_ref,
         base_image_ref=base_image_ref,
+        brew_image_ref=brew_image_ref,
         zfs_minor_version=zfs_minor_version,
         locked_zfs_version=locked_zfs_version,
         akmods_upstream_ref=akmods_upstream_ref,
@@ -428,6 +446,20 @@ def resolve_build_inputs() -> BuildInputResolution:
 
     build_container_pinned = f"{build_container_name}@{build_container_digest}"
 
+    # The brew payload is copied wholesale into the final image's root and its
+    # services are enabled at build time, so it is a real supply-chain input.
+    # Pin it to a digest here like the base image, so the build consumes an
+    # exact payload and the run records which one.
+    brew_image_ref = configured.brew_image_ref
+    brew_inspect = skopeo_inspect_json(f"docker://{brew_image_ref}")
+    brew_image_name = str(brew_inspect.get("Name") or "")
+    brew_image_digest = str(brew_inspect.get("Digest") or "")
+
+    if not brew_image_name or not brew_image_digest:
+        raise CiToolError(f"Failed to resolve brew image digest for {brew_image_ref}")
+
+    brew_image_pinned = f"{brew_image_name}@{brew_image_digest}"
+
     return BuildInputResolution(
         inputs=ResolvedBuildInputs(
             version=fedora_version,
@@ -441,6 +473,9 @@ def resolve_build_inputs() -> BuildInputResolution:
             build_container_ref=build_container_ref,
             build_container_pinned=build_container_pinned,
             build_container_digest=build_container_digest,
+            brew_image_ref=brew_image_ref,
+            brew_image_pinned=brew_image_pinned,
+            brew_image_digest=brew_image_digest,
             zfs_minor_version=zfs_minor_version,
             zfs_version=zfs_version,
             akmods_upstream_ref=akmods_upstream_ref,
@@ -462,6 +497,7 @@ def main() -> None:
     print(f"Resolved base image: {inputs.base_image_pinned}")
     print(f"Resolved base image tag: {inputs.base_image_name}:{inputs.base_image_tag}")
     print(f"Resolved build container: {inputs.build_container_pinned}")
+    print(f"Resolved brew image: {inputs.brew_image_pinned}")
     if resolution.label_kernel_release != inputs.kernel_release:
         print(
             "Base image label/kernel directory mismatch: "

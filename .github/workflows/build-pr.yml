@@ -80,6 +80,7 @@ jobs:
           image_tag: pr-validation
           base_image: ${{ steps.prepare.outputs.base_image_pinned }}
           akmods_image: ${{ steps.prepare.outputs.akmods_image_pinned }}
+          brew_image: ${{ steps.prepare.outputs.brew_image_pinned }}
           akmods_upstream_ref: ${{ steps.prepare.outputs.akmods_upstream_ref }}
           zfs_version: ${{ steps.prepare.outputs.zfs_version }}
           image_repo: ghcr.io/${{ steps.registry.outputs.image_org }}/${{ steps.defaults.outputs.image_name }}

@@ -8,20 +8,25 @@ Goal: Keep input resolution predictable and explainable.
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
 from ci_tools.common import CiToolError, sort_kernel_releases
 from ci_tools.resolve_build_inputs import (
+    BuildInputResolution,
+    ResolvedBuildInputs,
     _load_lock_file,
     _resolve_default_akmods_ref,
     choose_base_image_tag,
     detect_base_image_kernel_releases,
     extract_source_tag,
+    main,
     resolve_build_inputs,
     resolve_configured_inputs,
 )
@@ -717,6 +722,145 @@ class AkmodsRepoUrlRequiredTests(unittest.TestCase):
             "AKMODS_UPSTREAM_REPO is required to resolve AKMODS_UPSTREAM_TRACK",
         )
         ls_remote.assert_not_called()
+
+
+class ResolveBuildInputsMainTests(unittest.TestCase):
+    """
+    Cover `main()`, the command `.github/workflows/build.yml` actually runs.
+
+    The tests above call `resolve_build_inputs()` and inspect the returned
+    dataclass. Nothing in them reaches `main()`, and `tests/e2e/` never invokes
+    `resolve-build-inputs` (it needs a registry), so the step body that hands
+    the resolution to `write_resolved_build_outputs` and reports it was covered
+    by neither tier. Everything downstream in that workflow reads those step
+    outputs, so a resolution that is computed correctly and then exported wrong
+    is indistinguishable from one that was resolved wrong.
+    """
+
+    @staticmethod
+    def _resolution(
+        *,
+        label_kernel_release: str = "6.17.4-200.fc43.x86_64",
+        candidate_tags: tuple[str, ...] = ("latest-20260906", "latest"),
+    ) -> BuildInputResolution:
+        # Every field gets a value distinguishable from every other field, so a
+        # print or an export that reads the neighbouring attribute is visible
+        # rather than matching by coincidence.
+        inputs = ResolvedBuildInputs(
+            version="43.20260906.1",
+            kernel_release="6.17.4-200.fc43.x86_64",
+            detected_kernel_releases=("6.17.3-200.fc43.x86_64", "6.17.4-200.fc43.x86_64"),
+            base_image_ref="ghcr.io/ublue-os/kinoite-main:latest-20260906",
+            base_image_name="kinoite-main",
+            base_image_tag="latest-20260906",
+            base_image_pinned="ghcr.io/ublue-os/kinoite-main@sha256:base",
+            base_image_digest="sha256:base",
+            build_container_ref="quay.io/fedora/fedora:43",
+            build_container_pinned="quay.io/fedora/fedora@sha256:builder",
+            build_container_digest="sha256:builder",
+            zfs_minor_version="2.4",
+            zfs_version="2.4.1",
+            akmods_upstream_ref="0123456789abcdef0123456789abcdef01234567",
+            use_input_lock=True,
+            lock_file_path="ci/input-lock.json",
+        )
+        return BuildInputResolution(
+            inputs=inputs,
+            label_kernel_release=label_kernel_release,
+            candidate_tags=candidate_tags,
+        )
+
+    def _run_main(self, resolution: BuildInputResolution) -> tuple[str, list]:
+        """Run `main()` against `resolution`; return its stdout and export calls."""
+
+        exported: list = []
+
+        with (
+            patch(
+                "ci_tools.resolve_build_inputs.resolve_build_inputs",
+                return_value=resolution,
+            ),
+            patch(
+                "ci_tools.resolve_build_inputs.write_resolved_build_outputs",
+                side_effect=lambda inputs: exported.append(inputs),
+            ),
+            redirect_stdout(io.StringIO()) as stdout,
+        ):
+            main()
+
+        return stdout.getvalue(), exported
+
+    def test_the_resolved_inputs_are_the_object_handed_to_the_exporter(self) -> None:
+        resolution = self._resolution()
+
+        _stdout, exported = self._run_main(resolution)
+
+        # Identity, not equality: this pins that `resolution.inputs` is what
+        # gets exported, rather than some re-derived or default-constructed
+        # object that happens to compare equal today.
+        self.assertEqual(len(exported), 1)
+        self.assertIs(exported[0], resolution.inputs)
+
+    def test_the_log_names_the_pinned_refs_the_build_will_actually_use(self) -> None:
+        stdout, _exported = self._run_main(self._resolution())
+
+        # The pinned (digest) refs, not the floating ones: a reviewer reading
+        # the job log has to be able to tell which image content was built
+        # against, and `base_image_ref` sitting next to `base_image_pinned` in
+        # the dataclass is an easy line to print by mistake.
+        self.assertIn(
+            "Resolved base image: ghcr.io/ublue-os/kinoite-main@sha256:base\n", stdout
+        )
+        self.assertIn("Resolved base image tag: kinoite-main:latest-20260906\n", stdout)
+        self.assertIn(
+            "Resolved build container: quay.io/fedora/fedora@sha256:builder\n", stdout
+        )
+        self.assertIn("Supported primary kernel release: 6.17.4-200.fc43.x86_64\n", stdout)
+        self.assertIn(
+            "Detected kernel releases in base image: "
+            "6.17.3-200.fc43.x86_64 6.17.4-200.fc43.x86_64\n",
+            stdout,
+        )
+        self.assertIn("Fedora version: 43.20260906.1\n", stdout)
+        self.assertIn("ZFS minor version: 2.4\n", stdout)
+        self.assertIn("Resolved ZFS version: 2.4.1\n", stdout)
+
+    def test_a_label_that_disagrees_with_the_newest_module_directory_is_reported(
+        self,
+    ) -> None:
+        # The base image's own kernel label and the newest directory under
+        # /usr/lib/modules can disagree after an upstream rebuild. The build
+        # proceeds on the directory, so the mismatch has to be stated or the
+        # akmods are silently built against a kernel the label does not name.
+        stdout, _exported = self._run_main(
+            self._resolution(label_kernel_release="6.17.3-200.fc43.x86_64")
+        )
+
+        self.assertIn(
+            "Base image label/kernel directory mismatch: "
+            "label=6.17.3-200.fc43.x86_64 newest_dir=6.17.4-200.fc43.x86_64\n",
+            stdout,
+        )
+
+    def test_no_mismatch_is_reported_when_the_label_and_the_directory_agree(self) -> None:
+        # The other half of the branch. Without this a mismatch warning printed
+        # unconditionally would still pass the test above, and the warning would
+        # stop meaning anything.
+        stdout, _exported = self._run_main(self._resolution())
+
+        self.assertNotIn("mismatch", stdout)
+
+    def test_the_candidate_tags_that_were_checked_are_listed(self) -> None:
+        stdout, _exported = self._run_main(self._resolution())
+
+        self.assertIn("Base-tag candidates checked: latest-20260906 latest\n", stdout)
+
+    def test_no_candidate_line_is_printed_when_no_tag_had_to_be_searched(self) -> None:
+        # An explicitly pinned base image resolves without a search. Printing an
+        # empty "candidates checked:" line there reads as "nothing matched".
+        stdout, _exported = self._run_main(self._resolution(candidate_tags=()))
+
+        self.assertNotIn("Base-tag candidates checked", stdout)
 
 
 if __name__ == "__main__":

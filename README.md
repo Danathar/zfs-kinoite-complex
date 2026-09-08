@@ -9,7 +9,7 @@
 [![Maintenance assisted by Hivecommons Hive](https://img.shields.io/badge/maintenance%20assisted%20by-Hivecommons%20Hive-1f6feb)](https://github.com/hivecommons/hive)
 [![ACMM L4 Security-Aware](https://img.shields.io/badge/ACMM-L4%20Security--Aware-2da44e)](https://github.com/hivecommons/hive#acmm-levels)
 [![AI assisted](https://img.shields.io/badge/AI-assisted-d29922)](#about-this-project)
-[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
+[![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
 
 ## Why This Repo Exists
 
@@ -137,3 +137,21 @@ before redistributing this image or basing a downstream image on it.
 > [`docs/SECURITY-AI.md`](./docs/SECURITY-AI.md) records which labels those are and why.
 >
 > Learn more: [Hive](https://github.com/hivecommons/hive) · [Hive Hub](https://hive.kubestellar.io) · [full ACMM policy matrix](https://github.com/hivecommons/hive/blob/v4/src/docs/acmm-policy-matrix.md)
+
+## License
+
+The combined work in this repository is distributed under the
+[GNU General Public License v3.0](LICENSE).
+
+Material previously released or contributed under the Apache License 2.0
+remains available under Apache-2.0. The Apache-2.0 license text and any
+applicable attribution notices are preserved in
+[LICENSE.APACHE-2.0](LICENSE.APACHE-2.0). The combined work — that material
+together with GPL-3.0 modifications and additions — is distributed under
+GPL-3.0. New contributions to this repository are expected to be made under
+GPL-3.0.
+
+This project license applies only to this repository's own work. It does not
+relicense Fedora, Kinoite, OpenZFS, the Linux kernel, Universal Blue
+components, `ublue-os/brew`, or any other third-party dependency or artifact
+consumed by the build; those remain under their respective licenses.

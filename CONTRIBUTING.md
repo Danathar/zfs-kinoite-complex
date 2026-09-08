@@ -15,6 +15,12 @@ and in what order.
 
 ## Submitting a change
 
+New contributions are expected to be submitted under the
+[GNU General Public License v3.0](./LICENSE). By submitting a contribution,
+you agree that it may be distributed under GPL-3.0. This does not change the
+Apache-2.0 terms under which previously released or contributed material
+remains available, as described in the [README](./README.md#license).
+
 1. Unit tests pass and `ruff check` is clean (see [Tests](#tests)).
 2. Every changed line traces to the change you set out to make. Adjacent
    cleanups belong in their own pull request.

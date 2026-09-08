@@ -232,7 +232,9 @@ def detect_base_image_kernel_releases(image_ref: str) -> list[str]:
     ended the whole run before a single akmod was compiled, with the resolve
     step reporting `unexpected EOF` (run 34266369977). Both belts are worn: the
     `--retry` podman applies inside one invocation, and `run_cmd_with_retries`
-    around the invocation itself, which also covers the transfer timeout.
+    around the invocation itself. Each wrapper attempt gets one-third of the
+    transfer timeout, so exhausting all three still leaves the 90-minute job
+    time to report the failure instead of being killed during the last pull.
     """
     run_cmd_with_retries(
         [
@@ -243,7 +245,7 @@ def detect_base_image_kernel_releases(image_ref: str) -> list[str]:
             image_ref,
         ],
         capture_output=False,
-        timeout=REGISTRY_TRANSFER_TIMEOUT,
+        timeout=REGISTRY_TRANSFER_TIMEOUT / REGISTRY_RETRY_ATTEMPTS,
     )
     # Now a local image; `podman run` transfers nothing and keeps its unbounded
     # runtime, which is a `find` over /lib/modules.

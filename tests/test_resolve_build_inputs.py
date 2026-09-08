@@ -645,7 +645,10 @@ class DetectBaseImageKernelReleasesTests(unittest.TestCase):
         self.assertIn("ghcr.io/example/base@sha256:deadbeef", run_cmd_mock.call_args.args[0])
         self.assertEqual(
             pull_mock.call_args.kwargs,
-            {"capture_output": False, "timeout": REGISTRY_TRANSFER_TIMEOUT},
+            {
+                "capture_output": False,
+                "timeout": REGISTRY_TRANSFER_TIMEOUT / REGISTRY_RETRY_ATTEMPTS,
+            },
         )
         # Belt and braces: podman retries within the invocation as well.
         self.assertEqual(

@@ -140,18 +140,15 @@ before redistributing this image or basing a downstream image on it.
 
 ## License
 
-The combined work in this repository is distributed under the
+This repository is distributed under the
 [GNU General Public License v3.0](LICENSE).
 
-Material previously released or contributed under the Apache License 2.0
-remains available under Apache-2.0. The Apache-2.0 license text and any
-applicable attribution notices are preserved in
-[LICENSE.APACHE-2.0](LICENSE.APACHE-2.0). The combined work — that material
-together with GPL-3.0 modifications and additions — is distributed under
-GPL-3.0. New contributions to this repository are expected to be made under
-GPL-3.0.
+Material previously distributed under the Apache License 2.0 retains its
+applicable licensing and attribution. See
+[`LICENSE.APACHE-2.0`](LICENSE.APACHE-2.0).
 
-This project license applies only to this repository's own work. It does not
-relicense Fedora, Kinoite, OpenZFS, the Linux kernel, Universal Blue
-components, `ublue-os/brew`, or any other third-party dependency or artifact
-consumed by the build; those remain under their respective licenses.
+Third-party software, packages, dependencies, and other incorporated components
+remain subject to their respective licenses.
+
+This section is provided for reference only and does not modify or replace the
+terms of any applicable license.

@@ -19,6 +19,8 @@ from ci_tools.common import (
     COSIGN_TIMEOUT,
     GIT_REMOTE_TIMEOUT,
     REGISTRY_METADATA_TIMEOUT,
+    REGISTRY_RETRY_ATTEMPTS,
+    REGISTRY_RETRY_DELAY_SECONDS,
     REGISTRY_TRANSFER_TIMEOUT,
     SECRET_ARG_FLAGS,
     CiToolError,
@@ -27,6 +29,7 @@ from ci_tools.common import (
     is_missing_image_error,
     redact_command_args,
     run_cmd,
+    run_cmd_with_retries,
     run_json_cmd,
     skopeo_copy,
     skopeo_inspect_digest,
@@ -581,6 +584,116 @@ class RunCmdEnvironmentTests(unittest.TestCase):
         self.assertEqual(result, "")
         self.assertIs(subprocess_run.call_args.kwargs["capture_output"], False)
 
+class RunCmdWithRetriesTests(unittest.TestCase):
+    """
+    The retry wrapper around a transient registry read.
 
+    Every case patches `ci_tools.common.run_cmd`, so nothing here runs a real
+    command, and patches `time.sleep`, so the delay is asserted rather than
+    waited out. What matters is the count: how many attempts a caller gets, and
+    that a caller who asked for retries never silently gets one attempt.
+    """
+
+    def test_a_first_attempt_that_succeeds_runs_once_and_does_not_sleep(self) -> None:
+        with (
+            patch("ci_tools.common.run_cmd", return_value="output\n") as run_cmd_mock,
+            patch("ci_tools.common.time.sleep") as sleep_mock,
+        ):
+            result = run_cmd_with_retries(["podman", "pull", "example"])
+
+        self.assertEqual(result, "output\n")
+        self.assertEqual(run_cmd_mock.call_count, 1)
+        sleep_mock.assert_not_called()
+
+    def test_a_transient_failure_is_retried_and_its_later_success_returned(self) -> None:
+        # The failure this exists for: one truncated blob, then a clean pull.
+        with (
+            patch(
+                "ci_tools.common.run_cmd",
+                side_effect=[CiToolError("unexpected EOF"), "output\n"],
+            ) as run_cmd_mock,
+            patch("ci_tools.common.time.sleep") as sleep_mock,
+        ):
+            result = run_cmd_with_retries(["podman", "pull", "example"])
+
+        self.assertEqual(result, "output\n")
+        self.assertEqual(run_cmd_mock.call_count, 2)
+        sleep_mock.assert_called_once_with(REGISTRY_RETRY_DELAY_SECONDS)
+
+    def test_every_attempt_failing_raises_naming_the_count_and_the_last_error(self) -> None:
+        with (
+            patch(
+                "ci_tools.common.run_cmd",
+                side_effect=CiToolError("unexpected EOF"),
+            ) as run_cmd_mock,
+            patch("ci_tools.common.time.sleep") as sleep_mock,
+            self.assertRaises(CiToolError) as caught,
+        ):
+            run_cmd_with_retries(["podman", "pull", "example"], attempts=3)
+
+        self.assertEqual(run_cmd_mock.call_count, 3)
+        # Sleeps happen between attempts, not after the last one.
+        self.assertEqual(sleep_mock.call_count, 2)
+        self.assertEqual(
+            str(caught.exception),
+            "Command failed after 3 attempts: unexpected EOF",
+        )
+
+    def test_a_timeout_is_retried_like_any_other_transient_failure(self) -> None:
+        # `run_cmd` raises CiToolError for a timeout too. A stalled transfer and
+        # a truncated one are the same class here, so both get the same budget.
+        with (
+            patch(
+                "ci_tools.common.run_cmd",
+                side_effect=[CiToolError("Command timed out after 1800.0s: podman pull"), ""],
+            ) as run_cmd_mock,
+            patch("ci_tools.common.time.sleep"),
+        ):
+            run_cmd_with_retries(["podman", "pull", "example"])
+
+        self.assertEqual(run_cmd_mock.call_count, 2)
+
+    def test_keyword_arguments_reach_run_cmd_unchanged(self) -> None:
+        # The wrapper must not swallow the timeout or the capture setting: a
+        # retried transfer with no ceiling is the hang this repo already guards.
+        with (
+            patch("ci_tools.common.run_cmd", return_value="") as run_cmd_mock,
+            patch("ci_tools.common.time.sleep"),
+        ):
+            run_cmd_with_retries(
+                ["podman", "pull", "example"],
+                capture_output=False,
+                timeout=REGISTRY_TRANSFER_TIMEOUT,
+            )
+
+        self.assertEqual(run_cmd_mock.call_args.args[0], ["podman", "pull", "example"])
+        self.assertEqual(
+            run_cmd_mock.call_args.kwargs,
+            {"capture_output": False, "timeout": REGISTRY_TRANSFER_TIMEOUT},
+        )
+
+    def test_a_nonsense_attempt_count_is_rejected_rather_than_run_once(self) -> None:
+        # `attempts=0` would otherwise fall out of the loop and raise the
+        # unreachable branch, reporting a failure that never ran.
+        with (
+            patch("ci_tools.common.run_cmd") as run_cmd_mock,
+            self.assertRaises(ValueError),
+        ):
+            run_cmd_with_retries(["podman", "pull", "example"], attempts=0)
+
+        run_cmd_mock.assert_not_called()
+
+    def test_the_default_attempt_count_is_the_registry_constant(self) -> None:
+        with (
+            patch(
+                "ci_tools.common.run_cmd",
+                side_effect=CiToolError("unexpected EOF"),
+            ) as run_cmd_mock,
+            patch("ci_tools.common.time.sleep"),
+            self.assertRaises(CiToolError),
+        ):
+            run_cmd_with_retries(["podman", "pull", "example"])
+
+        self.assertEqual(run_cmd_mock.call_count, REGISTRY_RETRY_ATTEMPTS)
 if __name__ == "__main__":
     unittest.main()

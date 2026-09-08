@@ -12,6 +12,7 @@ import json
 import os
 import re
 import subprocess
+import time
 import uuid
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -44,15 +45,26 @@ SECRET_ARG_FLAGS = {
 # package-write token open for six hours.
 #
 # Commands whose runtime scales with hardware and network throughput -- the
-# `just build`/`push` image builds, `podman run` against a not-yet-pulled base
-# image, `dnf5`/`depmod` inside the image build -- deliberately get no
-# per-command ceiling here, because any number would be a guess. Those are
-# covered by the job-level `timeout-minutes` added to every workflow job.
+# `just build`/`push` image builds, `dnf5`/`depmod` inside the image build --
+# deliberately get no per-command ceiling here, because any number would be a
+# guess. Those are covered by the job-level `timeout-minutes` added to every
+# workflow job.
 REGISTRY_METADATA_TIMEOUT = 120.0
 """`skopeo inspect`: reads a manifest, transfers no layers."""
 
 REGISTRY_TRANSFER_TIMEOUT = 1800.0
-"""`skopeo copy`: full layer transfer, and it runs with `--retry-times 3`."""
+"""`skopeo copy` and `podman pull`: full layer transfer, retried."""
+
+# How a transient registry read is retried. `skopeo copy` gets this from
+# `--retry-times`; anything else goes through `run_cmd_with_retries` below.
+#
+# Three attempts and a fixed five-second wait are chosen against what actually
+# fails here: a CDN truncating one blob mid-transfer. That either clears on the
+# next attempt or is an outage no retry budget survives, so a longer ladder buys
+# nothing and delays the real failure. The delay stays a constant rather than a
+# backoff for the same reason.
+REGISTRY_RETRY_ATTEMPTS = 3
+REGISTRY_RETRY_DELAY_SECONDS = 5.0
 
 GIT_REMOTE_TIMEOUT = 120.0
 """`git ls-remote`: ref listing only, no object transfer."""
@@ -190,6 +202,52 @@ def run_cmd(
     if not capture_output:
         return ""
     return result.stdout
+
+
+def run_cmd_with_retries(
+    args: Sequence[str],
+    *,
+    attempts: int = REGISTRY_RETRY_ATTEMPTS,
+    delay: float = REGISTRY_RETRY_DELAY_SECONDS,
+    **kwargs,
+) -> str:
+    """
+    Run a command, retrying a failure up to `attempts` times.
+
+    For commands whose failure mode is a transient registry read rather than a
+    wrong answer. `skopeo copy` does not need this -- it retries internally via
+    `--retry-times` -- but `podman` has no equivalent flag on every subcommand
+    that moves layers, and a truncated blob from a registry CDN failed a whole
+    build at its first step with nothing behind it (run 34266369977).
+
+    Retries every `CiToolError` `run_cmd` raises, including a timeout: both a
+    stalled transfer and a truncated one are the same transient class here, and
+    a command that fails for a non-transient reason fails the same way on every
+    attempt, `attempts` times, and then raises. That is a bounded cost paid only
+    on a path that was already failing.
+
+    Deliberately not used for anything that decides state. Callers that read a
+    manifest to choose between reuse and rebuild keep their single attempt, so a
+    retry can never turn "we could not tell" into an answer.
+    """
+    if attempts < 1:
+        raise ValueError(f"attempts must be at least 1, got {attempts}")
+
+    for attempt in range(1, attempts + 1):
+        try:
+            return run_cmd(args, **kwargs)
+        except CiToolError as exc:
+            if attempt == attempts:
+                raise CiToolError(f"Command failed after {attempts} attempts: {exc}") from exc
+            # `run_cmd` has already redacted the command line inside `exc`.
+            print(
+                f"Attempt {attempt} of {attempts} failed, retrying in {delay}s: {exc}",
+                flush=True,
+            )
+            time.sleep(delay)
+
+    # Unreachable: the loop above either returns or raises on its last attempt.
+    raise CiToolError(f"Command failed after {attempts} attempts")
 
 
 def git_ls_remote_resolve(repo_url: str, ref: str) -> str:

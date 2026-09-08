@@ -12,7 +12,7 @@ import os
 import unittest
 from unittest.mock import patch
 
-from ci_tools.common import CiToolError
+from ci_tools.common import COSIGN_TIMEOUT, CiToolError
 from ci_tools.promote_stable import main
 
 
@@ -169,6 +169,7 @@ class PromoteStableTests(unittest.TestCase):
             verify_args[-1], "ghcr.io/danathar/zfs-kinoite-complex@sha256:abc"
         )
         self.assertIn("--new-bundle-format=false", verify_args)
+        self.assertEqual(run_cmd.call_args.kwargs.get("timeout"), COSIGN_TIMEOUT)
         self.assertEqual(skopeo_copy.call_count, 2)
 
     def test_unsigned_candidate_is_never_promoted(self) -> None:

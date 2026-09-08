@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 
 from ci_tools.common import (
+    COSIGN_TIMEOUT,
     REPO_ROOT,
     CiToolError,
     normalize_owner,
@@ -52,7 +53,8 @@ def verify_candidate_signature(*, image_org: str, image_name: str, candidate_dig
             "--key",
             verification_key,
             digest_ref,
-        ]
+        ],
+        timeout=COSIGN_TIMEOUT,
     )
     print(f"Verified candidate signature before promotion: {digest_ref}")
 

@@ -15,7 +15,7 @@ import unittest.mock
 from pathlib import Path
 from typing import ClassVar
 
-from ci_tools.common import CiToolError
+from ci_tools.common import COSIGN_TIMEOUT, CiToolError
 from ci_tools.sign_image import (
     image_digest_ref,
     image_tag_ref,
@@ -151,7 +151,7 @@ class SignImageTests(unittest.TestCase):
         self._assert_digest_lookup_result_fails_closed("null")
 
     def test_signs_and_verifies_digest_for_one_tag(self) -> None:
-        calls: list[tuple[list[str], bool, dict[str, str] | None]] = []
+        calls: list[tuple[list[str], bool, dict[str, str] | None, float | None]] = []
 
         def fake_run_cmd(
             args: list[str],
@@ -159,9 +159,10 @@ class SignImageTests(unittest.TestCase):
             capture_output: bool = True,
             cwd: str | None = None,
             env: dict[str, str] | None = None,
+            timeout: float | None = None,
         ) -> str:
             del cwd
-            calls.append((args, capture_output, env))
+            calls.append((args, capture_output, env, timeout))
             return ""
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -180,7 +181,7 @@ class SignImageTests(unittest.TestCase):
                     command_runner=fake_run_cmd,
                 )
 
-        all_args = [arg for call_args, _capture, _env in calls for arg in call_args]
+        all_args = [arg for call_args, *_ in calls for arg in call_args]
         self.assertNotIn("--registry-username", all_args)
         self.assertNotIn("--registry-password", all_args)
         self.assertEqual(
@@ -206,12 +207,14 @@ class SignImageTests(unittest.TestCase):
                 "COSIGN_PRIVATE_KEY": "private-key",
             },
         )
+        self.assertEqual(calls[0][3], COSIGN_TIMEOUT)
         self.assertEqual(
             calls[1][0][:4],
             ["cosign", "verify", "--new-bundle-format=false", "--key"],
         )
         self.assertEqual(calls[1][0][4], str(key_path))
         self.assertEqual(calls[1][2], None)
+        self.assertEqual(calls[1][3], COSIGN_TIMEOUT)
 
     def test_explicit_digest_is_signed_without_resolving_the_tag(self) -> None:
         # The shared akmods cache tag is republished by more than one workflow,
@@ -260,8 +263,9 @@ class SignImageTests(unittest.TestCase):
             capture_output: bool = True,
             cwd: str | None = None,
             env: dict[str, str] | None = None,
+            timeout: float | None = None,
         ) -> str:
-            del cwd
+            del cwd, timeout
             calls.append((args, capture_output, env))
             return ""
 
@@ -293,8 +297,9 @@ class SignImageTests(unittest.TestCase):
             capture_output: bool = True,
             cwd: str | None = None,
             env: dict[str, str] | None = None,
+            timeout: float | None = None,
         ) -> str:
-            del cwd
+            del cwd, timeout
             calls.append((args, capture_output, env))
             return ""
 
@@ -316,6 +321,30 @@ class SignImageTests(unittest.TestCase):
         repo_key = Path(__file__).resolve().parent.parent / "cosign.pub"
         self.assertEqual(calls[1][0][4], str(repo_key))
         self.assertEqual(digest_ref, "ghcr.io/danathar/zfs-kinoite-complex@sha256:stable")
+
+    def test_cosign_sign_and_verify_pass_cosign_timeout(self) -> None:
+        timeouts: list[float | None] = []
+
+        def fake_run_cmd(args: list[str], *, timeout: float | None = None, **_kwargs) -> str:
+            timeouts.append(timeout)
+            return ""
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            key_path = Path(temp_dir) / "cosign.pub"
+            key_path.write_text("public-key", encoding="utf-8")
+            with unittest.mock.patch.dict(
+                os.environ, {"COSIGN_PUBLIC_KEY_PATH": str(key_path)}, clear=False
+            ):
+                sign_published_image(
+                    image_org="danathar",
+                    image_name="zfs-kinoite-complex",
+                    image_tag="latest",
+                    cosign_private_key="private-key",
+                    digest_lookup=lambda _ref: "sha256:stable",
+                    command_runner=fake_run_cmd,
+                )
+
+        self.assertEqual(timeouts, [COSIGN_TIMEOUT, COSIGN_TIMEOUT])
 
 
 class SignImageMainTests(unittest.TestCase):

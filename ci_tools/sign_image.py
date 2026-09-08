@@ -12,6 +12,7 @@ import os
 from collections.abc import Callable
 
 from ci_tools.common import (
+    COSIGN_TIMEOUT,
     REPO_ROOT,
     CiToolError,
     normalize_owner,
@@ -102,6 +103,7 @@ def sign_published_image(
             "COSIGN_PASSWORD": os.environ.get("COSIGN_PASSWORD", ""),
             "COSIGN_PRIVATE_KEY": cosign_private_key,
         },
+        timeout=COSIGN_TIMEOUT,
     )
     command_runner(
         [
@@ -111,7 +113,8 @@ def sign_published_image(
             "--key",
             verification_key,
             digest_ref,
-        ]
+        ],
+        timeout=COSIGN_TIMEOUT,
     )
 
     print(f"Signed published image digest: {digest_ref}")

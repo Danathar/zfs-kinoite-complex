@@ -70,7 +70,7 @@ GIT_REMOTE_TIMEOUT = 120.0
 """`git ls-remote`: ref listing only, no object transfer."""
 
 COSIGN_TIMEOUT = 300.0
-"""`cosign verify`: fetches a signature manifest and its small payload."""
+"""`cosign sign` and `cosign verify`: signature payload upload or verification."""
 
 
 def require_env(name: str) -> str:

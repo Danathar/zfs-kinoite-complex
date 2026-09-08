@@ -122,6 +122,21 @@ class BuildContainerSelectionTests(unittest.TestCase):
                 )
 
 
+class PullRequestWorkflowTests(unittest.TestCase):
+    def test_input_resolution_authenticates_github_api_requests(self) -> None:
+        workflow = (WORKFLOW_DIR / "build-pr.yml").read_text(encoding="utf-8")
+        step = workflow.split(
+            "- name: Resolve inputs and verify shared akmods cache", 1
+        )[1].split("        run: |", 1)[0]
+
+        self.assertIn(
+            "GITHUB_TOKEN: ${{ github.token }}",
+            step,
+            "PR input resolution fetches OpenZFS releases and must authenticate its "
+            "api.github.com requests to avoid the shared-runner unauthenticated rate limit.",
+        )
+
+
 class BranchIsolationTests(unittest.TestCase):
     """
     Branch runs must be read-only against shared production state.

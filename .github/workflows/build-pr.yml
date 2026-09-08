@@ -68,6 +68,7 @@ jobs:
           AKMODS_REPO: ${{ steps.defaults.outputs.akmods_repo }}
           REGISTRY_ACTOR: ${{ github.actor }}
           REGISTRY_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           python3 -m ci_tools.cli prepare-validation-build
 

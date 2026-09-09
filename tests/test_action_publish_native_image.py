@@ -407,6 +407,30 @@ class PublishActionStepTests(unittest.TestCase):
             "the step must inspect the transient tag, copy, then read the promoted tag back",
         )
 
+    def test_a_failed_lookup_of_the_signed_digest_fails_the_step(self) -> None:
+        """
+        A promotion that cannot read the transient tag must fail, not report success.
+
+        Without `set -euo pipefail` this step failed *open*: a failed first `skopeo inspect`
+        left `transient_digest` empty, the copy of `...@` failed and was ignored, and
+        `final_digest` was empty too, so the guard compared "" against "" and the step exited
+        0 having promoted nothing. For `:latest` that was masked -- the tag already exists, so
+        the read-back returns the previous build's digest and the comparison fails closed --
+        but a tag that does not exist yet, such as the per-branch `br-*` tags build-branch.yml
+        publishes, would be reported as published without ever having been written.
+
+        Driven with an empty stub registry, which is the fresh-tag case: neither the transient
+        tag nor the requested tag resolves.
+        """
+
+        result = self._run(PROMOTE_STEP, registry_contents={})
+        self.assertNotEqual(
+            result.returncode,
+            0,
+            "a promotion whose digest lookup failed must fail the step, not exit 0 having "
+            f"promoted nothing: {result.calls}",
+        )
+
     def test_the_signed_digest_is_taken_from_the_transient_tag_this_job_pushed(
         self,
     ) -> None:

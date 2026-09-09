@@ -145,6 +145,12 @@ runs:
         IMAGE_TAG: ${{ inputs.image_tag }}
         TRANSIENT_IMAGE_TAG: ${{ inputs.image_tag }}-unsigned-${{ github.run_id }}
       run: |
+        # Without this the step fails open: a failed first `skopeo inspect` leaves
+        # transient_digest empty, the copy of `...@` fails and is ignored, and the
+        # guard below compares an empty final_digest against an empty transient_digest
+        # and exits 0 having promoted nothing. Masked for a tag that already exists,
+        # not for a fresh one such as build-branch.yml's `br-*` tags.
+        set -euo pipefail
         transient_ref="docker://${IMAGE_REGISTRY}/${IMAGE_NAME}:${TRANSIENT_IMAGE_TAG}"
         transient_digest="$(skopeo inspect --format '{{ .Digest }}' "${transient_ref}")"
         signed_ref="docker://${IMAGE_REGISTRY}/${IMAGE_NAME}@${transient_digest}"

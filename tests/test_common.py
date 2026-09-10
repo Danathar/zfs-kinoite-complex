@@ -468,9 +468,11 @@ class RegistryAuthDirTests(unittest.TestCase):
         # the command would run anonymously with the credential ignored --
         # and against an anonymously-readable package that still passes every
         # positive check, so nothing downstream would notice.
-        with self.assertRaises(CiToolError):
-            with registry_auth_dir(self._CREDS, "dir:/var/tmp/layout"):
-                self.fail("registry_auth_dir yielded an auth dir with no registry entry")
+        with (
+            self.assertRaises(CiToolError),
+            registry_auth_dir(self._CREDS, "dir:/var/tmp/layout"),
+        ):
+            self.fail("registry_auth_dir yielded an auth dir with no registry entry")
 
     def test_no_credential_means_no_directory_and_no_override(self) -> None:
         # The anonymous callers must keep resolving credentials the way they

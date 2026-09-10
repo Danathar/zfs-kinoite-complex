@@ -234,6 +234,19 @@ against a real signed image before relying on it. `build-pr.yml`'s validation
 job does not run inside that container, so it installs cosign explicitly via
 `install-signing-tools` instead.
 
+This job has no `docker/login-action` step, so `cosign_verify` has to supply
+the GHCR credential itself. It does that through `DOCKER_CONFIG`, pointed at a
+`0600` auth file that `ci_tools/common.py`'s `registry_auth_dir` writes for the
+duration of that one command -- not through `--registry-username` /
+`--registry-password`, which would put the token in `/proc/<pid>/cmdline` for
+every other process on the runner to read. `skopeo_inspect_json` and
+`skopeo_copy` use the same file via `--authfile`. See gotcha 6 in
+[`docs/signing-and-bootc.md`](signing-and-bootc.md). Both cosign versions above
+read `DOCKER_CONFIG` -- verified directly with cosign v2.4.1 and v3.1.3 (one
+patch ahead of the pinned v3.1.2, same release line) against this repo's signed
+akmods image, including the negative case where a wrong credential in the file
+is denied rather than silently falling back to an anonymous pull.
+
 Even when the shared cache is reusable, the workflows still clone the resolved
 `Danathar/akmods` commit once per run.
 

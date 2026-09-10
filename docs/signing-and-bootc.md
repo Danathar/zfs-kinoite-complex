@@ -296,8 +296,33 @@ the trust policy is supposed to enforce.
 4. Local builds are not automatically trusted by a strict bootc policy.
 5. The policy is repository-specific. Renaming the image repository requires
    updating the image policy and registries.d scope.
-6. Do not pass registry secrets in command argv. This repo authenticates with
-   Docker login first, then lets cosign use the existing registry credentials.
+6. Do not pass registry secrets in command argv. `/proc/<pid>/cmdline` is
+   world-readable for the lifetime of a process, so a token passed as
+   `--creds` or `--registry-password` is readable by anything else running on
+   the runner at that moment, including a step this repository did not write.
+   There are two ways a job here satisfies that rule, and both are in use:
+   - Authenticate the whole job with `docker/login-action` first and let
+     `skopeo`/`cosign` pick the credential up from the Docker config. This is
+     what `sign-akmods-cache` and `promote-stable` do.
+   - Where there is no job-level login, hand the credential over in a file.
+     `ci_tools/common.py`'s `registry_auth_dir` writes a `0600` Docker-format
+     `config.json` into a temporary directory that lives only for the duration
+     of the one command: `skopeo` reads it through
+     `--authfile`/`--src-authfile`/`--dest-authfile`, and `cosign` reads it
+     through `DOCKER_CONFIG`. This is what the akmods cache check and the
+     promotion helpers do.
+
+   Both patterns close the *cross-uid* hole that argv opens: `cmdline` is mode
+   0444, an auth file is mode 0600. Neither is a defense against a hostile
+   process running as the same uid in the same job, and nothing available
+   inside a job would be — that process can read the token straight out of
+   `/proc/<pid>/environ` (mode 0400) of the step it was passed to. Between the
+   two, the per-command auth file is the tighter one: the job-level login
+   leaves the credential in `~/.docker/config.json` until the job ends.
+
+   `redact_command_args` in the same module is a backstop for *error text*
+   only. It cannot satisfy this rule, because it does nothing about the argv of
+   a running process.
 7. Keep `cosign.key` out of git. Only `cosign.pub` belongs in the repository.
 
 ## References

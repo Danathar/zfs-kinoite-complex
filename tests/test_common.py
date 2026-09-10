@@ -8,7 +8,10 @@ Goal: Keep low-level image helper failure behavior clear.
 
 from __future__ import annotations
 
+import base64
+import json
 import os
+import stat
 import subprocess
 import tempfile
 import unittest
@@ -27,7 +30,9 @@ from ci_tools.common import (
     cosign_verify,
     git_ls_remote_resolve,
     is_missing_image_error,
-    redact_command_args,
+    registry_auth_dir,
+    registry_auth_file,
+    registry_host,
     run_cmd,
     run_cmd_with_retries,
     run_json_cmd,
@@ -188,7 +193,10 @@ class CommonTests(unittest.TestCase):
 
         self.assertIn("no signatures found", str(context.exception))
 
-    def test_cosign_verify_passes_explicit_registry_credentials_when_provided(self) -> None:
+    def test_cosign_verify_passes_no_credential_flags_at_all(self) -> None:
+        # The credential travels in a DOCKER_CONFIG auth file now, so the argv
+        # is byte-for-byte the anonymous one. See CredentialArgvTests for the
+        # file itself; this only pins that no flag came back.
         with patch("ci_tools.common.run_cmd") as run_cmd_mock:
             cosign_verify(
                 "ghcr.io/example/image@sha256:abc",
@@ -205,13 +213,11 @@ class CommonTests(unittest.TestCase):
                 "verify",
                 "--key",
                 "/tmp/cosign.pub",
-                "--registry-username",
-                "Danathar",
-                "--registry-password",
-                "token",
                 "ghcr.io/example/image@sha256:abc",
             ],
         )
+        self.assertNotIn("--registry-username", args)
+        self.assertNotIn("--registry-password", args)
 
     def test_run_cmd_redacts_secret_args_in_failure_message(self) -> None:
         args = [
@@ -416,73 +422,143 @@ class CommonTests(unittest.TestCase):
             )
 
 
+class RegistryAuthDirTests(unittest.TestCase):
+    """
+    The file that replaced the credential flags.
+
+    `registry_auth_dir` is the single place a registry token is written down,
+    so its three properties are worth pinning directly: the file is in the
+    format both tools read, it is mode `0600`, and it is gone once the call
+    returns. The flag-and-env wiring that consumes it is covered by
+    `CredentialArgvTests` below.
+    """
+
+    _CREDS = "Danathar:registry-token-value"
+
+    def test_the_auth_file_is_the_docker_format_both_tools_read(self) -> None:
+        with registry_auth_dir(self._CREDS, "docker://ghcr.io/example/image:tag") as auth_dir:
+            payload = json.loads(Path(registry_auth_file(auth_dir)).read_text(encoding="utf-8"))
+
+        # `{"auths": {"<host>": {"auth": base64("user:token")}}}` is what
+        # skopeo's --authfile and cosign's DOCKER_CONFIG both expect. Decode
+        # rather than compare a precomputed constant, so a wrongly-encoded
+        # value fails here instead of at a registry.
+        self.assertEqual(list(payload["auths"]), ["ghcr.io"])
+        self.assertEqual(
+            base64.b64decode(payload["auths"]["ghcr.io"]["auth"]).decode("utf-8"),
+            self._CREDS,
+        )
+
+    def test_the_auth_file_is_owner_only_and_removed_afterwards(self) -> None:
+        with registry_auth_dir(self._CREDS, "docker://ghcr.io/example/image:tag") as auth_dir:
+            config_path = Path(registry_auth_file(auth_dir))
+            mode = stat.S_IMODE(config_path.stat().st_mode)
+
+        # The whole point of moving off argv is that the credential is not
+        # readable by other processes on the runner. A world-readable file
+        # would trade one exposure for another.
+        self.assertEqual(mode, 0o600, f"auth file is {mode:o}, not 0600")
+        self.assertFalse(config_path.exists(), "the auth file outlived the call")
+
+    def test_a_local_only_copy_gets_an_auth_file_with_no_registry_entry(self) -> None:
+        # A `dir:` end is not a registry. It must not turn into an auths key.
+        with registry_auth_dir(self._CREDS, "dir:/var/tmp/layout") as auth_dir:
+            payload = json.loads(Path(registry_auth_file(auth_dir)).read_text(encoding="utf-8"))
+
+        self.assertEqual(payload, {"auths": {}})
+
+    def test_no_credential_means_no_directory_and_no_override(self) -> None:
+        # The anonymous callers must keep resolving credentials the way they
+        # do today -- from whatever `docker/login-action` left behind -- so an
+        # empty credential yields nothing to point a tool at.
+        with registry_auth_dir(None, "docker://ghcr.io/example/image:tag") as auth_dir:
+            self.assertEqual(auth_dir, "")
+        with registry_auth_dir("", "docker://ghcr.io/example/image:tag") as auth_dir:
+            self.assertEqual(auth_dir, "")
+
+    def test_registry_host_reads_the_host_off_each_reference_shape(self) -> None:
+        cases = {
+            # skopeo's transport-prefixed form, and cosign's bare form.
+            "docker://ghcr.io/danathar/image:main-44": "ghcr.io",
+            "ghcr.io/danathar/image@sha256:abc": "ghcr.io",
+            "localhost:5000/image:tag": "localhost:5000",
+            # Local transports authenticate against nothing.
+            "dir:/var/tmp/akmods": "",
+            "oci:/var/tmp/layout:tag": "",
+            "containers-storage:localhost/image:tag": "",
+            # A short reference is a Docker Hub namespace, not a hostname.
+            "library/fedora:43": "https://index.docker.io/v1/",
+        }
+        for image_ref, expected in cases.items():
+            with self.subTest(image_ref=image_ref):
+                self.assertEqual(registry_host(image_ref), expected)
+
+
 class CredentialArgvTests(unittest.TestCase):
     """
-    Where the registry credential lands in the argv these helpers build.
+    Where the registry credential lands -- and, above all, where it does not.
 
-    `redact_command_args` keeps secrets out of a failure message, and that is
-    well covered -- but it only redacts values sitting behind a flag named in
-    `SECRET_ARG_FLAGS`. A credential appended positionally is redacted by
-    nothing and prints verbatim into the job log the first time the command
-    fails. So the redaction tests cannot stand in for these: the mutation they
-    cannot catch is exactly the one that moves the value out from behind its
-    flag.
+    Gotcha 6 in `docs/signing-and-bootc.md` forbids passing a registry secret
+    in command argv, because `/proc/<pid>/cmdline` is world-readable for the
+    lifetime of the process. `redact_command_args` cannot enforce that rule:
+    it only cleans up *error text*, and does nothing about the argv of a
+    running child. These tests enforce it at the only place that can -- the
+    argv the helpers actually build.
+
+    Each test reads the auth file from inside the mocked command, because the
+    real helper deletes it as soon as the command returns. Asserting on the
+    file as well as the argv is what stops "the token is not in argv" from
+    being satisfied by a helper that quietly stopped authenticating at all.
 
     Every caller of `skopeo_inspect_json` and `skopeo_copy` mocks the helper
-    rather than the process, so until now nothing executed the two lines that
-    assemble those flags.
+    rather than the process, so nothing else executes these lines.
     """
 
     _CREDS = "Danathar:registry-token-value"
     _SECRET = "registry-token-value"
 
-    def assert_secret_is_redactable(self, argv: list[str], secret: str) -> None:
-        """Assert every occurrence of `secret` sits behind a redacted flag."""
-        self.assertTrue(
-            any(secret in arg for arg in argv),
-            f"{secret!r} does not appear in {argv!r}; the test is asserting nothing",
+    def assert_secret_is_absent(self, argv: list[str]) -> None:
+        """Assert the credential appears nowhere in the argv, behind a flag or not."""
+        self.assertNotIn(
+            self._SECRET,
+            " ".join(argv),
+            f"the token is in {argv!r}, where /proc/<pid>/cmdline exposes it",
         )
-        for index, arg in enumerate(argv):
-            if secret not in arg:
-                continue
-            if "=" in arg and arg.split("=", 1)[0] in SECRET_ARG_FLAGS:
-                continue
-            self.assertGreater(
-                index, 0, f"{arg!r} is the command name, so no flag can precede it"
-            )
-            self.assertIn(
-                argv[index - 1],
-                SECRET_ARG_FLAGS,
-                f"{arg!r} is preceded by {argv[index - 1]!r}, which redaction ignores",
-            )
-        # The property all of the above exists to produce.
-        self.assertNotIn(secret, " ".join(redact_command_args(argv)))
+        for flag in SECRET_ARG_FLAGS:
+            self.assertNotIn(flag, argv, f"{flag} takes a secret value in argv")
 
-    def test_skopeo_inspect_json_puts_the_credential_behind_creds(self) -> None:
-        with patch("ci_tools.common.run_json_cmd") as run_json_cmd_mock:
-            skopeo_inspect_json(
-                "docker://ghcr.io/example/image:tag", creds=self._CREDS
-            )
+    def read_auth(self, path: str) -> dict[str, str]:
+        """Return `{host: "user:token"}` as recorded in a helper-written auth file."""
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        return {
+            host: base64.b64decode(entry["auth"]).decode("utf-8")
+            for host, entry in payload["auths"].items()
+        }
+
+    def test_skopeo_inspect_json_hands_the_credential_over_in_an_auth_file(self) -> None:
+        seen: dict[str, dict[str, str]] = {}
+
+        def capture(argv, **_kwargs):
+            seen["auths"] = self.read_auth(argv[argv.index("--authfile") + 1])
+            return {}
+
+        with patch("ci_tools.common.run_json_cmd", side_effect=capture) as run_json_cmd_mock:
+            skopeo_inspect_json("docker://ghcr.io/example/image:tag", creds=self._CREDS)
 
         argv = run_json_cmd_mock.call_args.args[0]
-        self.assertEqual(
-            argv,
-            [
-                "skopeo",
-                "inspect",
-                "--creds",
-                self._CREDS,
-                "docker://ghcr.io/example/image:tag",
-            ],
-        )
-        self.assert_secret_is_redactable(argv, self._SECRET)
+        self.assertEqual(argv[:2], ["skopeo", "inspect"])
+        self.assertIn("--authfile", argv)
+        self.assertEqual(argv[-1], "docker://ghcr.io/example/image:tag")
+        self.assert_secret_is_absent(argv)
+        self.assertEqual(seen["auths"], {"ghcr.io": self._CREDS})
         self.assertEqual(
             run_json_cmd_mock.call_args.kwargs["timeout"], REGISTRY_METADATA_TIMEOUT
         )
 
-    def test_skopeo_inspect_json_omits_creds_when_none_is_given(self) -> None:
-        # The anonymous form has to stay anonymous: `--creds` with an empty
-        # value is not the same request, and skopeo rejects it.
+    def test_skopeo_inspect_json_omits_the_auth_file_when_no_creds_are_given(self) -> None:
+        # The anonymous form has to stay anonymous: `--authfile` pointing at a
+        # credential-free file is not the same request as not passing it, and
+        # it would shadow a Docker login the job already performed.
         with patch("ci_tools.common.run_json_cmd") as run_json_cmd_mock:
             skopeo_inspect_json("docker://ghcr.io/example/image:tag")
 
@@ -491,30 +567,102 @@ class CredentialArgvTests(unittest.TestCase):
             ["skopeo", "inspect", "docker://ghcr.io/example/image:tag"],
         )
 
-    def test_skopeo_copy_puts_the_credential_behind_src_and_dest_creds(self) -> None:
-        with patch("ci_tools.common.run_cmd") as run_cmd_mock:
-            skopeo_copy("docker://src:tag", "docker://dst:tag", creds=self._CREDS)
+    def test_skopeo_copy_authenticates_both_ends_from_the_auth_file(self) -> None:
+        # The promotion shape: candidate tag to stable tag inside one private
+        # registry, which needs the credential on each side.
+        seen: dict[str, dict[str, str]] = {}
+
+        def capture(argv, **_kwargs):
+            # Assert the flags exist before indexing off them, so dropping one
+            # reads as a failed assertion rather than a ValueError.
+            self.assertIn("--src-authfile", argv)
+            self.assertIn("--dest-authfile", argv)
+            src = argv[argv.index("--src-authfile") + 1]
+            dest = argv[argv.index("--dest-authfile") + 1]
+            self.assertEqual(src, dest)
+            seen["auths"] = self.read_auth(src)
+            return ""
+
+        source = "docker://ghcr.io/example/image:candidate"
+        destination = "docker://ghcr.io/example/image:stable"
+        with patch("ci_tools.common.run_cmd", side_effect=capture) as run_cmd_mock:
+            skopeo_copy(source, destination, creds=self._CREDS)
 
         argv = run_cmd_mock.call_args.args[0]
-        # Both ends are authenticated: a copy between two references in the
-        # same private registry needs the credential on each side. Assert the
-        # flags exist before indexing off them, so dropping one reads as a
-        # failed assertion rather than a ValueError from `.index`.
-        self.assertIn("--src-creds", argv)
-        self.assertIn("--dest-creds", argv)
-        self.assertEqual(argv[argv.index("--src-creds") + 1], self._CREDS)
-        self.assertEqual(argv[argv.index("--dest-creds") + 1], self._CREDS)
         # Source and destination stay last, after the flags.
-        self.assertEqual(argv[-2:], ["docker://src:tag", "docker://dst:tag"])
-        self.assert_secret_is_redactable(argv, self._SECRET)
+        self.assertEqual(argv[-2:], [source, destination])
+        self.assert_secret_is_absent(argv)
+        self.assertEqual(seen["auths"], {"ghcr.io": self._CREDS})
+
+    def test_skopeo_copy_into_a_local_layout_still_authenticates_the_pull(self) -> None:
+        # The akmods-cache shape: a registry pull into a local `dir:` layout.
+        # The local end contributes no auths entry, but the registry end must
+        # keep its credential or the cache check loses its ability to read a
+        # private image.
+        seen: dict[str, dict[str, str]] = {}
+
+        def capture(argv, **_kwargs):
+            seen["auths"] = self.read_auth(argv[argv.index("--src-authfile") + 1])
+            return ""
+
+        with patch("ci_tools.common.run_cmd", side_effect=capture) as run_cmd_mock:
+            skopeo_copy(
+                "docker://ghcr.io/example/image@sha256:abc",
+                "dir:/var/tmp/akmods",
+                creds=self._CREDS,
+            )
+
+        self.assert_secret_is_absent(run_cmd_mock.call_args.args[0])
+        self.assertEqual(seen["auths"], {"ghcr.io": self._CREDS})
 
     def test_skopeo_copy_omits_credential_flags_when_none_is_given(self) -> None:
         with patch("ci_tools.common.run_cmd") as run_cmd_mock:
             skopeo_copy("docker://src:tag", "docker://dst:tag")
 
         argv = run_cmd_mock.call_args.args[0]
+        self.assertNotIn("--src-authfile", argv)
+        self.assertNotIn("--dest-authfile", argv)
         self.assertNotIn("--src-creds", argv)
         self.assertNotIn("--dest-creds", argv)
+
+    def test_cosign_verify_hands_the_credential_over_through_docker_config(self) -> None:
+        seen: dict[str, dict[str, str]] = {}
+
+        def capture(argv, **kwargs):
+            del argv
+            auth_dir = kwargs["env"]["DOCKER_CONFIG"]
+            seen["auths"] = self.read_auth(registry_auth_file(auth_dir))
+            return ""
+
+        with patch("ci_tools.common.run_cmd", side_effect=capture) as run_cmd_mock:
+            cosign_verify(
+                "ghcr.io/example/image@sha256:abc",
+                key_path="/tmp/cosign.pub",
+                registry_username="Danathar",
+                registry_password=self._SECRET,
+            )
+
+        argv = run_cmd_mock.call_args.args[0]
+        self.assertEqual(
+            argv,
+            ["cosign", "verify", "--key", "/tmp/cosign.pub", "ghcr.io/example/image@sha256:abc"],
+        )
+        self.assert_secret_is_absent(argv)
+        # cosign has no --authfile; it reads config.json out of the directory
+        # DOCKER_CONFIG names. Scoping the override to this one command leaves
+        # the rest of the job's environment untouched.
+        self.assertEqual(seen["auths"], {"ghcr.io": self._CREDS})
+        self.assertEqual(run_cmd_mock.call_args.kwargs["timeout"], COSIGN_TIMEOUT)
+
+    def test_cosign_verify_leaves_docker_config_alone_when_no_creds_are_given(self) -> None:
+        # `promote-stable` and `sign-akmods-cache` authenticate with
+        # `docker/login-action` and call this without credentials. Overriding
+        # DOCKER_CONFIG for them would point cosign at an empty directory and
+        # break a path that works today.
+        with patch("ci_tools.common.run_cmd") as run_cmd_mock:
+            cosign_verify("ghcr.io/example/image@sha256:abc", key_path="/tmp/cosign.pub")
+
+        self.assertIsNone(run_cmd_mock.call_args.kwargs["env"])
 
 
 class RunCmdEnvironmentTests(unittest.TestCase):

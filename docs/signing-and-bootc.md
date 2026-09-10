@@ -312,6 +312,14 @@ the trust policy is supposed to enforce.
      through `DOCKER_CONFIG`. This is what the akmods cache check and the
      promotion helpers do.
 
+   Both patterns close the *cross-uid* hole that argv opens: `cmdline` is mode
+   0444, an auth file is mode 0600. Neither is a defense against a hostile
+   process running as the same uid in the same job, and nothing available
+   inside a job would be — that process can read the token straight out of
+   `/proc/<pid>/environ` (mode 0400) of the step it was passed to. Between the
+   two, the per-command auth file is the tighter one: the job-level login
+   leaves the credential in `~/.docker/config.json` until the job ends.
+
    `redact_command_args` in the same module is a backstop for *error text*
    only. It cannot satisfy this rule, because it does nothing about the argv of
    a running process.

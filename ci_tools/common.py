@@ -419,14 +419,25 @@ def registry_auth_dir(creds: str | None, *image_refs: str) -> Iterator[str]:
     Yield a directory holding a `config.json` carrying `creds`, or `""`.
 
     This is how a registry credential reaches `skopeo` and `cosign` without
-    ever appearing in a command line. `/proc/<pid>/cmdline` is world-readable
-    for the lifetime of a process, so a token passed as `--creds` or
-    `--registry-password` is readable by anything else running on the runner
-    while the child is alive -- including a process left behind by a step this
-    repository did not write. A `0600` file in a per-call temporary directory
-    is readable only by the uid that created it and is deleted when the call
-    returns. That is what gotcha 6 in `docs/signing-and-bootc.md` ("do not pass
-    registry secrets in command argv") asks for.
+    ever appearing in a command line. `/proc/<pid>/cmdline` is mode 0444, so a
+    token passed as `--creds` or `--registry-password` is readable by *every*
+    uid on the runner for as long as the child lives. A `0600` file in a
+    per-call temporary directory narrows that to the uid that created it, for
+    the duration of one command. That is what gotcha 6 in
+    `docs/signing-and-bootc.md` ("do not pass registry secrets in command
+    argv") asks for.
+
+    What this deliberately does not claim is protection from a hostile process
+    running as the *same* uid in this job. Such a process can read the
+    auth-file path out of argv and open the file -- but it does not need to:
+    the credential reaches these helpers as `REGISTRY_TOKEN` in the calling
+    step's environment (`.github/actions/prepare-main-akmods/action.yml`), and
+    `/proc/<pid>/environ` is mode 0400, i.e. readable by that same uid. No
+    credential-transfer mechanism available inside a job fixes that; the
+    job-level `docker/login-action` alternative is weaker on this exact axis,
+    since `docker login` leaves the token in `~/.docker/config.json` for the
+    whole job instead of one command. What changes here is the cross-uid
+    exposure, which was real and is now gone.
 
     One directory serves both tools because both read the ordinary
     Docker/containers auth format: `skopeo` takes the file path through

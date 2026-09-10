@@ -460,12 +460,19 @@ class RegistryAuthDirTests(unittest.TestCase):
         self.assertEqual(mode, 0o600, f"auth file is {mode:o}, not 0600")
         self.assertFalse(config_path.exists(), "the auth file outlived the call")
 
-    def test_a_local_only_copy_gets_an_auth_file_with_no_registry_entry(self) -> None:
-        # A `dir:` end is not a registry. It must not turn into an auths key.
-        with registry_auth_dir(self._CREDS, "dir:/var/tmp/layout") as auth_dir:
-            payload = json.loads(Path(registry_auth_file(auth_dir)).read_text(encoding="utf-8"))
-
-        self.assertEqual(payload, {"auths": {}})
+    def test_a_credential_with_no_registry_end_is_an_error(self) -> None:
+        # A `dir:` end is not a registry, so it must not turn into an auths
+        # key -- and with no other reference there is no key at all. Writing
+        # `{"auths": {}}` would still yield a truthy directory, so the caller
+        # would pass `--authfile` pointing at a file holding no credential and
+        # the command would run anonymously with the credential ignored --
+        # and against an anonymously-readable package that still passes every
+        # positive check, so nothing downstream would notice.
+        with (
+            self.assertRaises(CiToolError),
+            registry_auth_dir(self._CREDS, "dir:/var/tmp/layout"),
+        ):
+            self.fail("registry_auth_dir yielded an auth dir with no registry entry")
 
     def test_no_credential_means_no_directory_and_no_override(self) -> None:
         # The anonymous callers must keep resolving credentials the way they

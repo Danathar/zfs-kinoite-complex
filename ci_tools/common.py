@@ -454,12 +454,24 @@ def registry_auth_dir(creds: str | None, *image_refs: str) -> Iterator[str]:
     Yields `""` when `creds` is empty, so the anonymous callers keep their
     exact current behavior: no flag, no `DOCKER_CONFIG` override, and
     therefore whatever `docker/login-action` already left in the job.
+
+    Raises `CiToolError` when `creds` is given but no reference names a
+    registry. Writing `{"auths": {}}` there would yield a truthy directory, so
+    the caller would still point `--authfile` / `DOCKER_CONFIG` at a file
+    carrying no credential and the command would run anonymously with the
+    credential silently unused -- the same failure mode a public package hides
+    from every positive check. A caller in that state has a bug; say so.
     """
     if not creds:
         yield ""
         return
 
     hosts = [host for host in (registry_host(ref) for ref in image_refs) if host]
+    if not hosts:
+        raise CiToolError(
+            "registry_auth_dir was given a credential but no registry reference to "
+            f"use it against: {list(image_refs)}"
+        )
     encoded = base64.b64encode(creds.encode("utf-8")).decode("ascii")
     auths = {host: {"auth": encoded} for host in dict.fromkeys(hosts)}
     with tempfile.TemporaryDirectory() as auth_dir:

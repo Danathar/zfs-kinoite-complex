@@ -354,7 +354,7 @@ class PublishActionStepTests(unittest.TestCase):
         self.assertIn("--authfile", result.calls[0])
 
         encoded = base64.b64encode(
-            f"{REGISTRY_USER}:{REGISTRY_PASSWORD}".encode("utf-8")
+            f"{REGISTRY_USER}:{REGISTRY_PASSWORD}".encode()
         ).decode("ascii")
         self.assertEqual(
             json.loads(result.auth_contents),

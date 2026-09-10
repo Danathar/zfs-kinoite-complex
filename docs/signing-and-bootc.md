@@ -304,13 +304,17 @@ the trust policy is supposed to enforce.
    - Authenticate the whole job with `docker/login-action` first and let
      `skopeo`/`cosign` pick the credential up from the Docker config. This is
      what `sign-akmods-cache` and `promote-stable` do.
-   - Where there is no job-level login, hand the credential over in a file.
-     `ci_tools/common.py`'s `registry_auth_dir` writes a `0600` Docker-format
-     `config.json` into a temporary directory that lives only for the duration
-     of the one command: `skopeo` reads it through
-     `--authfile`/`--src-authfile`/`--dest-authfile`, and `cosign` reads it
-     through `DOCKER_CONFIG`. This is what the akmods cache check and the
-     promotion helpers do.
+   - Where there is no job-level login, or where the credential should be
+     passed rather than inferred, hand it over in a file. `ci_tools/common.py`'s
+     `registry_auth_dir` writes a `0600` Docker-format `config.json` into a
+     temporary directory that lives only for the duration of the one command:
+     `skopeo` reads it through `--authfile`/`--src-authfile`/`--dest-authfile`,
+     and `cosign` reads it through `DOCKER_CONFIG`. This is what the akmods
+     cache check and the promotion helpers do. The `podman push` in
+     `.github/actions/publish-native-image/action.yml` writes the same shape
+     inline in bash and passes it as `--authfile`; that step *does* sit under a
+     job-level login, but naming the file keeps a login that quietly stopped
+     working a denied push rather than an anonymous one.
 
    Both patterns close the *cross-uid* hole that argv opens: `cmdline` is mode
    0444, an auth file is mode 0600. Neither is a defense against a hostile

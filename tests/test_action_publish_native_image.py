@@ -32,6 +32,8 @@ with nothing installed, matching tests/test_workflow_build_container.py.
 
 from __future__ import annotations
 
+import base64
+import json
 import re
 import subprocess
 import tempfile
@@ -79,6 +81,17 @@ printf '%s\n' "$*" >> "${STUB_CALLS}"
 key() { printf '%s' "$1" | tr -c 'A-Za-z0-9' '_'; }
 tool=$(basename "$0")
 if [ "${tool}" != "skopeo" ]; then
+  # The push step's auth file lives in a directory it deletes on exit, so its
+  # mode and contents can only be read from inside the call it was written for.
+  prev=""
+  for arg in "$@"; do
+    if [ "${prev}" = "--authfile" ]; then
+      stat -c '%a' "${arg}" > "${STUB_AUTH}"
+      cat "${arg}" >> "${STUB_AUTH}"
+      break
+    fi
+    prev=${arg}
+  done
   exit 0
 fi
 subcmd=$1
@@ -151,11 +164,19 @@ def _step_body(name: str) -> str:
 class Result:
     """What a step leaves behind: its exit status, its output, and every tool call it made."""
 
-    def __init__(self, completed: subprocess.CompletedProcess, calls: list[str]):
+    def __init__(
+        self,
+        completed: subprocess.CompletedProcess,
+        calls: list[str],
+        auth: str = "",
+    ):
         self.returncode = completed.returncode
         self.stdout = completed.stdout
         self.stderr = completed.stderr
         self.calls = calls
+        # Mode on the first line, file contents after it; empty when the step
+        # passed no `--authfile`.
+        self.auth_mode, _, self.auth_contents = auth.partition("\n")
 
     def calls_matching(self, needle: str) -> list[str]:
         return [call for call in self.calls if needle in call]
@@ -195,10 +216,12 @@ class PublishActionStepTests(unittest.TestCase):
 
             calls = root / "calls"
             calls.touch()
+            auth = root / "auth"
 
             env = {
                 "PATH": f"{bindir}:{SAFE_PATH}",
                 "STUB_CALLS": str(calls),
+                "STUB_AUTH": str(auth),
                 "STUB_REGISTRY": str(stub_registry),
                 "STUB_COPY_DIGEST": copy_digest,
                 # The step's own `env:` block, expressions resolved.
@@ -224,7 +247,8 @@ class PublishActionStepTests(unittest.TestCase):
                 for line in calls.read_text(encoding="utf-8").splitlines()
                 if line.strip()
             ]
-            return Result(completed, recorded)
+            captured = auth.read_text(encoding="utf-8") if auth.exists() else ""
+            return Result(completed, recorded, captured)
 
     def _promote(self, **kwargs) -> Result:
         """Promote against a registry that already holds the pushed transient tag."""
@@ -298,27 +322,56 @@ class PublishActionStepTests(unittest.TestCase):
         result = self._run(PUSH_STEP)
         self.assertIn("--tls-verify=true", result.calls[0])
 
-    def test_the_registry_password_is_passed_as_a_credential_argument(self) -> None:
+    def test_the_registry_credential_never_reaches_the_push_argv(self) -> None:
         """
-        The token must arrive as the value of `--creds`, not loose in the argv.
+        Neither half of the credential may appear on podman's command line.
 
-        Same shape as the redaction rule in ci_tools/common.py: masking strips flags it
-        recognises, so a credential smuggled into a positional argument is a credential
-        printed verbatim into the job log.
+        `/proc/<pid>/cmdline` is mode 0444, so a token in argv is readable by every uid on
+        the runner for as long as the push runs -- gotcha 6 in `docs/signing-and-bootc.md`.
+        Asserted against the argv the stub actually received rather than against the step's
+        text, so a credential reintroduced through a variable is caught too.
         """
 
-        credentials = f"{REGISTRY_USER}:{REGISTRY_PASSWORD}"
-        arguments = self._run(PUSH_STEP).calls[0].split()
+        argv = self._run(PUSH_STEP).calls[0]
+        self.assertNotIn(REGISTRY_PASSWORD, argv)
+        self.assertNotIn(f"{REGISTRY_USER}:{REGISTRY_PASSWORD}", argv)
+        self.assertNotIn("--creds", argv)
+
+    def test_the_push_authenticates_from_an_auth_file_holding_the_credential(self) -> None:
+        """
+        The credential has to reach podman, in the file `--authfile` names.
+
+        Keeping the token out of argv is only half the requirement: a step that dropped it
+        entirely would still pass the argv assertion above while pushing anonymously, or --
+        worse -- silently falling back to whatever the job-level `docker/login-action` left
+        in the Docker config, so a login that quietly stopped working would stop being
+        visible here. The file is read inside the stub call because the step deletes the
+        directory holding it on exit.
+        """
+
+        result = self._run(PUSH_STEP)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("--authfile", result.calls[0])
+
+        encoded = base64.b64encode(
+            f"{REGISTRY_USER}:{REGISTRY_PASSWORD}".encode()
+        ).decode("ascii")
         self.assertEqual(
-            arguments.count(credentials),
-            1,
-            f"the credential pair must appear exactly once: {arguments}",
+            json.loads(result.auth_contents),
+            {"auths": {REGISTRY.split("/")[0]: {"auth": encoded}}},
+            "the auth file must carry this credential, keyed by the registry host",
         )
-        self.assertEqual(
-            arguments[arguments.index(credentials) - 1],
-            "--creds",
-            "the credential pair must follow --creds, never stand alone in the argv",
-        )
+
+    def test_the_auth_file_is_not_readable_by_other_uids(self) -> None:
+        """
+        `0600`, and created that way rather than chmod-ed afterwards.
+
+        An auth file is only an improvement on argv while it is unreadable by the uids that
+        can read `/proc/<pid>/cmdline`. This mirrors what `registry_auth_dir` guarantees in
+        `ci_tools/common.py` for the skopeo and cosign call sites.
+        """
+
+        self.assertEqual(self._run(PUSH_STEP).auth_mode, "600")
 
     # -- promote -----------------------------------------------------------
 

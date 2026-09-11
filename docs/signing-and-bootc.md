@@ -296,11 +296,16 @@ the trust policy is supposed to enforce.
 4. Local builds are not automatically trusted by a strict bootc policy.
 5. The policy is repository-specific. Renaming the image repository requires
    updating the image policy and registries.d scope.
-6. Do not pass registry secrets in command argv. `/proc/<pid>/cmdline` is
-   world-readable for the lifetime of a process, so a token passed as
-   `--creds` or `--registry-password` is readable by anything else running on
+6. Do not pass any credential in command argv -- registry or otherwise.
+   `/proc/<pid>/cmdline` is world-readable for the lifetime of a process, so a
+   token passed as `--creds`, `--registry-password`, or inside a
+   `https://user:token@host/...` URL is readable by anything else running on
    the runner at that moment, including a step this repository did not write.
-   There are two ways a job here satisfies that rule, and both are in use:
+   The rule was written for registry secrets and its reason never depended on
+   that: the last exception, a `github.token` handed to `git remote add` by the
+   status-branch publisher, was converted in #147, and the wording now matches
+   the reason. There are three ways a job here satisfies the rule, and all
+   three are in use:
    - Authenticate the whole job with `docker/login-action` first and let
      `skopeo`/`cosign` pick the credential up from the Docker config. This is
      what `sign-akmods-cache` and `promote-stable` do.
@@ -315,14 +320,26 @@ the trust policy is supposed to enforce.
      inline in bash and passes it as `--authfile`; that step *does* sit under a
      job-level login, but naming the file keeps a login that quietly stopped
      working a denied push rather than an anonymous one.
+   - For `git`, give it a credential file and a credential-free URL. The
+     "Publish badges to status branch" step in
+     `.github/workflows/akmods-failure-triage.yml` writes the token to a `0600`
+     file with the `printf` builtin -- so the token is never argv of `printf`
+     either -- and points git at it with
+     `credential.helper "store --file=..."`, resetting any inherited helper
+     with an empty `credential.helper` first. The remote is then added as a
+     plain `https://github.com/<owner>/<repo>.git`, and everything downstream
+     addresses it by the name `origin`. This also keeps the token out of
+     `<work_dir>/.git/config`, where the URL form left it for the rest of the
+     step.
 
-   Both patterns close the *cross-uid* hole that argv opens: `cmdline` is mode
-   0444, an auth file is mode 0600. Neither is a defense against a hostile
+   All three close the *cross-uid* hole that argv opens: `cmdline` is mode
+   0444, a credential file is mode 0600. None is a defense against a hostile
    process running as the same uid in the same job, and nothing available
    inside a job would be — that process can read the token straight out of
    `/proc/<pid>/environ` (mode 0400) of the step it was passed to. Between the
-   two, the per-command auth file is the tighter one: the job-level login
-   leaves the credential in `~/.docker/config.json` until the job ends.
+   two registry patterns, the per-command auth file is the tighter one: the
+   job-level login leaves the credential in `~/.docker/config.json` until the
+   job ends.
 
    `redact_command_args` in the same module is a backstop for *error text*
    only. It cannot satisfy this rule, because it does nothing about the argv of

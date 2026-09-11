@@ -22,9 +22,14 @@ rather than silently testing nothing.
 
 Everything the step touches is real except the remote: real bash, real git, real commits. The
 remote is a bare repository in a temporary directory, reached by rewriting the hardcoded
-`https://x-access-token:...@github.com/...` URL with git's `url.<base>.insteadOf`. That keeps
-the URL construction in the step under test -- a step that built the wrong URL would still fail
+`https://github.com/<owner>/<repo>.git` URL with git's `url.<base>.insteadOf`. That keeps the
+URL construction in the step under test -- a step that built the wrong URL would still fail
 here -- while never leaving the machine.
+
+The URL carries no credential (#147): the token reaches git through a `store` credential file
+instead, because /proc/<pid>/cmdline is world-readable and a token in argv is readable by every
+uid on the runner. `test_the_token_never_reaches_argv` is what holds that -- it puts a
+recording `git` shim on PATH and fails if the token appears in any git command line.
 
 PyYAML is a transitive pytest dependency and present in CI (see .github/workflows/test.yml).
 The import is guarded so the suite still runs under `python3 -m unittest discover -s tests`
@@ -49,12 +54,13 @@ WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "akmods-failure-triage.yml
 
 PUBLISH_STEP_NAME = "Publish badges to status branch"
 
-# The values the step interpolates into the remote URL. Only their shape matters: the test
-# rewrites this exact URL to a local path, so a step that assembled a different one would fail
-# to reach the remote at all.
+# The values the step interpolates. Only their shape matters: the test rewrites this exact URL
+# to a local path, so a step that assembled a different one would fail to reach the remote at
+# all. FAKE_TOKEN is no longer part of the URL -- it goes in via the credential helper -- but it
+# is still handed to the step as GH_TOKEN, which is what lets the argv test look for it.
 FAKE_TOKEN = "test-token-not-a-real-credential"
 FAKE_REPO = "Danathar/zfs-kinoite-complex"
-REMOTE_URL = f"https://x-access-token:{FAKE_TOKEN}@github.com/{FAKE_REPO}.git"
+REMOTE_URL = f"https://github.com/{FAKE_REPO}.git"
 
 AKMODS_BADGE = "akmods-badge.json"
 LAST_GOOD_BADGE = "last-good-build-badge.json"
@@ -120,8 +126,8 @@ class PublishBadgesToStatusBranchTests(unittest.TestCase):
 
         # The rewrite that keeps the step's own URL construction under test while sending the
         # traffic to a bare repository on disk. `insteadOf` is matched against the URL the step
-        # builds, so a step that stopped interpolating GH_TOKEN or REPO would not match and the
-        # fetch and push would fail.
+        # builds, so a step that stopped interpolating REPO -- or that put the credential back
+        # into the URL -- would not match, and the fetch and push would fail.
         self.gitconfig = self.root / "gitconfig"
         self.gitconfig.write_text(
             "[init]\n"
@@ -155,12 +161,12 @@ class PublishBadgesToStatusBranchTests(unittest.TestCase):
         _git("commit", "-q", "-m", "seed", cwd=seed, gitconfig=self.gitconfig)
         _git("push", "-q", REMOTE_URL, "HEAD:status", cwd=seed, gitconfig=self.gitconfig)
 
-    def _run_step(self) -> subprocess.CompletedProcess[str]:
+    def _run_step(self, path_prefix: str = "") -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             ["bash", "-c", self.script],
             cwd=self.workspace,
             env={
-                "PATH": "/usr/bin:/bin:/usr/local/bin",
+                "PATH": path_prefix + "/usr/bin:/bin:/usr/local/bin",
                 "HOME": str(self.root),
                 "TMPDIR": str(self.root),
                 "GIT_CONFIG_GLOBAL": str(self.gitconfig),
@@ -287,6 +293,59 @@ class PublishBadgesToStatusBranchTests(unittest.TestCase):
             author,
             "github-actions[bot] <github-actions[bot]@users.noreply.github.com>",
         )
+
+    def test_the_token_never_reaches_argv(self) -> None:
+        # The reason this step was rewritten (#147): /proc/<pid>/cmdline is mode 0444, so a
+        # token on a command line is readable by every uid on the runner for as long as that
+        # child lives -- and this job's token can push branches and write issues. The step now
+        # hands git a `store` credential file and a credential-free URL, and the only way to
+        # hold that is to look at what was actually in argv: a shim first on PATH records every
+        # git command line before exec'ing the real git. A future edit that puts the token back
+        # into the remote URL passes every other test in this file and fails this one.
+        bin_dir = self.root / "bin"
+        bin_dir.mkdir(exist_ok=True)
+        argv_log = self.root / "git-argv.log"
+        real_git = shutil.which("git")
+        shim = bin_dir / "git"
+        shim.write_text(
+            "#!/bin/bash\n"
+            f'printf "%s\\n" "$*" >> "{argv_log}"\n'
+            f'exec "{real_git}" "$@"\n',
+            encoding="utf-8",
+        )
+        shim.chmod(0o755)
+
+        self._write_artifacts({AKMODS_BADGE: '{"message": "ok"}\n'})
+        result = self._run_step(path_prefix=f"{bin_dir}:")
+        self._assert_succeeded(result)
+
+        recorded = argv_log.read_text(encoding="utf-8")
+        self.assertIn("remote add origin", recorded, "the shim recorded no git calls at all")
+        self.assertNotIn(
+            FAKE_TOKEN,
+            recorded,
+            "the token appeared in a git command line:\n" + recorded,
+        )
+        self.assertIn(
+            "credential.helper",
+            recorded,
+            "the step no longer configures a credential helper, so the token has no way in",
+        )
+
+    def test_the_credential_file_is_removed_when_the_step_exits(self) -> None:
+        # The trap is the difference between a token that lives for one step and one left on
+        # the runner's disk for whatever runs next. TMPDIR is the test's own directory, so
+        # everything the step created is under self.root and can simply be searched.
+        self._write_artifacts({AKMODS_BADGE: '{"message": "ok"}\n'})
+
+        self._assert_succeeded(self._run_step())
+
+        leaked = [
+            path
+            for path in self.root.rglob("*")
+            if path.is_file() and FAKE_TOKEN.encode() in path.read_bytes()
+        ]
+        self.assertEqual(leaked, [], f"token still on disk after the step: {leaked}")
 
 
 if __name__ == "__main__":

@@ -320,11 +320,25 @@ buildah.
 
 1. installs the committed `cosign.pub` public key into the image trust-material path
 2. enables brew setup/update services via `systemctl preset`
-3. keeps Distrobox from the upstream Fedora Kinoite image
-4. runs the ZFS install helper against the resolved akmods cache image reference
-5. writes repository-specific signing policy for `ghcr.io/danathar/zfs-kinoite-complex`
-6. installs the local `tmpfiles.d` declaration needed for `bootc container lint`
-7. removes build-only runtime/container state
+3. removes the brew payload's own login-shell fragments, installs
+   [`files/etc/profile.d/brew-path.sh`](../files/etc/profile.d/brew-path.sh) in their place, and
+   fails the build if the payload ever ships another one
+4. keeps Distrobox from the upstream Fedora Kinoite image
+5. runs the ZFS install helper against the resolved akmods cache image reference
+6. writes repository-specific signing policy for `ghcr.io/danathar/zfs-kinoite-complex`
+7. installs the local `tmpfiles.d` declaration needed for `bootc container lint`
+8. removes build-only runtime/container state
+
+Step 3 is a trust boundary, not tidying. `brew-setup.service` ends with
+`chown -R 1000:1000 /home/linuxbrew`, so the Homebrew prefix is owned by the
+desktop user on every booted machine, and the fragments the payload ships in
+`/etc/profile.d` and the fish vendor directory `eval` and source code out of
+that prefix in every login shell — root's included. The replacement puts the
+prefix on `PATH` for the account that owns it and executes nothing from it, so
+`brew` still works for that user and no login shell runs user-writable code as
+root. The sweep is at build time because which files arrive in
+`COPY --from=brew /system_files /` is a property of an image this repository
+does not build.
 
 There is no explicit `ostree container commit` step: the `RUN bootc container
 lint` that follows performs the image validation/finalization needed by this

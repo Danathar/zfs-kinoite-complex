@@ -9,8 +9,8 @@ mode: agent
 behavior is attributable to something other than those inputs.
 
 **This is a partial replay, not an exact one, and the difference matters.** The
-lock file pins the base image, the build container and the ZFS version. It does
-not pin the akmods source: `AKMODS_UPSTREAM_REF` is empty by default, so
+lock file pins the base image, the build container, the brew payload image and
+the ZFS version. It does not pin the akmods source: `AKMODS_UPSTREAM_REF` is empty by default, so
 `_resolve_default_akmods_ref()` resolves the tracked `main` ref afresh on every
 run. If upstream advanced since the run you are reproducing, the replay builds
 different source. Say so in the result rather than concluding from a
@@ -50,6 +50,7 @@ reconstructing the values by hand from logs.
 | --- | --- |
 | `base_image` | `inputs.base_image_pinned` — the digest form, not the tag |
 | `build_container` | `inputs.build_container_pinned` |
+| `brew_image` | `inputs.brew_image_pinned` — the digest form, not the tag |
 | `zfs_minor_version` | `inputs.zfs_minor_version` |
 | `zfs_version` | `inputs.zfs_version` |
 
@@ -57,6 +58,12 @@ reconstructing the values by hand from logs.
 resolver re-resolves the newest release on `zfs_minor_version`, so once a newer
 patch exists the replay does not reproduce the original ZFS version — and the
 whole point was to hold the inputs still.
+
+**`brew_image` is optional in the same way, and empties the same way.** Left
+empty it falls back to `DEFAULT_BREW_IMAGE` in `ci/defaults.json`, which may
+have moved since the run being replayed — and that payload is copied wholesale
+into the final image's root, so an unpinned one is a real difference between
+the replay and the run it is reproducing.
 
 `akmods_upstream_ref` is deliberately not in the lock file. It comes from
 `ci/defaults.json` so there is one source of truth.

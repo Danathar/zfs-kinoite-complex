@@ -32,6 +32,58 @@ install -m 0644 /ctx/cosign.pub "/etc/pki/containers/${SIGNING_KEY_FILENAME}"
 /usr/bin/systemctl preset brew-update.timer
 /usr/bin/systemctl preset brew-upgrade.timer
 
+# `COPY --from=brew /system_files /` in the Containerfile also lands three
+# login-shell fragments that execute code out of /home/linuxbrew/.linuxbrew:
+#
+#   /etc/profile.d/brew.sh                  evals `brew shellenv`
+#   /etc/profile.d/brew-bash-completion.sh  runs `brew completions link`, then
+#                                           sources every file in the prefix's
+#                                           etc/bash_completion.d
+#   /usr/share/fish/vendor_conf.d/ublue-brew.fish
+#                                           runs `brew shellenv fish` and sources it
+#
+# `brew-setup.service`, preset above, ends with `chown -R 1000:1000
+# /home/linuxbrew`, so that prefix is owned by the desktop user on every booted
+# machine. /etc/profile.d and the fish vendor directory are read by every login
+# shell, root's included (`su -`, `sudo -i`, a console or SSH root login), so
+# sourcing them as root runs user-writable code as root with no password.
+#
+# Remove them and put the prefix on PATH instead, for its owner only and
+# without executing anything from it.
+rm -f \
+  /etc/profile.d/brew.sh \
+  /etc/profile.d/brew-bash-completion.sh \
+  /usr/share/fish/vendor_conf.d/ublue-brew.fish
+
+install -D -m 0644 \
+  /ctx/files/etc/profile.d/brew-path.sh \
+  /etc/profile.d/brew-path.sh
+
+# Fail closed if a future brew payload ships another one. Which files arrive in
+# that COPY is a property of an image this repository does not build, so no
+# static check in this tree can see it -- only a build-time sweep of what
+# actually landed can. Anything left that mentions brew in a login-shell
+# directory must be the fragment installed just above.
+check_brew_login_fragments() {
+  local root="${1:-}"
+  local found
+  found="$(
+    grep -rlI -- brew \
+      "${root}/etc/profile.d" \
+      "${root}/etc/fish/conf.d" \
+      "${root}/usr/share/fish/vendor_conf.d" 2>/dev/null \
+      | grep -vxF -e "${root}/etc/profile.d/brew-path.sh" || true
+  )"
+  if [ -n "${found}" ]; then
+    echo "Unreviewed brew login-shell fragment(s) from the brew payload:" >&2
+    echo "${found}" >&2
+    echo "Review each one, then either remove it above or add it to the allow-list." >&2
+    return 1
+  fi
+}
+
+check_brew_login_fragments
+
 # Distrobox is already included by Fedora Kinoite. If this image needs to add
 # Fedora RPM packages during the container build, prefer `dnf5 -y install ...`.
 # `rpm-ostree install distrobox`

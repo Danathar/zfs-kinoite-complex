@@ -113,6 +113,13 @@ distrobox --version
 brew --version
 ```
 
+Run `brew --version` as the desktop account, not through `sudo` or a root
+shell. The Homebrew prefix is owned by that account, so
+`/etc/profile.d/brew-path.sh` puts it on `PATH` for that account only —
+deliberately, because a login shell that reached into a user-owned prefix as
+root would be handing that user root. From a root shell, call it by path
+(`/home/linuxbrew/.linuxbrew/bin/brew`) if you really need to.
+
 For virtual machine (VM) testing with a secondary disk:
 
 ```bash

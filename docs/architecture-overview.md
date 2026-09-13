@@ -323,11 +323,13 @@ buildah.
 3. removes the brew payload's own login-shell fragments, installs
    [`files/etc/profile.d/brew-path.sh`](../files/etc/profile.d/brew-path.sh) in their place, and
    fails the build if the payload ever ships another one
-4. keeps Distrobox from the upstream Fedora Kinoite image
-5. runs the ZFS install helper against the resolved akmods cache image reference
-6. writes repository-specific signing policy for `ghcr.io/danathar/zfs-kinoite-complex`
-7. installs the local `tmpfiles.d` declaration needed for `bootc container lint`
-8. removes build-only runtime/container state
+4. installs a `PrivateTmp=yes` drop-in for `brew-setup.service`, and fails the build if
+   that unit ever stages somewhere the drop-in does not contain
+5. keeps Distrobox from the upstream Fedora Kinoite image
+6. runs the ZFS install helper against the resolved akmods cache image reference
+7. writes repository-specific signing policy for `ghcr.io/danathar/zfs-kinoite-complex`
+8. installs the local `tmpfiles.d` declaration needed for `bootc container lint`
+9. removes build-only runtime/container state
 
 Step 3 is a trust boundary, not tidying. `brew-setup.service` ends with
 `chown -R 1000:1000 /home/linuxbrew`, so the Homebrew prefix is owned by the
@@ -339,6 +341,20 @@ prefix on `PATH` for the account that owns it and executes nothing from it, so
 root. The sweep is at build time because which files arrive in
 `COPY --from=brew /system_files /` is a property of an image this repository
 does not build.
+
+Step 4 closes the other half of that boundary: how the prefix gets there.
+`brew-setup.service` stages a 154MB tarball through the fixed path
+`/tmp/homebrew` as root — `mkdir -p`, then `tar -C`, then
+`cp -R -n /tmp/homebrew/… /home/linuxbrew`, then the `chown`. On a booted system
+`/tmp` is a world-writable tmpfs and `mkdir -p` exits 0 on an existing symlink
+rather than replacing it, so an account that creates that name first has root
+extract through its symlink and has its own extra files copied into the prefix
+UID 1000 then owns — which `brew-update.timer` runs as `User=1000` ten minutes
+after boot. The drop-in gives the unit its own `/tmp` and `/var/tmp` instead of
+restating upstream's `ExecStart=` chain, which a payload bump would silently
+outdate; `/home/linuxbrew` is outside both, so the payload still lands where it
+should. The accompanying check fails the build if a future payload stages
+outside those two directories, where `PrivateTmp=` would no longer contain it.
 
 There is no explicit `ostree container commit` step: the `RUN bootc container
 lint` that follows performs the image validation/finalization needed by this

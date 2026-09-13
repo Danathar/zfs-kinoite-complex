@@ -84,6 +84,38 @@ check_brew_login_fragments() {
 
 check_brew_login_fragments
 
+# The same payload's `brew-setup.service`, preset above, stages its 154MB tarball
+# through the fixed path /tmp/homebrew as root. /tmp is a world-writable tmpfs on a
+# booted system and `mkdir -p` exits 0 on an existing symlink instead of replacing it,
+# so an account that creates /tmp/homebrew first has root extract through its symlink
+# and has its own extra files copied into the prefix the next ExecStart hands to UID
+# 1000. Give the unit a private /tmp instead of restating upstream's ExecStart= chain,
+# so a future payload revision cannot drift away from a copy of it.
+install -D -m 0644 \
+  /ctx/files/usr/lib/systemd/system/brew-setup.service.d/10-private-tmp.conf \
+  /usr/lib/systemd/system/brew-setup.service.d/10-private-tmp.conf
+
+# `PrivateTmp=` only contains staging that happens under /tmp or /var/tmp. If a future
+# payload revision stages somewhere else, the drop-in above becomes decoration and
+# nothing in this tree would say so, because the unit is not ours to read at any
+# revision -- only the build can see the one that actually landed.
+check_brew_setup_staging() {
+  local unit="${1:-}/usr/lib/systemd/system/brew-setup.service"
+  if [ ! -f "${unit}" ]; then
+    echo "brew-setup.service missing from the brew payload: ${unit}" >&2
+    return 1
+  fi
+  if ! grep -E '^ExecStart=' "${unit}" | grep -qE '(^|[= ])/(var/)?tmp(/|[[:space:]]|$)'; then
+    echo "brew-setup.service no longer stages under /tmp or /var/tmp:" >&2
+    grep -E '^ExecStart=' "${unit}" >&2
+    echo "PrivateTmp= in 10-private-tmp.conf cannot contain that. Re-read the unit," >&2
+    echo "then either widen the drop-in or drop it." >&2
+    return 1
+  fi
+}
+
+check_brew_setup_staging
+
 # Distrobox is already included by Fedora Kinoite. If this image needs to add
 # Fedora RPM packages during the container build, prefer `dnf5 -y install ...`.
 # `rpm-ostree install distrobox`

@@ -41,13 +41,12 @@ would skip silently the day that changed. Nothing here needs a YAML parser --
 the joins are over literal image refs and version pins, which are exactly the
 text these files are grepped for.
 
-One deliberate asymmetry: `ruff==0.16.1` appears in four tracked files and only
-`.github/workflows/test.yml` is tracked by a custom manager. The version
-equality below covers the three that state what CI installs today (both
-workflows and CONTRIBUTING.md); `.claude/memory/corrections.md` is a dated
-record of a correction, not a live claim, so it is held to the file-set check
-only and not to the version. The file set itself is asserted so a fifth copy
-has to be classified rather than silently joining the stale ones.
+One deliberate asymmetry: the pinned `ruff` requirement appears in four tracked
+files, but the custom manager covers only the three that state what CI installs
+today (both workflows and CONTRIBUTING.md). `.claude/memory/corrections.md` is
+a dated record of a correction, not a live claim, so it is held to the file-set
+check only and not updated by Renovate. The file set itself is asserted so a
+fifth copy has to be classified rather than silently joining the stale ones.
 """
 
 from __future__ import annotations
@@ -93,7 +92,7 @@ EXPECTED_MANAGERS = {
     "openzfs/zfs": {"ci/defaults.json"},
     "ghcr.io/ublue-os/devcontainer": {"ci/defaults.json"},
     "ghcr.io/ublue-os/brew": {"ci/defaults.json"},
-    "ruff": {".github/workflows/test.yml"},
+    "ruff": RUFF_LIVE_PIN_FILES,
 }
 
 
@@ -329,7 +328,7 @@ class PinJoinTests(unittest.TestCase):
         self.assertEqual(found, RUFF_PIN_FILES)
 
     def test_the_live_ruff_pins_all_name_one_version(self) -> None:
-        """Renovate bumps only test.yml; the other copies of the same claim must follow."""
+        """Renovate updates these copies together, and they must name one version."""
         versions = {
             name: set(re.findall(r"ruff==(\d+\.\d+\.\d+)", read(name)))
             for name in sorted(RUFF_LIVE_PIN_FILES)

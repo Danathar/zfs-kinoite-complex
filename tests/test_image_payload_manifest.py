@@ -84,15 +84,22 @@ def tracked_payload_files() -> list[str]:
     )
 
 
-def shell_commands(text: str) -> list[list[str]]:
-    """Split build-image.sh into argv lists, joining backslash continuations.
+def shell_code(text: str) -> str:
+    """Return only the lines of a shell script the shell would execute.
 
-    Comments are dropped first: the script explains itself at length, and several
-    of those explanations quote command lines that the build does not run.
+    Comments are dropped: the script explains itself at length, and several of
+    those explanations quote command lines that the build does not run. Anything
+    asking "does the build do X" has to ask it of this, not of the file -- against
+    the raw text, commenting X out leaves the question answered yes.
     """
 
-    code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
-    joined = re.sub(r"\\\n\s*", " ", code)
+    return "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+
+
+def shell_commands(text: str) -> list[list[str]]:
+    """Split build-image.sh into argv lists, joining backslash continuations."""
+
+    joined = re.sub(r"\\\n\s*", " ", shell_code(text))
     commands = []
     for line in joined.splitlines():
         stripped = line.strip()
@@ -235,13 +242,16 @@ class PayloadManifestTests(unittest.TestCase):
 
     def test_every_payload_file_is_installed_or_executed(self) -> None:
         installs = file_installs()
-        text = build_image_text()
+        # The executed branch reads the same comment-stripped text the install branch
+        # is parsed out of. Against the raw file, commenting the invocation out left
+        # this green while the build stopped running the script.
+        code = shell_code(build_image_text())
         for relative in tracked_payload_files():
             with self.subTest(payload=relative):
                 if relative in EXECUTED_NOT_INSTALLED:
                     self.assertIn(
                         EXECUTED_NOT_INSTALLED[relative],
-                        text,
+                        code,
                         f"files/{relative} is recorded as executed, but the build does not run it",
                     )
                     continue
@@ -384,7 +394,20 @@ class TmpfilesTests(unittest.TestCase):
         for fields in self.entries:
             with self.subTest(path=fields[1]):
                 self.assertTrue(fields[1].startswith("/var/lib/pcp"))
-        self.assertIn("pcp", self.path.read_text(encoding="utf-8"))
+        # Read the comment lines, not the file. Every entry above contains
+        # "/var/lib/pcp", so searching the whole text for "pcp" is answered by the
+        # declarations themselves and stays true with the explanation deleted --
+        # which is the state this test is named for catching.
+        commentary = "\n".join(
+            line for line in self.path.read_text(encoding="utf-8").splitlines()
+            if line.lstrip().startswith("#")
+        )
+        self.assertIn(
+            "pcp",
+            commentary,
+            f"{self.path} declares /var/lib/pcp directories but no comment says where "
+            f"they come from, so the next reader cannot tell whether they are still needed",
+        )
 
 
 if __name__ == "__main__":

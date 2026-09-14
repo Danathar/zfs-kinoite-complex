@@ -1,20 +1,23 @@
 """
 Script: tests/test_build_image_brew_payload_inventory.py
 What: Tests that the build compares the brew payload's complete file list against a committed manifest and stops on any difference.
-Doing: Extracts the inventory check from build-image.sh and runs it against fixture payload trees, asserts the Containerfile mounts the payload for it, and cross-checks the manifest against the two narrower brew checks.
+Doing: Runs build_files/check-brew-payload-inventory.sh against fixture payload trees, asserts the Containerfile mounts the payload for it and runs it before the COPY, and cross-checks the manifest against the two narrower brew checks.
 Why: `COPY --from=brew /system_files /` copies a third-party tree into the signed image; the digest pin in ci/defaults.json makes that payload reproducible but not reviewed, so a bump can add a file nobody read.
 Goal: Make a new file in the payload fail the build rather than ship.
 
 The payload is not in this tree at any revision, so nothing here can assert what it
 contains. What the suite can pin is what this repository does about it: that the check
-exists, that the Containerfile gives it something to look at, that the manifest and the
-other two brew checks still agree about the same files, and -- by extracting the check
-and running it -- what it does to a payload tree that has changed.
+exists, that the Containerfile gives it something to look at *and runs it before the
+payload is copied in*, that the manifest and the other two brew checks still agree about
+the same files, and -- by running the shipped script itself -- what it does to a payload
+tree that has changed.
 """
 
 from __future__ import annotations
 
+import os
 import re
+import socket
 import subprocess
 import tempfile
 import unittest
@@ -25,14 +28,14 @@ BUILD_IMAGE = REPO_ROOT / "build_files" / "build-image.sh"
 CONTAINERFILE = REPO_ROOT / "Containerfile"
 MANIFEST = REPO_ROOT / "build_files" / "brew-payload.manifest"
 
+CHECK_SCRIPT = REPO_ROOT / "build_files" / "check-brew-payload-inventory.sh"
 CHECK_FUNCTION = "check_brew_payload_inventory"
 
-# Matches the check function from its opening line to the closing brace in column 1.
-# build-image.sh defines no nested functions, so this is unambiguous.
-CHECK_RE = re.compile(
-    rf"^{CHECK_FUNCTION}\(\) \{{\n.*?^\}}\n",
-    re.MULTILINE | re.DOTALL,
-)
+# The Containerfile line that copies the payload into the image, and the one that runs
+# the check. The check has to come first: after the COPY, a payload shipping usr/bin/find
+# or bin/sh supplies the tools the check would otherwise have to trust.
+PAYLOAD_COPY = "COPY --from=brew /system_files /"
+CHECK_INVOCATION = "/ctx/check-brew-payload-inventory.sh"
 
 # The payload as it stands at the digest ci/defaults.json pins, read out of the
 # registry rather than guessed from upstream's default branch. Both architectures
@@ -86,33 +89,21 @@ def manifest_entries() -> list[str]:
     return entries
 
 
-def check_source() -> str:
-    """Return the inventory check exactly as build-image.sh defines it."""
-
-    match = CHECK_RE.search(build_image_text())
-    assert match is not None, f"{CHECK_FUNCTION} not found in {BUILD_IMAGE}"
-    return match.group(0)
-
-
 def run_check(payload: Path, manifest: Path) -> subprocess.CompletedProcess[str]:
-    """Run the real check body against a fixture payload tree and manifest."""
+    """Run the shipped check script against a fixture payload tree and manifest.
 
-    script = (
-        "#!/usr/bin/env bash\n"
-        "set -euo pipefail\n"
-        f"{check_source()}\n"
-        f'{CHECK_FUNCTION} "$1" "$2"\n'
+    The script the build invokes, not a body extracted out of it: its shebang, its
+    `set -euo pipefail` and the argument handling at the bottom are part of what is
+    being asserted, and an extraction that drifts from the file would still pass.
+    """
+
+    return subprocess.run(
+        ["bash", str(CHECK_SCRIPT), str(payload), str(manifest)],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
     )
-    with tempfile.NamedTemporaryFile("w", suffix=".sh", encoding="utf-8") as handle:
-        handle.write(script)
-        handle.flush()
-        return subprocess.run(
-            ["bash", handle.name, str(payload), str(manifest)],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=False,
-        )
 
 
 def fixture_payload(root: Path, relative_paths: tuple[str, ...]) -> Path:
@@ -134,10 +125,7 @@ class PremiseTests(unittest.TestCase):
         # A COPY narrowed to named paths would make this check redundant, and this
         # suite should be revisited rather than left asserting something that
         # protects nothing.
-        self.assertIn(
-            "COPY --from=brew /system_files /",
-            CONTAINERFILE.read_text(encoding="utf-8"),
-        )
+        self.assertIn(PAYLOAD_COPY, CONTAINERFILE.read_text(encoding="utf-8"))
 
     def test_the_containerfile_mounts_the_payload_for_inspection(self) -> None:
         # Without the mount the check cannot see anything, and build-image.sh would
@@ -236,6 +224,34 @@ class InventoryCheckTests(unittest.TestCase):
             self.assertEqual(result.returncode, 1)
             self.assertIn("zz-brew.sh", result.stderr)
 
+    def test_an_added_fifo_fails_the_build(self) -> None:
+        # `COPY --from=brew` carries FIFOs, sockets and device nodes into / as happily as
+        # it carries regular files, so the walk counts every non-directory entry rather
+        # than the two types the payload happens to ship today. A walk restricted to
+        # `-type f -o -type l` passes this tree, which is a whole class of added path the
+        # comparison would never be given the chance to miss.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            payload = fixture_payload(root, PAYLOAD_FILES)
+            os.mkfifo(payload / "etc" / "brew.fifo")
+            result = run_check(payload, MANIFEST)
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("brew.fifo", result.stderr)
+
+    def test_an_added_socket_fails_the_build(self) -> None:
+        # Same class as the FIFO above; a socket in the payload is a path nobody read.
+        # Device nodes are the third case and need root to create, so they are not
+        # fixtured here -- `! -type d` is what covers all three at once.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            payload = fixture_payload(root, PAYLOAD_FILES)
+            sock_path = payload / "etc" / "brew.sock"
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+                sock.bind(str(sock_path))
+                result = run_check(payload, MANIFEST)
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("brew.sock", result.stderr)
+
     def test_a_removed_file_fails_the_build(self) -> None:
         # A payload that stopped shipping something is also a change worth reading:
         # the drop-in, the preset and the removals above are all aimed at named files.
@@ -301,29 +317,56 @@ class InventoryCheckTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_the_check_actually_runs_in_the_build(self) -> None:
-        # A defined-but-never-called check is the guard that guards nothing.
+        # A script nothing invokes is the guard that guards nothing.
+        code = "\n".join(
+            line
+            for line in CONTAINERFILE.read_text(encoding="utf-8").splitlines()
+            if not line.lstrip().startswith("#")
+        )
+        self.assertIn(CHECK_INVOCATION, code)
+
+    def test_the_script_calls_the_check_it_defines(self) -> None:
+        text = CHECK_SCRIPT.read_text(encoding="utf-8")
+        definition = text.index(f"{CHECK_FUNCTION}() {{")
+        call = text.index(f'\n{CHECK_FUNCTION} "$@"\n')
+        self.assertLess(definition, call)
+
+    def test_the_check_script_is_executable(self) -> None:
+        # The Containerfile runs it as a command, not via `bash <path>`.
+        self.assertTrue(os.access(CHECK_SCRIPT, os.X_OK), CHECK_SCRIPT)
+
+    def test_the_inventory_runs_before_the_payload_is_copied_in(self) -> None:
+        # This is the whole reason the check is its own RUN rather than the first
+        # function in build-image.sh. After `COPY --from=brew /system_files /`, every
+        # tool the check depends on -- bash, find, sed, grep -- can have been replaced
+        # by the payload it is inspecting, and a payload that supplies the checker can
+        # make its own additions pass. Run above the COPY and all of them come from the
+        # Fedora base image with the payload still confined to a bind mount.
+        text = CONTAINERFILE.read_text(encoding="utf-8")
+        self.assertLess(text.index(CHECK_INVOCATION), text.index(PAYLOAD_COPY))
+
+    def test_the_check_is_not_also_run_from_build_image(self) -> None:
+        # build-image.sh runs after the COPY. A copy of the check left behind there
+        # would re-introduce exactly the trust problem the move above solves, while
+        # reading like defence in depth.
         code = "\n".join(
             line for line in build_image_text().splitlines() if not line.lstrip().startswith("#")
         )
-        self.assertRegex(code, rf"(?m)^{CHECK_FUNCTION}$")
-
-    def test_the_check_runs_after_it_is_defined(self) -> None:
-        text = build_image_text()
-        definition = text.index(f"{CHECK_FUNCTION}() {{")
-        call = text.index(f"\n{CHECK_FUNCTION}\n")
-        self.assertLess(definition, call)
+        self.assertNotIn(CHECK_FUNCTION, code)
 
     def test_the_inventory_runs_before_anything_acts_on_the_payload(self) -> None:
         # An unknown file should stop the build before the presets enable units from
-        # the same payload and before the two narrower checks look at parts of it.
-        text = build_image_text()
-        call = text.index(f"\n{CHECK_FUNCTION}\n")
+        # the same payload and before the two narrower checks look at parts of it. Those
+        # all live in build-image.sh, which the Containerfile runs after this check.
+        text = CONTAINERFILE.read_text(encoding="utf-8")
+        self.assertLess(text.index(CHECK_INVOCATION), text.index("/ctx/build-image.sh"))
+        build = build_image_text()
         for later in (
             "systemctl preset brew-setup.service",
             "\ncheck_brew_login_fragments\n",
             "\ncheck_brew_setup_staging\n",
         ):
-            self.assertLess(call, text.index(later), later)
+            self.assertIn(later, build, later)
 
 
 if __name__ == "__main__":

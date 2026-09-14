@@ -26,40 +26,16 @@ set -euo pipefail
 # tree in this image's root. ci/defaults.json pins which payload that is, which makes
 # it reproducible but not reviewed: what a person sees when that pin is bumped is a
 # 64-hex digest, and reading what came with it means unpacking layers out of a
-# registry. So compare what actually arrived against the list somebody did read.
+# registry. So the payload's complete file list is compared against
+# build_files/brew-payload.manifest and any difference fails the build.
 #
-# Paths only, not hashes. The tarball's bytes change on every upstream release, and a
-# check that fires every time is a check that gets skipped. A new *path* is new
-# surface -- a unit drop-in, a tmpfiles.d entry, an /etc/profile replacement -- and
-# that is what should stop a build until someone has read it.
-#
-# First, before the presets and before the two narrower checks below, so an unknown
-# file stops the build before anything acts on the payload.
-check_brew_payload_inventory() {
-  local payload="${1:-/brew-payload}"
-  local manifest="${2:-/ctx/brew-payload.manifest}"
-  local landed expected
-  if [ ! -d "${payload}" ]; then
-    echo "Brew payload not mounted for inspection: ${payload}" >&2
-    echo "The Containerfile RUN step must bind-mount the brew stage there." >&2
-    return 1
-  fi
-  landed="$(cd "${payload}" && find . \( -type f -o -type l \) -printf '%P\n' | LC_ALL=C sort)"
-  expected="$(sed -e 's/#.*//' -e 's/[[:space:]]*$//' "${manifest}" | grep -v '^$' | LC_ALL=C sort)"
-  if [ "${landed}" != "${expected}" ]; then
-    # Reported with grep rather than diff: diffutils is not guaranteed to be in the
-    # base image, and a check that cannot explain itself is most of a check wasted.
-    echo "The brew payload no longer matches build_files/brew-payload.manifest:" >&2
-    printf '%s\n' "${landed}" | grep -vxF -f <(printf '%s\n' "${expected}") \
-      | sed 's/^/  added:   /' >&2 || true
-    printf '%s\n' "${expected}" | grep -vxF -f <(printf '%s\n' "${landed}") \
-      | sed 's/^/  missing: /' >&2 || true
-    echo "Read each added file before listing it there. It is copied into / and signed." >&2
-    return 1
-  fi
-}
-
-check_brew_payload_inventory
+# That check is not here. It runs from its own RUN in the Containerfile, above the
+# COPY, in build_files/check-brew-payload-inventory.sh -- see the reasoning there.
+# By the time this script starts, the payload has already been copied into /, so a
+# payload shipping usr/bin/find, usr/bin/grep or bin/sh would supply the tools any
+# check written here would have to trust. The two checks below are still worth
+# running from this side because they read what actually landed in the image root,
+# but neither is what stands between an unread path and the signed image.
 
 # Copy the committed public key into the standard trust-material directory.
 install -d -m 0755 /etc/pki/containers /etc/containers/registries.d

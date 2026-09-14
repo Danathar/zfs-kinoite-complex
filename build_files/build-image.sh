@@ -22,6 +22,21 @@ set -euo pipefail
 # CI passes the exact image today, while local builds usually rely on the
 # template path so they do not need a hard-coded Fedora release number here.
 
+# `COPY --from=brew /system_files /` in the Containerfile lands a whole third-party
+# tree in this image's root. ci/defaults.json pins which payload that is, which makes
+# it reproducible but not reviewed: what a person sees when that pin is bumped is a
+# 64-hex digest, and reading what came with it means unpacking layers out of a
+# registry. So the payload's complete file list is compared against
+# build_files/brew-payload.manifest and any difference fails the build.
+#
+# That check is not here. It runs from its own RUN in the Containerfile, above the
+# COPY, in build_files/check-brew-payload-inventory.sh -- see the reasoning there.
+# By the time this script starts, the payload has already been copied into /, so a
+# payload shipping usr/bin/find, usr/bin/grep or bin/sh would supply the tools any
+# check written here would have to trust. The two checks below are still worth
+# running from this side because they read what actually landed in the image root,
+# but neither is what stands between an unread path and the signed image.
+
 # Copy the committed public key into the standard trust-material directory.
 install -d -m 0755 /etc/pki/containers /etc/containers/registries.d
 install -m 0644 /ctx/cosign.pub "/etc/pki/containers/${SIGNING_KEY_FILENAME}"

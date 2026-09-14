@@ -40,6 +40,20 @@ ARG AKMODS_IMAGE_TEMPLATE="ghcr.io/danathar/zfs-kinoite-complex-akmods:main-{fed
 ARG IMAGE_REPO="ghcr.io/danathar/zfs-kinoite-complex"
 ARG SIGNING_KEY_FILENAME="zfs-kinoite-complex.pub"
 
+# Check the brew payload's complete file list against build_files/brew-payload.manifest
+# and fail on any difference, *before* the COPY below puts that payload in this image.
+#
+# The order is the point. Everything this check runs on -- bash, find, sed, grep -- comes
+# from the Fedora base image while the payload is still confined to a bind mount. Run
+# after the COPY, as part of build-image.sh, and a payload shipping usr/bin/find or bin/sh
+# would replace the tools reporting on it and could make its own additions pass.
+#
+# The brew stage is bind-mounted rather than COPYed a second time: reading a list of names
+# out of a 154MB tree should not cost the image that tree again.
+RUN --mount=type=bind,from=ctx,source=/,target=/ctx \
+    --mount=type=bind,from=brew,source=/system_files,target=/brew-payload \
+    /ctx/check-brew-payload-inventory.sh
+
 # Fedora Kinoite does not include the optional Homebrew payload.
 COPY --from=brew /system_files /
 

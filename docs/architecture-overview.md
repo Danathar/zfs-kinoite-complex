@@ -306,8 +306,9 @@ It does four important things:
 
 1. starts from the pinned `BASE_IMAGE`
 2. imports Homebrew from the `ublue-os/brew` payload because Fedora Kinoite does not ship it; CI pins this payload too, passing the digest-pinned `DEFAULT_BREW_IMAGE` from `ci/defaults.json` as `BREW_IMAGE` and recording it in the `org.zfs-kinoite-complex.brew-image` label
-3. runs [`build_files/build-image.sh`](../build_files/build-image.sh)
-4. runs `bootc container lint`
+3. runs [`build_files/check-brew-payload-inventory.sh`](../build_files/check-brew-payload-inventory.sh) against that payload **before** copying it in
+4. runs [`build_files/build-image.sh`](../build_files/build-image.sh)
+5. runs `bootc container lint`
 
 The buildah invocation uses Docker v2s2 manifest format (`oci: false`) rather than
 OCI image manifests because host update tooling (`bootc upgrade` on booted
@@ -315,6 +316,29 @@ machines) works more reliably with the Docker format. The "OCI" terminology
 elsewhere in this project refers to OCI standards for registry interaction and
 layer handling, not the specific container image manifest format produced by
 buildah.
+
+`check-brew-payload-inventory.sh` compares the brew payload's complete file list against
+[`build_files/brew-payload.manifest`](../build_files/brew-payload.manifest) and fails the
+build on any difference. `ci/defaults.json` pins which payload arrives, which makes it
+reproducible but not reviewed: what a person sees when that pin is bumped is a 64-hex
+digest, and reading what came with it means unpacking layers out of a registry. The
+manifest is what somebody read, one path per line with a note on why each is allowed; the
+check compares it against what actually landed and stops the build on any difference, so a
+bump cannot add a file to the signed image without a person putting a line in that file. It
+compares paths and not hashes on purpose — the 154MB tarball's bytes change on every
+upstream release, and a check that fires every time is a check that gets skipped, whereas a
+new *path* is new surface. It counts every non-directory entry rather than just regular
+files and symlinks, because `COPY --from=brew` will carry a FIFO, a socket or a device node
+into `/` just as happily. The payload is bind-mounted from the `brew` stage rather than
+copied a second time, so reading a list of names costs the image nothing.
+
+It is its own `RUN`, above `COPY --from=brew /system_files /`, rather than the first
+function in `build-image.sh`, and that ordering is load-bearing. `build-image.sh` runs
+*after* the copy, so a check written there would walk the payload using a shell and a
+`find`, `sed` and `grep` the payload itself is in a position to have replaced — a payload
+shipping `usr/bin/find` or `bin/sh` supplies the checker that is supposed to report it.
+Above the copy, every tool comes from the Fedora base image and the payload is still
+confined to a bind mount.
 
 `build-image.sh` then:
 
@@ -330,6 +354,15 @@ buildah.
 7. writes repository-specific signing policy for `ghcr.io/danathar/zfs-kinoite-complex`
 8. installs the local `tmpfiles.d` declaration needed for `bootc container lint`
 9. removes build-only runtime/container state
+
+The inventory runs ahead of all of it because steps 2, 3 and 4 act on that payload: an
+unknown file should stop the build before anything enables or reads a unit that came with
+it.
+
+Steps 3 and 4 stay as they are rather than folding into the inventory: the manifest says a
+file is known, not that its contents are still what they were, and those two read inside
+two of the files it lists. They read the image root rather than the bind mount, which is
+also why they stay on this side of the copy.
 
 Step 3 is a trust boundary, not tidying. `brew-setup.service` ends with
 `chown -R 1000:1000 /home/linuxbrew`, so the Homebrew prefix is owned by the

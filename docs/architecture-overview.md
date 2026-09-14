@@ -318,20 +318,39 @@ buildah.
 
 `build-image.sh` then:
 
-1. installs the committed `cosign.pub` public key into the image trust-material path
-2. enables brew setup/update services via `systemctl preset`
-3. removes the brew payload's own login-shell fragments, installs
+1. compares the brew payload's complete file list against
+   [`build_files/brew-payload.manifest`](../build_files/brew-payload.manifest) and fails
+   the build on any difference
+2. installs the committed `cosign.pub` public key into the image trust-material path
+3. enables brew setup/update services via `systemctl preset`
+4. removes the brew payload's own login-shell fragments, installs
    [`files/etc/profile.d/brew-path.sh`](../files/etc/profile.d/brew-path.sh) in their place, and
    fails the build if the payload ever ships another one
-4. installs a `PrivateTmp=yes` drop-in for `brew-setup.service`, and fails the build if
+5. installs a `PrivateTmp=yes` drop-in for `brew-setup.service`, and fails the build if
    that unit ever stages somewhere the drop-in does not contain
-5. keeps Distrobox from the upstream Fedora Kinoite image
-6. runs the ZFS install helper against the resolved akmods cache image reference
-7. writes repository-specific signing policy for `ghcr.io/danathar/zfs-kinoite-complex`
-8. installs the local `tmpfiles.d` declaration needed for `bootc container lint`
-9. removes build-only runtime/container state
+6. keeps Distrobox from the upstream Fedora Kinoite image
+7. runs the ZFS install helper against the resolved akmods cache image reference
+8. writes repository-specific signing policy for `ghcr.io/danathar/zfs-kinoite-complex`
+9. installs the local `tmpfiles.d` declaration needed for `bootc container lint`
+10. removes build-only runtime/container state
 
-Step 3 is a trust boundary, not tidying. `brew-setup.service` ends with
+Step 1 runs first because steps 3, 4 and 5 all act on that payload. `ci/defaults.json`
+pins which payload arrives, which makes it reproducible but not reviewed: what a person
+sees when that pin is bumped is a 64-hex digest, and reading what came with it means
+unpacking layers out of a registry. The manifest is what somebody read, one path per
+line with a note on why each is allowed; the check compares it against what actually
+landed and stops the build on any difference, so a bump cannot add a file to the signed
+image without a person putting a line in that file. It compares paths and not hashes on
+purpose — the 154MB tarball's bytes change on every upstream release, and a check that
+fires every time is a check that gets skipped, whereas a new *path* is new surface. The
+payload is bind-mounted from the `brew` stage into the same `RUN` rather than copied a
+second time, so reading a list of names costs the image nothing.
+
+Steps 4 and 5 stay as they are rather than folding into step 1: the manifest says a file
+is known, not that its contents are still what they were, and those two read inside two
+of the files it lists.
+
+Step 4 is a trust boundary, not tidying. `brew-setup.service` ends with
 `chown -R 1000:1000 /home/linuxbrew`, so the Homebrew prefix is owned by the
 desktop user on every booted machine, and the fragments the payload ships in
 `/etc/profile.d` and the fish vendor directory `eval` and source code out of
@@ -342,7 +361,7 @@ root. The sweep is at build time because which files arrive in
 `COPY --from=brew /system_files /` is a property of an image this repository
 does not build.
 
-Step 4 closes the other half of that boundary: how the prefix gets there.
+Step 5 closes the other half of that boundary: how the prefix gets there.
 `brew-setup.service` stages a 154MB tarball through the fixed path
 `/tmp/homebrew` as root — `mkdir -p`, then `tar -C`, then
 `cp -R -n /tmp/homebrew/… /home/linuxbrew`, then the `chown`. On a booted system

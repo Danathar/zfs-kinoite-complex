@@ -1,0 +1,56 @@
+# Every file `COPY --from=brew /system_files /` puts into this image.
+#
+# Paths are relative to the payload's own /system_files, which is the same thing
+# as being relative to / in the built image. One path per line; `#` starts a
+# comment. build-image.sh's check_brew_payload_inventory() compares this list
+# against what actually arrived and fails the build on any difference.
+#
+# The list is a review record, not a lock file. ci/defaults.json pins which
+# payload arrives; this says what was in it when a person last looked. Bumping
+# DEFAULT_BREW_IMAGE without touching this file fails the build, which is the
+# point: the reviewer of a digest bump otherwise sees a 64-hex string and no
+# way to tell that a new file came with it.
+#
+# Read the file before adding a line here. Everything below is copied into / and
+# then signed and promoted, so an entry is this repository saying it looked.
+#
+# Deliberately paths only, no hashes. The tarball's bytes change on every
+# upstream release, so hashing would fire every time and train people to skip
+# the check. New surface is what is worth stopping a build for.
+
+# Login-shell fragments. build-image.sh removes all three: they eval and source
+# code out of /home/linuxbrew/.linuxbrew, which brew-setup.service gives to
+# UID 1000, and /etc/profile.d and the fish vendor directory are read by root's
+# login shells too. See issue #153. They are listed here because they do arrive;
+# check_brew_login_fragments() is what proves they left again.
+etc/profile.d/brew-bash-completion.sh
+etc/profile.d/brew.sh
+usr/share/fish/vendor_conf.d/ublue-brew.fish
+
+# PAM resource limits, applied to console and SSH logins. Raises nofile from the
+# 1024 default to 4096 for every user and for root. Not a privilege boundary.
+etc/security/limits.d/30-brew-limits.conf
+
+# First-boot extraction of the Homebrew prefix, run as root. build-image.sh
+# presets it and installs a PrivateTmp=yes drop-in for it, because it stages the
+# tarball below through a fixed /tmp path. See issue #158, and
+# check_brew_setup_staging() for the part of it this repository keeps watching.
+usr/lib/systemd/system/brew-setup.service
+
+# `brew update` / `brew upgrade` on a timer. Both run User=1000 against the
+# prefix that user already owns, so neither is a root execution path.
+usr/lib/systemd/system/brew-update.service
+usr/lib/systemd/system/brew-update.timer
+usr/lib/systemd/system/brew-upgrade.service
+usr/lib/systemd/system/brew-upgrade.timer
+
+# `enable` lines for the three units above. build-image.sh presets those three
+# by name rather than relying on this file, so a unit added here alone would not
+# be enabled -- but a preset file sorting ahead of Fedora's own is worth seeing
+# change.
+usr/lib/systemd/system-preset/01-homebrew.preset
+
+# The 154MB Homebrew prefix itself, extracted at first boot by
+# brew-setup.service. The largest thing this image takes from the payload and
+# the reason the payload exists.
+usr/share/homebrew.tar.zst

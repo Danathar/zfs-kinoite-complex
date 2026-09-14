@@ -46,7 +46,13 @@ COPY --from=brew /system_files /
 # Bind-mount the build context instead of COPYing it so none of these files
 # (build-image.sh, containerfiles/, files/, shared/, cosign.pub) end up baked
 # into the published image's filesystem.
+#
+# The brew stage is bind-mounted for the same reason, not COPYed a second time:
+# build-image.sh checks the payload's complete file list against
+# build_files/brew-payload.manifest, and a second copy of a 154MB tree would cost
+# the image that much again to read a list of names.
 RUN --mount=type=bind,from=ctx,source=/,target=/ctx \
+    --mount=type=bind,from=brew,source=/system_files,target=/brew-payload \
     --mount=type=cache,target=/var/cache \
     --mount=type=cache,target=/var/log \
     --mount=type=tmpfs,target=/tmp \

@@ -178,7 +178,7 @@ class ManifestTests(unittest.TestCase):
             line.strip().rstrip("\\").strip().lstrip("/")
             for line in removal_block().splitlines()[1:]
         }
-        self.assertEqual(removed, set(fragment for fragment in REMOVED_FRAGMENTS))
+        self.assertEqual(removed, set(REMOVED_FRAGMENTS))
         for fragment in REMOVED_FRAGMENTS:
             self.assertIn(fragment, manifest_entries())
 
@@ -217,13 +217,12 @@ class InventoryCheckTests(unittest.TestCase):
             "etc/sudoers.d/brew",
             "usr/bin/sudo",
         ):
-            with self.subTest(added=added):
-                with tempfile.TemporaryDirectory() as temp_dir:
-                    root = Path(temp_dir)
-                    payload = fixture_payload(root, PAYLOAD_FILES + (added,))
-                    result = run_check(payload, MANIFEST)
-                    self.assertEqual(result.returncode, 1)
-                    self.assertIn(added, result.stderr)
+            with self.subTest(added=added), tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                payload = fixture_payload(root, PAYLOAD_FILES + (added,))
+                result = run_check(payload, MANIFEST)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn(added, result.stderr)
 
     def test_an_added_symlink_fails_the_build(self) -> None:
         # A symlink into the Homebrew prefix placed somewhere root reads is the same

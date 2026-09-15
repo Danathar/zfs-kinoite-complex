@@ -38,8 +38,10 @@ indent_size = 2
 indent_size = 2
 
 # build_files/build-image.sh continues its long podman/find invocations at two
-# spaces. It is the only shell script in the tree; declare what it does rather
-# than let an editor fight it.
+# spaces, and so do the other two shell scripts in the tree,
+# build_files/check-brew-payload-inventory.sh and
+# files/etc/profile.d/brew-path.sh. Declare what they do rather than let an
+# editor fight them.
 [*.sh]
 indent_size = 2
 

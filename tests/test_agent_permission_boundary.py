@@ -401,6 +401,15 @@ class SecurityDocEnforcementTests(unittest.TestCase):
                 "gh pr merge 42 --squash",
                 "gh workflow run build.yml",
                 "gh release create v1.0.0",
+            ),
+        ),
+        # Its own row rather than a tail of the one above, because it is
+        # enforced differently: the flag spellings are denied and the
+        # colon-refspec spelling is not. See
+        # `test_the_delete_refspec_hole_is_still_a_hole`.
+        "delete a branch or tag": (
+            "deny",
+            (
                 "git push --delete origin feature",
                 "git push origin --delete feature",
                 "git tag -d v1.0.0",
@@ -506,6 +515,24 @@ class SecurityDocEnforcementTests(unittest.TestCase):
         # that stops being true, say so there rather than leaving the doc
         # understating the boundary.
         self.assertNotEqual(decide("git push origin +main", self.permissions), "deny")
+
+    def test_the_delete_refspec_hole_is_still_a_hole(self) -> None:
+        # The same mechanism one line down: a refspec with an empty source side
+        # deletes the remote ref, with no option for a prefix rule to match. The
+        # short form is not even expressible here -- a trailing `:*` means "this
+        # command with any arguments", so a pattern ending in a literal
+        # colon-glob collides with that idiom. If a rule ever does catch these,
+        # this fails and the fix is to say so in docs/SECURITY-AI.md and in
+        # `_note_push_orderings`, both of which call the deletion row
+        # best-effort.
+        for command in (
+            "git push origin :main",
+            "git push origin :feature",
+            "git push origin :refs/heads/feature",
+            "git push origin :refs/tags/v1.0.0",
+        ):
+            with self.subTest(command=command):
+                self.assertNotEqual(decide(command, self.permissions), "deny")
 
     def test_reading_labels_is_still_permitted(self) -> None:
         # `_note_labels`: minting or renaming a label manufactures an approval

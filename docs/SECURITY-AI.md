@@ -158,7 +158,8 @@ is its own hazard.
 
 | Rule | How it is enforced |
 | --- | --- |
-| merge, dispatch `build.yml`, `gh release`, delete a branch or tag | **Denied** outright in `settings.json` |
+| merge, dispatch `build.yml`, `gh release` | **Denied** outright in `settings.json` |
+| delete a branch or tag | **Denied for the orderings a prefix rule can see** — `git push --delete`, `git push <remote> --delete`, and `git tag -d`, which is local only: deleting a published tag takes a push. Git also deletes a remote ref from a refspec with an empty source side — `git push origin :main`, `git push origin :refs/tags/v1.0.0` — which removes it with no option at all, the same way a leading `+` forces with none. Those decide `ask`. Treat this as best-effort, not a boundary. |
 | force-push | **Denied for the orderings a prefix rule can see** — `git push --force` and `git push <remote> --force`. Git also accepts a leading `+` in a refspec, which forces with no flag at all and which no prefix rule can match. Treat this as best-effort, not a boundary. |
 | move or delete a registry artifact (`skopeo copy`/`delete`, `podman`/`buildah push`, `cosign sign`) | **Denied** |
 | create, edit, or delete a label | **Denied** (`gh label create`/`edit`/`delete`/`clone`) |

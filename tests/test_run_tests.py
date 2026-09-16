@@ -37,7 +37,6 @@ from unittest.mock import patch
 
 import run_tests
 
-
 # A real TestCase, because the unittest fallback below runs what it is given
 # and reports exit code 5 when nothing was collected.
 CASE = """import unittest

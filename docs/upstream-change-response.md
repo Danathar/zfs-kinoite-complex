@@ -12,7 +12,9 @@ Identify the failed job and exact step before changing repository code:
 1. determine whether the failure is in input resolution, akmods, image
    composition, signing, or promotion
 2. record the base-image digest, Fedora version, kernel release, OpenZFS
-   version, akmods SHA, and cache image digest from the workflow summary
+   version and akmods SHA from the run's `build-inputs-<run_id>` artifact, and
+   the cache image digest from the akmods job's `Digest-pinned akmods cache
+   image for final build:` log line
 3. compare the failed run with the most recent successful run
 4. inspect the relevant upstream repository or runner change
 

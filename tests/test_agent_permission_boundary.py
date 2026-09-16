@@ -22,7 +22,11 @@ all of these one-line edits to the committed tree:
     explains is a mutation path because `gh api` switches to POST on `-f` and
     honours `-X`;
   * breaking the `PostToolUse` hook body, which is a shell one-liner that no
-    test ran.
+    test ran;
+  * putting `Bash(python3 -m pytest:*)` back on `allow`, which sounds like a
+    convenience and is unbounded local code execution -- a runner imports every
+    module it collects, an import is not a tool call, and a module that calls
+    `subprocess` reaches every command the `deny` list refuses.
 
 The matcher is re-implemented here rather than assumed, and it has its own case
 table (`PermissionRuleMatcherTests`). Without that, every assertion below could
@@ -461,6 +465,17 @@ class SecurityDocEnforcementTests(unittest.TestCase):
             "ask",
             ("git push origin HEAD:main",),
         ),
+        # Not a denial at all, which is why it carries its own branch in
+        # `test_the_denied_rows_really_say_denied`. The claim is that the one
+        # test command an agent may run unattended is the wrapper, because a
+        # runner imports what it collects and an import is not a tool call.
+        "run a test suite": (
+            "allow",
+            (
+                "python3 tests/run_tests.py",
+                "python3 tests/run_tests.py tests/test_agent_permission_boundary.py -v",
+            ),
+        ),
     }
 
     @classmethod
@@ -504,6 +519,8 @@ class SecurityDocEnforcementTests(unittest.TestCase):
             with self.subTest(rule=row[0]):
                 if key == "push to":
                     self.assertIn("not expressible", enforcement)
+                elif key == "run a test suite":
+                    self.assertIn("narrowed, not denied", enforcement)
                 elif expected == "deny":
                     self.assertIn("denied", enforcement)
                 else:
@@ -533,6 +550,31 @@ class SecurityDocEnforcementTests(unittest.TestCase):
         ):
             with self.subTest(command=command):
                 self.assertNotEqual(decide(command, self.permissions), "deny")
+
+    def test_the_unrestricted_test_runners_are_not_on_the_allow_list(self) -> None:
+        # The load-bearing half of the "run a test suite" row. A runner imports
+        # every module it collects, and an import is not a tool call, so an
+        # allow-listed `python3 -m pytest <anything>` reaches every command the
+        # deny list above refuses -- via a module that calls subprocess, which
+        # no rule here ever sees. They decide `unlisted` rather than `ask`:
+        # there is no rule for them in any bucket, so Claude Code prompts.
+        for command in (
+            "python3 -m pytest tests/",
+            "python3 -m pytest /tmp/anywhere/test_x.py",
+            "python3 -m unittest discover -s tests",
+            "python3 -m unittest discover -s /tmp/anywhere",
+        ):
+            with self.subTest(command=command):
+                self.assertNotEqual(decide(command, self.permissions), "allow")
+
+    def test_the_allowed_runner_is_the_file_that_does_the_narrowing(self) -> None:
+        # The other half: the row is worth nothing if the allowed command is a
+        # path that does not exist, or one that no longer refuses anything. The
+        # refusals themselves are exercised in tests/test_run_tests.py; this
+        # holds the join between the rule and that file.
+        rule = "Bash(python3 tests/run_tests.py:*)"
+        self.assertIn(rule, self.permissions["allow"])
+        self.assertTrue((REPO_ROOT / "tests" / "run_tests.py").is_file())
 
     def test_reading_labels_is_still_permitted(self) -> None:
         # `_note_labels`: minting or renaming a label manufactures an approval

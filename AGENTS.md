@@ -150,7 +150,7 @@ After each step, run the verification before moving on. If verification fails, s
 - Python CI logic lives in [ci_tools/](ci_tools/) and is invoked through [ci_tools/cli.py](ci_tools/cli.py). Add new commands by registering them there and writing a paired test under [tests/](tests/).
 - Workflow YAML lives in [.github/workflows/](.github/workflows/); reusable pieces go in [.github/actions/](.github/actions/) as composite actions.
 - Do not edit `cosign.key` (gitignored anyway) or alter signing logic without explicit instruction.
-- Run `pytest` from repo root. Tests must pass before you declare success.
+- Run `python3 tests/run_tests.py` from repo root. Tests must pass before you declare success. It is the test command `.claude/settings.json` allows unattended, and it confines collection to [tests/](tests/) — a runner imports every module it collects, so an unrestricted one is unbounded code execution. [docs/SECURITY-AI.md](docs/SECURITY-AI.md) has the reasoning.
 - Match the existing style in `ci_tools/`: small modules, `argparse`, write outputs to `GITHUB_OUTPUT` rather than stdout-parsing.
 
 ---

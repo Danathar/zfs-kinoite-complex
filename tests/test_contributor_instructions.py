@@ -117,7 +117,7 @@ IMAGE_SIDE_MODULES = (
 SHIPPED_TREES = ("ci_tools", "shared", "files/scripts", "containerfiles/zfs-akmods")
 
 # Imports that are neither stdlib nor a module of this repository.
-LOCAL_ROOTS = {"ci_tools", "shared", "tests", "check_coverage"}
+LOCAL_ROOTS = {"ci_tools", "shared", "tests", "check_coverage", "run_tests"}
 
 # `.github/scripts/README.md` does not name these two commands today. Frozen
 # rather than ignored: a new command that goes undocumented grows this set and

@@ -12,11 +12,25 @@ Identify the failed job and exact step before changing repository code:
 1. determine whether the failure is in input resolution, akmods, image
    composition, signing, or promotion
 2. record the base-image digest, Fedora version, kernel release, OpenZFS
-   version and akmods SHA from the run's `build-inputs-<run_id>` artifact, and
-   the cache image digest from the akmods job's `Digest-pinned akmods cache
-   image for final build:` log line
+   version, and akmods SHA from the `build-inputs-<run_id>` artifact
+   (`artifacts/build-inputs.json`, under `inputs`); the cache image digest is
+   not in that manifest, so take it from the akmods job log, which prints
+   `Digest-pinned akmods cache image for final build:` when the cache was
+   rebuilt and `Checked akmods cache digest:` when it was reused
 3. compare the failed run with the most recent successful run
 4. inspect the relevant upstream repository or runner change
+
+If that artifact is missing, the run failed at or before input resolution:
+either the `preflight` gate failed and `build-zfs-akmods` never started, or
+`resolve-build-inputs` raised before the manifest was written. No job log
+carries the six values in that case, because both resolvers print their
+results only after they succeed and none of the values were resolved at all.
+Take the configured starting points from `ci/defaults.json` at the run's
+commit (`DEFAULT_BASE_IMAGE`, `DEFAULT_BUILD_CONTAINER_IMAGE`,
+`DEFAULT_ZFS_MINOR_VERSION`, and `AKMODS_UPSTREAM_REF`, which floats on
+`AKMODS_UPSTREAM_TRACK` when empty), treat the failing step's own error as
+the finding, and record that the base-image digest, Fedora version, kernel
+release, OpenZFS version, and akmods SHA do not exist for this run.
 
 ## Common failure classes
 

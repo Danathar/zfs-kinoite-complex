@@ -21,15 +21,17 @@ Goal: Make the document fail here when the machine moves under it, in both direc
 
 Parses Markdown and YAML by hand. CI installs pytest, pytest-cov and ruff and nothing else
 (see .github/workflows/test.yml), so a PyYAML import here would skip in exactly the place
-these assertions are meant to run. `_section`, `_headings`, `_numbered_items`, `_prose`,
-`_table`, `_job_names`, `_job_field` and `_job_block` are the whole parser and carry their own
-case table in `ParserTests` below, because a hand-rolled parser that is never wrong about a
+these assertions are meant to run. `_section`, `_headings`, `_numbered_items`,
+`_trailing_prose`, `_prose`, `_table`, `_job_names`, `_job_field` and `_job_block` are the
+whole parser and carry their own case table in `ParserTests` below, because a hand-rolled parser that is never wrong about a
 fixture is the only thing keeping the assertions built on it honest.
 """
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import json
 import os
 import re
@@ -193,6 +195,39 @@ def _numbered_items(lines: list[str]) -> list[str]:
         elif open_item:
             items[-1] = f"{items[-1]} {stripped}"
     return items
+
+
+def _trailing_prose(lines: list[str]) -> str:
+    """
+    Return the first paragraph after the first ordered list in `lines`, collapsed to one string.
+
+    First triage carries its early-failure path as a paragraph under the list rather than as a
+    sixth numbered step, because it is not a step: it is what to do when step 2's artifact does
+    not exist. Item continuation lines are indented, so an unindented line after an item starts
+    the paragraph, and the paragraph ends at the first blank line or heading after it -- a
+    later paragraph or subsection must not be folded into the one being asserted. Raises when
+    there is no such paragraph, rather than letting the assertions below pass against "".
+    """
+
+    seen_item = False
+    tail: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if re.match(r"^\d+\.\s+", stripped) and not line.startswith("   "):
+            seen_item = True
+            tail = []
+            continue
+        if not seen_item or line.startswith("   "):
+            continue
+        if not stripped or stripped.startswith("#"):
+            if tail:
+                break
+            continue
+        tail.append(stripped)
+
+    if not tail:
+        raise AssertionError("no prose after the ordered list")
+    return re.sub(r"\s+", " ", " ".join(tail)).strip()
 
 
 def _prose(lines: list[str]) -> str:
@@ -429,6 +464,22 @@ class ParserTests(unittest.TestCase):
     def test_numbered_items_reject_a_gap_in_the_numbering(self) -> None:
         with self.assertRaises(AssertionError):
             _numbered_items(["1. one", "3. three"])
+
+    def test_trailing_prose_returns_the_paragraph_after_the_list(self) -> None:
+        self.assertEqual(
+            _trailing_prose(_section(self.FIXTURE, "## Alpha")),
+            "prose after the list",
+        )
+
+    def test_trailing_prose_stops_at_the_paragraph_after_it(self) -> None:
+        lines = ["1. one", "wrapped", "paragraph", "", "a second paragraph", "## Next"]
+        self.assertEqual(_trailing_prose(lines), "wrapped paragraph")
+
+    def test_trailing_prose_ignores_a_wrapped_item_and_rejects_a_bare_list(self) -> None:
+        # The wrapped continuation of item 2 is indented; a list with nothing after it has no
+        # paragraph at all, and must raise rather than return "".
+        with self.assertRaises(AssertionError):
+            _trailing_prose(["1. one", "2. two that", "   wraps", ""])
 
     def test_prose_joins_a_hard_wrapped_phrase(self) -> None:
         self.assertEqual(
@@ -710,6 +761,103 @@ class FirstTriageRecordTests(unittest.TestCase):
         )
 
 
+class FirstTriageEarlyFailureTests(unittest.TestCase):
+    """
+    The paragraph under the list, against the two runs where step 2's artifact never exists.
+
+    Step 2 sends a responder to `build-inputs-<run_id>`, which the prepare action uploads after
+    it has resolved the inputs and written the manifest. Two failures land before that upload
+    and leave no artifact to open: `preflight` failing, which stops `build-zfs-akmods` from
+    starting at all, and `resolve-build-inputs` raising inside the composite action. Neither
+    leaves the values in a log either, because both resolvers print only after they return, so
+    the paragraph has to say what is actually recoverable -- the configured starting points in
+    `ci/defaults.json` -- and that the derived values do not exist for that run. Each half is
+    joined below, and the two "print only on success" claims are executed. Its remaining
+    claim, that an empty `AKMODS_UPSTREAM_REF` floats on `AKMODS_UPSTREAM_TRACK`, is the
+    emergency-freeze rule, executed in EmergencyFreezeTests and not repeated here.
+    """
+
+    def setUp(self) -> None:
+        self.prose = _trailing_prose(_section(DOC_TEXT, "## First triage"))
+        self.action = PREPARE_ACTION.read_text(encoding="utf-8")
+
+    def test_the_paragraph_names_the_two_runs_that_have_no_manifest(self) -> None:
+        self.assertIn("preflight", self.prose)
+        self.assertIn("build-zfs-akmods", self.prose)
+        self.assertIn("resolve-build-inputs", self.prose)
+
+    def test_a_failed_preflight_really_stops_the_akmods_job_from_starting(self) -> None:
+        # "`build-zfs-akmods` never started" is a claim about the dependency edge, not about
+        # any condition inside the job: a needed job that failed skips its dependents.
+        self.assertEqual(_job_field(BUILD_TEXT, "build-zfs-akmods", "needs"), "preflight")
+        self.assertIn("preflight", _job_names(BUILD_TEXT))
+
+    def test_the_manifest_upload_really_sits_behind_input_resolution(self) -> None:
+        # "raised before the manifest was written": the upload is downstream of both the
+        # resolve step and the writer, so anything raising in resolution takes the artifact
+        # with it. Compared by position in the composite action, which is where the order is.
+        resolve = self.action.index("python3 -m ci_tools.cli resolve-build-inputs")
+        write = self.action.index("python3 -m ci_tools.cli write-build-inputs-manifest")
+        upload = self.action.index("name: build-inputs-${{ github.run_id }}")
+        self.assertLess(resolve, write, "the manifest is now written before inputs resolve")
+        self.assertLess(write, upload, "the artifact is now uploaded before it is written")
+
+    def test_the_resolver_prints_nothing_when_resolution_raises(self) -> None:
+        # Executed: "both resolvers print their results only after they succeed" is the reason
+        # the paragraph does not send a responder to the job log for these values.
+        from ci_tools import resolve_build_inputs
+
+        stream = io.StringIO()
+        with (
+            patch.object(
+                resolve_build_inputs, "resolve_build_inputs", side_effect=CiToolError("boom")
+            ),
+            contextlib.redirect_stdout(stream),
+            self.assertRaises(CiToolError),
+        ):
+            resolve_build_inputs.main()
+        self.assertEqual(stream.getvalue(), "", "a failed resolution now logs resolved inputs")
+
+    def test_the_stable_signal_gate_prints_nothing_when_it_raises(self) -> None:
+        # The other half of the same claim, for the job that fails first.
+        from ci_tools import check_stable_signal
+
+        stream = io.StringIO()
+        with (
+            patch.object(check_stable_signal, "_bypass_decision", side_effect=CiToolError("boom")),
+            patch.dict(os.environ, {"GITHUB_EVENT_NAME": "push"}, clear=False),
+            contextlib.redirect_stdout(stream),
+            self.assertRaises(CiToolError),
+        ):
+            check_stable_signal.main()
+        self.assertEqual(stream.getvalue(), "", "a failed gate now logs a decision")
+
+    def test_the_paragraph_sends_a_responder_to_keys_that_exist(self) -> None:
+        defaults = json.loads(DEFAULTS_FILE.read_text(encoding="utf-8"))
+        named = [key for key in defaults if key in self.prose]
+        self.assertEqual(
+            sorted(named),
+            [
+                "AKMODS_UPSTREAM_REF",
+                "AKMODS_UPSTREAM_TRACK",
+                "DEFAULT_BASE_IMAGE",
+                "DEFAULT_BUILD_CONTAINER_IMAGE",
+                "DEFAULT_ZFS_MINOR_VERSION",
+            ],
+            "the paragraph names a defaults key that does not exist, or stopped naming one",
+        )
+
+    def test_the_paragraph_says_the_derived_values_do_not_exist(self) -> None:
+        # The half a responder acts on: not "look somewhere else", but "these were never
+        # resolved". Every manifest-backed value step 2 lists is named here as absent.
+        for value, key in VALUE_TO_MANIFEST_KEY.items():
+            if key is None:
+                continue
+            with self.subTest(value=value):
+                self.assertIn(value, self.prose)
+        self.assertIn("do not exist for this run", self.prose)
+
+
 class FailureTableShapeTests(unittest.TestCase):
     """The table's rows, asserted exhaustive before any row is joined to anything."""
 
@@ -758,19 +906,29 @@ class KmodRowTests(unittest.TestCase):
             "the row names a fork that is not the configured upstream",
         )
 
-    def test_the_planner_fails_closed_when_the_supported_kernel_has_no_kmod(self) -> None:
-        # Executed, not grepped. This RuntimeError is the failure the row is about: the cache
-        # held kmod-zfs RPMs, just not for the kernel the base image actually boots.
-        other_kmod = Path("/tmp/kmod-zfs-7.1.4.rpm")
+    def _uncovered_kernel_failure(self, supported_kernel: str) -> str:
+        """
+        Return the planner's own text for the failure this row is about, by raising it.
+
+        The cache held kmod-zfs RPMs, just not for the kernel the base image actually boots.
+        Every assertion below reads this message rather than a copy of it, so a reworded
+        failure cannot leave the row's advice pinned to text the machine no longer produces.
+        """
+
         with self.assertRaises(RuntimeError) as context:
             self.helper.build_install_plan(
-                ["7.1.4-204.fc44.x86_64", "7.1.6-200.fc44.x86_64"],
-                [other_kmod],
+                ["7.1.4-204.fc44.x86_64", supported_kernel],
+                [Path("/tmp/kmod-zfs-7.1.4.rpm")],
                 rpm_name_lookup=lambda _path: "kmod-zfs",
                 kernel_release_lookup=lambda _path: "7.1.4-204.fc44.x86_64",
             )
-        self.message = str(context.exception)
-        self.assertIn("No kmod-zfs RPM found for the supported primary kernel", self.message)
+        return str(context.exception)
+
+    def test_the_planner_fails_closed_when_the_supported_kernel_has_no_kmod(self) -> None:
+        # Executed, not grepped.
+        message = self._uncovered_kernel_failure("7.1.6-200.fc44.x86_64")
+        self.assertIn("No kmod-zfs RPM found for the supported primary kernel", message)
+        self.assertIn("7.1.6-200.fc44.x86_64", message)
 
     def test_the_planner_fails_closed_when_the_cache_has_no_kmod_at_all(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "No kmod-zfs RPMs found in cache image"):
@@ -783,18 +941,18 @@ class KmodRowTests(unittest.TestCase):
 
     def test_the_classifier_reads_that_failure_as_an_upstream_compatibility_break(self) -> None:
         # The row tells a responder to wait for the fork, which is only the right advice if the
-        # machine also classifies this as upstream drift rather than a repo bug.
+        # machine also classifies this as upstream drift rather than a repo bug. The text
+        # classified here is the exception the planner just raised, not a copy of it: if the
+        # planner rewords its message past what the patterns recognise, this fails.
         from ci_tools.classify_akmods_failure import (
             FAILURE_KIND_UPSTREAM_COMPAT,
             UPSTREAM_COMPAT_PATTERNS,
             classify_log_text,
         )
 
-        message = (
-            "No kmod-zfs RPM found for the supported primary kernel 7.1.6-200.fc44.x86_64. "
-            "Cached akmods do not cover the supported kernel; rebuild akmods."
-        )
-        kind, matched = classify_log_text(message, kernel_release="7.1.6-200.fc44.x86_64")
+        kernel = "7.1.6-200.fc44.x86_64"
+        message = self._uncovered_kernel_failure(kernel)
+        kind, matched = classify_log_text(message, kernel_release=kernel)
         self.assertTrue(matched, "no pattern matched the planner's own fail-closed message")
         self.assertEqual(kind, FAILURE_KIND_UPSTREAM_COMPAT)
         self.assertTrue(

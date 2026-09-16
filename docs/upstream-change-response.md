@@ -20,6 +20,18 @@ Identify the failed job and exact step before changing repository code:
 3. compare the failed run with the most recent successful run
 4. inspect the relevant upstream repository or runner change
 
+If that artifact is missing, the run failed at or before input resolution:
+either the `preflight` gate failed and `build-zfs-akmods` never started, or
+`resolve-build-inputs` raised before the manifest was written. No job log
+carries the six values in that case, because both resolvers print their
+results only after they succeed and none of the values were resolved at all.
+Take the configured starting points from `ci/defaults.json` at the run's
+commit (`DEFAULT_BASE_IMAGE`, `DEFAULT_BUILD_CONTAINER_IMAGE`,
+`DEFAULT_ZFS_MINOR_VERSION`, and `AKMODS_UPSTREAM_REF`, which floats on
+`AKMODS_UPSTREAM_TRACK` when empty), treat the failing step's own error as
+the finding, and record that the base-image digest, Fedora version, kernel
+release, OpenZFS version, and akmods SHA do not exist for this run.
+
 ## Common failure classes
 
 | Failure | First action |

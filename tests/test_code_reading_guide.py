@@ -70,8 +70,11 @@ CI_TOOLS = REPO_ROOT / "ci_tools"
 TESTS_DIR = REPO_ROOT / "tests"
 
 # Modules that live in this repository rather than on PyPI. `check_coverage` is
-# tests/check_coverage.py, imported by tests/test_check_coverage.py.
-FIRST_PARTY = {"ci_tools", "shared", "tests", "check_coverage"}
+# tests/check_coverage.py, imported by tests/test_check_coverage.py, and
+# `run_tests` is tests/run_tests.py, imported by tests/test_run_tests.py: both
+# are scripts in tests/, which pytest puts on sys.path, so they are imported by
+# bare name and would otherwise read as PyPI packages here.
+FIRST_PARTY = {"ci_tools", "shared", "tests", "check_coverage", "run_tests"}
 
 
 def guide_lines() -> list[str]:

@@ -165,10 +165,37 @@ is its own hazard.
 | create, edit, or delete a label | **Denied** (`gh label create`/`edit`/`delete`/`clone`) |
 | ordinary `git push`, `gh pr edit`, `gh pr review` | **`ask`** — a human sees the command before it runs. They cannot be denied outright because each has legitimate uses here, and a prefix rule cannot tell those apart. |
 | **push to `main` specifically** | **Not expressible as a prefix rule.** `git push` to a feature branch is routine; the destination is an argument, not a prefix. This one rests on the agent honouring the rule, on `ask` surfacing the command, and on branch protection if it is ever enabled — `main` is not protected as of this writing. |
+| run a test suite unattended | **Narrowed, not denied.** `python3 tests/run_tests.py` is the allowed command; `python3 -m pytest` and `python3 -m unittest` are not listed, so they prompt. The runner refuses a selection outside `tests/`, refuses the options that relocate collection or load a plugin, and refuses to import any `.py` git does not track. A *tracked* test still runs — that is what a test runner is for. See below. |
 
 So the honest summary: the irreversible, outward-facing operations are denied;
 the reversible ones are promptable; and one rule is a convention rather than a
 control. Do not read the list above as "impossible".
+
+### Every deny row is conditional on what may be imported
+
+The rows above decide **commands**. A Python module that runs
+
+```python
+subprocess.run(["cosign", "sign", "--key", "env://COSIGN_PRIVATE_KEY", ref])
+```
+
+at import time is not a command an agent asked to run, so no rule in
+`.claude/settings.json` is consulted before it runs. A test runner imports
+every module it collects. So an allow-listed test command is not one
+permission — it is a permission to execute whatever that runner will import,
+and the strength of every `deny` row above is bounded by that set.
+
+This is why the allowed command is [`tests/run_tests.py`](../tests/run_tests.py)
+rather than the runner itself. It bounds the set to code that is already in the
+diff: nothing outside `tests/`, no plugin or relocated config, and nothing git
+does not track. What it deliberately does not do is stop a **committed** test
+from running — this document invites an agent to add tests, so that is by
+design, and the control for it is that the file is in the pull request. Running
+`pytest` directly is not denied either; it is unlisted, so it prompts, and a
+human reads the command first.
+
+Treat that as the shape of the boundary generally: a `deny` row says an agent
+cannot take a step *as a command*, not that the step is unreachable.
 
 ## What an agent branch can actually cause here
 

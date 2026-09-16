@@ -35,6 +35,7 @@ import io
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
 import textwrap
@@ -56,6 +57,16 @@ PREPARE_ACTION = REPO_ROOT / ".github" / "actions" / "prepare-main-akmods" / "ac
 PIN_CACHE_MODULE = REPO_ROOT / "ci_tools" / "pin_akmods_cache.py"
 CHECK_CACHE_MODULE = REPO_ROOT / "ci_tools" / "check_akmods_cache.py"
 COSIGN_PUB = REPO_ROOT / "cosign.pub"
+TEST_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "test.yml"
+
+# The pages a responder actually starts from. The runbook is only reachable because these link
+# it; a rename that left them behind would strand the page this module exists to keep honest.
+ENTRY_POINTS = (
+    REPO_ROOT / "README.md",
+    REPO_ROOT / "docs" / "documentation-guide.md",
+    REPO_ROOT / "docs" / "reflections" / "README.md",
+    REPO_ROOT / "docs" / "akmods-fork-maintenance.md",
+)
 
 DOC_TEXT = DOC.read_text(encoding="utf-8")
 BUILD_TEXT = BUILD_WORKFLOW.read_text(encoding="utf-8")
@@ -547,6 +558,26 @@ class SectionInventoryTests(unittest.TestCase):
     nothing here reads, and the file would keep passing while covering less of the page.
     """
 
+    def test_the_document_is_tracked_and_still_carries_its_title(self) -> None:
+        tracked = subprocess.run(
+            ["git", "ls-files", "--error-unmatch", str(DOC.relative_to(REPO_ROOT))],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(tracked.returncode, 0, f"{DOC.name} is not tracked by git")
+        self.assertEqual(DOC_TEXT.splitlines()[0], "# Upstream Change Response")
+
+    def test_the_runbook_is_still_pointed_at_from_every_entry_point(self) -> None:
+        # The page is only useful if the places a responder starts from still lead here.
+        for path in ENTRY_POINTS:
+            with self.subTest(path=path.name):
+                self.assertIn(
+                    "upstream-change-response.md",
+                    path.read_text(encoding="utf-8"),
+                    f"{path.relative_to(REPO_ROOT)} no longer points at the runbook",
+                )
+
     def test_every_asserted_section_exists(self) -> None:
         for heading in DOC_HEADINGS:
             with self.subTest(heading=heading):
@@ -588,6 +619,15 @@ class PromotionGateTests(unittest.TestCase):
         self.assertIn("red build", self.intro)
         self.assertIn("stop promotion", self.intro)
         self.assertIn("last known-good image remains available", self.intro)
+
+    def test_the_moving_inputs_the_intro_names_are_the_configured_ones(self) -> None:
+        # The premise rests on the page describing this repository. A base image or fork the
+        # defaults file no longer points at would make the rest of the page someone else's.
+        defaults = load_repo_defaults()
+        self.assertIn("Fedora Kinoite", self.intro)
+        self.assertIn("kinoite", defaults["DEFAULT_BASE_IMAGE"])
+        self.assertIn("`Danathar/akmods`", self.intro)
+        self.assertIn("Danathar/akmods", defaults["AKMODS_UPSTREAM_REPO"])
 
     def test_promotion_requires_both_build_jobs_to_have_succeeded(self) -> None:
         for job in ("build-zfs-akmods", "build-candidate-image"):
@@ -1304,6 +1344,13 @@ class AfterRecoveryTests(unittest.TestCase):
     def test_the_section_asks_for_a_test_when_trust_boundaries_move(self) -> None:
         self.assertIn("unit test", self.body)
         self.assertIn("before promotion", self.body)
+
+    def test_the_test_the_section_promises_runs_on_every_pull_request(self) -> None:
+        # "add or update a unit test ... before promotion" is only an instruction a responder
+        # can follow if the suite it names actually gates a pull request.
+        workflow = TEST_WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn("pull_request:", workflow)
+        self.assertIn("pytest", workflow)
 
 
 if __name__ == "__main__":

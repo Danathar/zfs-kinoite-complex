@@ -17,6 +17,7 @@ ci_tools/                             workflow helper commands
 .github/workflows/                    GitHub Actions pipelines
 .github/scripts/README.md             workflow step -> command-line interface (CLI) command map
 docs/                                 teaching-style documentation
+tests/                                unit tests plus the tests/e2e/ tier
 ```
 
 ## Core Workflows
@@ -24,7 +25,7 @@ docs/                                 teaching-style documentation
 - `.github/workflows/build.yml`
   - main push/schedule/manual workflow
   - candidate-first build and promotion
-  - scheduled runs skip when the upstream Kinoite base image has not advanced since the last promoted image (see "Safety Model" above)
+  - scheduled runs skip when the upstream Kinoite base image has not advanced since the last promoted image (see [`docs/safety-model.md`](./safety-model.md))
 - `.github/workflows/build-branch.yml`
   - branch-tagged test builds
   - reuse or rebuild the shared akmods cache when the branch targets a new primary kernel
@@ -97,18 +98,24 @@ Docs-only changes do not trigger image builds.
 2. [`tests/test_akmods_clone_pinned.py`](../tests/test_akmods_clone_pinned.py)
 3. [`tests/test_akmods_configure_zfs_target.py`](../tests/test_akmods_configure_zfs_target.py)
 4. [`tests/test_check_akmods_cache.py`](../tests/test_check_akmods_cache.py)
-5. [`tests/test_classify_akmods_failure.py`](../tests/test_classify_akmods_failure.py)
-6. [`tests/test_cli.py`](../tests/test_cli.py)
-7. [`tests/test_common.py`](../tests/test_common.py)
-8. [`tests/test_configure_signing_policy.py`](../tests/test_configure_signing_policy.py)
-9. [`tests/test_export_repo_defaults.py`](../tests/test_export_repo_defaults.py)
-10. [`tests/test_install_zfs_from_akmods_cache.py`](../tests/test_install_zfs_from_akmods_cache.py)
-11. [`tests/test_prepare_validation_build.py`](../tests/test_prepare_validation_build.py)
-12. [`tests/test_promote_stable.py`](../tests/test_promote_stable.py)
-13. [`tests/test_resolve_build_inputs.py`](../tests/test_resolve_build_inputs.py)
-14. [`tests/test_sign_image.py`](../tests/test_sign_image.py)
-15. [`tests/test_tagging_context.py`](../tests/test_tagging_context.py)
-16. [`tests/test_write_build_inputs_manifest.py`](../tests/test_write_build_inputs_manifest.py)
+5. [`tests/test_check_stable_signal.py`](../tests/test_check_stable_signal.py)
+6. [`tests/test_classify_akmods_failure.py`](../tests/test_classify_akmods_failure.py)
+7. [`tests/test_cli.py`](../tests/test_cli.py)
+8. [`tests/test_common.py`](../tests/test_common.py)
+9. [`tests/test_configure_signing_policy.py`](../tests/test_configure_signing_policy.py)
+10. [`tests/test_export_repo_defaults.py`](../tests/test_export_repo_defaults.py)
+11. [`tests/test_install_zfs_from_akmods_cache.py`](../tests/test_install_zfs_from_akmods_cache.py)
+12. [`tests/test_oci_layout.py`](../tests/test_oci_layout.py)
+13. [`tests/test_pin_akmods_cache.py`](../tests/test_pin_akmods_cache.py)
+14. [`tests/test_prepare_validation_build.py`](../tests/test_prepare_validation_build.py)
+15. [`tests/test_promote_stable.py`](../tests/test_promote_stable.py)
+16. [`tests/test_resolve_build_inputs.py`](../tests/test_resolve_build_inputs.py)
+17. [`tests/test_sign_image.py`](../tests/test_sign_image.py)
+18. [`tests/test_tagging_context.py`](../tests/test_tagging_context.py)
+19. [`tests/test_write_akmods_badge.py`](../tests/test_write_akmods_badge.py)
+20. [`tests/test_write_build_inputs_manifest.py`](../tests/test_write_build_inputs_manifest.py)
+21. [`tests/test_write_last_good_build_badge.py`](../tests/test_write_last_good_build_badge.py)
+22. [`tests/test_zfs_release.py`](../tests/test_zfs_release.py)
 
 #### Running Tests
 

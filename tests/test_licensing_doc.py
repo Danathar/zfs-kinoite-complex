@@ -408,6 +408,21 @@ class LicenceFilesTests(unittest.TestCase):
             "LICENSE and LICENSE.APACHE-2.0 carry identical text",
         )
 
+    def test_the_tracked_licence_files_are_exactly_the_two_the_page_accounts_for(self) -> None:
+        # The direction `test_both_licence_files_are_tracked` cannot see: a third licence
+        # file arriving with no page, README section or CONTRIBUTING sentence explaining it.
+        listing = subprocess.run(
+            ["git", "-C", str(REPO_ROOT), "ls-files", "LICENSE*"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        self.assertEqual(
+            sorted(listing.stdout.split()),
+            sorted([LICENSE_FILE.name, APACHE_FILE.name]),
+            "a licence file is tracked that docs/licensing.md and README.md do not account for",
+        )
+
 
 class LicenceNameTests(unittest.TestCase):
     """One identifier, recomputed from `LICENSE`, named the same way on every surface."""
@@ -531,6 +546,15 @@ class ArtifactClaimTests(unittest.TestCase):
         ]
         self.assertTrue(push_lines, "publish-native-image no longer runs `podman push`")
 
+    def test_the_publish_action_is_the_one_the_main_build_calls(self) -> None:
+        # An action that pushes is not a published image until a workflow runs it. build.yml
+        # is the workflow that publishes `:latest`; it has to call the action the push lives in.
+        self.assertRegex(
+            BUILD_WORKFLOWS[0].read_text(encoding="utf-8"),
+            r"(?m)^\s+uses: \./\.github/actions/publish-native-image\s*$",
+            "build.yml no longer calls publish-native-image, so nothing publishes the image",
+        )
+
 
 class NotRelicensedTests(unittest.TestCase):
     """Every name on the not-relicensed list is a real build input, and vice versa."""
@@ -622,6 +646,22 @@ class EntryPointTests(unittest.TestCase):
     def test_the_page_defers_to_the_openzfs_faq(self) -> None:
         targets = [target for label, target in _links(DOC_TEXT) if "OpenZFS FAQ" in label]
         self.assertEqual(targets, ["https://openzfs.github.io/openzfs-docs/Project%20and%20Community/FAQ.html#licensing"])
+
+    def test_the_page_points_at_the_glossary_it_defers_unfamiliar_terms_to(self) -> None:
+        targets = {target for _, target in _links(DOC_TEXT)}
+        self.assertIn("./glossary.md", targets)
+        self.assertTrue((DOC.parent / "glossary.md").is_file())
+
+    def test_the_documentation_map_describes_the_page_by_its_subject(self) -> None:
+        # The map's one-line description is what a reader picks the page by, so it is read
+        # from the page's own `<-` entry rather than found anywhere in the map.
+        entries = [
+            line.partition("<-")[2].strip()
+            for line in DOC_GUIDE.read_text(encoding="utf-8").splitlines()
+            if "<-" in line and line.split()[:1] == [DOC.name]
+        ]
+        self.assertEqual(len(entries), 1, f"documentation map has no single entry for {DOC.name}: {entries}")
+        self.assertIn("CDDL/GPLv2", entries[0])
 
     def test_every_entry_point_links_the_page_as_the_cddl_gplv2_position(self) -> None:
         for page in ENTRY_POINTS:

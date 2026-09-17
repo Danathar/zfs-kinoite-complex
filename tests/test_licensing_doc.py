@@ -131,6 +131,11 @@ INPUT_TABLE: dict[str, tuple[str, ...]] = {
 }
 
 # What each registry-shaped defaults value must point at for its table row to be true.
+# Compared as a whole repository name, never as a prefix: `ghcr.io/ublue-os/brew` is a
+# prefix of `ghcr.io/ublue-os/brew-next`, and `quay.io/fedora-ostree-desktops/kinoite`
+# of `...kinoite-custom`, so a prefix test stays green after the documented build input
+# has been swapped for a different repository -- which is the drift this table exists
+# to catch.
 INPUT_HOSTS = {
     "DEFAULT_BASE_IMAGE": "quay.io/fedora-ostree-desktops/kinoite",
     "STABLE_SIGNAL_IMAGE": "quay.io/fedora-ostree-desktops/kinoite",
@@ -220,6 +225,26 @@ def _links(text: str) -> list[tuple[str, str]]:
     return found
 
 
+def _image_repository(ref: str) -> str:
+    """
+    Return the repository name of an image reference, without its tag or digest.
+
+    `quay.io/fedora-ostree-desktops/kinoite:44` and
+    `ghcr.io/ublue-os/brew@sha256:d52b...` both reduce to the repository they name, so a
+    row in the table above can be compared for equality instead of by prefix. The tag is
+    stripped only from the LAST path component, because a registry may carry a port
+    (`registry:5000/ns/image`) and that colon is not a tag separator. A value that is not
+    an image reference at all -- `AKMODS_UPSTREAM_REPO` is a git URL -- carries no tag in
+    its last component and comes back unchanged, so it compares exactly as written.
+    """
+
+    repository = ref.split("@", 1)[0]
+    head, separator, last = repository.rpartition("/")
+    if ":" in last:
+        last = last.split(":", 1)[0]
+    return f"{head}{separator}{last}"
+
+
 def _defaults_scalar(name: str) -> str:
     """The string value of one ci/defaults.json key; a missing or non-string key fails here."""
 
@@ -282,20 +307,74 @@ def _tracked(path: Path) -> bool:
     return listing.returncode == 0
 
 
+# What each licence text must contain to BE that licence, beyond its header: the
+# identifier, the landmarks, and a line-count floor.
+#
+# The header alone is not enough. A file whose first two lines survive while its
+# terms are deleted or swapped still answers "GPL-3.0" to a header-only reader, and
+# every assertion built on that answer then passes over a licence file that grants
+# nothing -- which is the one failure a licence note's test has to catch. The
+# landmarks are spread from the top of the terms to the closing marker, so a
+# truncation anywhere in the body drops one, and the floor catches a file gutted
+# between two landmarks that both happen to survive.
+_LICENCE_TEXTS = (
+    (
+        ("GNU GENERAL PUBLIC LICENSE", "Version 3, 29 June 2007"),
+        ("GPL-3.0", "GNU General Public License v3.0"),
+        (
+            "TERMS AND CONDITIONS",
+            "0. Definitions.",
+            "15. Disclaimer of Warranty.",
+            "16. Limitation of Liability.",
+            "END OF TERMS AND CONDITIONS",
+        ),
+        600,
+    ),
+    (
+        ("Apache License", "Version 2.0"),
+        ("Apache-2.0", "Apache License 2.0"),
+        (
+            "TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION",
+            "1. Definitions.",
+            "9. Accepting Warranty or Additional Liability.",
+            "END OF TERMS AND CONDITIONS",
+        ),
+        180,
+    ),
+)
+
+
 def _licence_identifier(licence_text: str) -> tuple[str, str]:
     """
-    Recompute (short, long) licence names from the header of a licence text.
+    Recompute (short, long) licence names from a licence text.
 
-    Reads the first two non-blank lines -- the title and the version line -- and refuses
-    anything but the two texts this repository ships, so a swapped-in licence fails here
-    with its actual header in the message rather than being mislabelled.
+    The first two non-blank lines choose which licence is being claimed, and the
+    rest of the file then has to back that claim up: every landmark in
+    `_LICENCE_TEXTS` present, and at least the recorded number of lines. A text
+    whose header matches but whose terms have been truncated or replaced raises
+    here, rather than returning an identifier the assertions above would go on to
+    agree with. Anything the table does not recognise raises with its actual
+    header in the message, so a swapped-in licence is never mislabelled.
     """
 
-    header = [line.strip() for line in licence_text.splitlines() if line.strip()][:2]
-    if header == ["GNU GENERAL PUBLIC LICENSE", "Version 3, 29 June 2007"]:
-        return ("GPL-3.0", "GNU General Public License v3.0")
-    if header[:1] == ["Apache License"] and header[1:2] and header[1].startswith("Version 2.0"):
-        return ("Apache-2.0", "Apache License 2.0")
+    lines = licence_text.splitlines()
+    header = [line.strip() for line in lines if line.strip()][:2]
+    for expected, identifier, landmarks, minimum_lines in _LICENCE_TEXTS:
+        title, version = expected
+        if header[:1] != [title] or not header[1:2] or not header[1].startswith(version):
+            continue
+        missing = [landmark for landmark in landmarks if landmark not in licence_text]
+        if missing:
+            raise AssertionError(
+                f"{identifier[0]} header, but the text is missing {missing!r}; "
+                "a licence file whose terms have been truncated or replaced is not that licence"
+            )
+        if len(lines) < minimum_lines:
+            raise AssertionError(
+                f"{identifier[0]} header and landmarks, but only {len(lines)} lines "
+                f"(expected at least {minimum_lines}); the body has been gutted"
+            )
+        return identifier
     raise AssertionError(f"unrecognised licence header {header!r}")
 
 
@@ -498,11 +577,12 @@ class NotRelicensedTests(unittest.TestCase):
         self.assertEqual(external, {key for key in INPUT_TABLE if key in DEFAULTS})
 
     def test_each_registry_input_points_where_its_row_says(self) -> None:
-        for key, prefix in INPUT_HOSTS.items():
+        for key, repository in INPUT_HOSTS.items():
             with self.subTest(key=key):
-                self.assertTrue(
-                    _defaults_scalar(key).startswith(prefix),
-                    f"{key}={_defaults_scalar(key)!r} no longer points at {prefix!r}",
+                self.assertEqual(
+                    _image_repository(_defaults_scalar(key)),
+                    repository,
+                    f"{key}={_defaults_scalar(key)!r} no longer points at {repository!r}",
                 )
 
     def test_the_non_registry_inputs_are_the_modules_the_table_names(self) -> None:
@@ -517,8 +597,12 @@ class NotRelicensedTests(unittest.TestCase):
         # The page names `ublue-os/brew` by repository; the Containerfile's local default and
         # the CI digest pin must both be that repository's image.
         brew_default = _containerfile_arg(CONTAINERFILE.read_text(encoding="utf-8"), "BREW_IMAGE")
-        self.assertTrue(brew_default.startswith("ghcr.io/ublue-os/brew"))
-        self.assertTrue(_defaults_scalar("DEFAULT_BREW_IMAGE").startswith("ghcr.io/ublue-os/brew@sha256:"))
+        self.assertEqual(_image_repository(brew_default), "ghcr.io/ublue-os/brew")
+        pinned = _defaults_scalar("DEFAULT_BREW_IMAGE")
+        self.assertEqual(_image_repository(pinned), "ghcr.io/ublue-os/brew")
+        # Still a digest pin, asserted separately from the repository name so a tag
+        # replacing the digest fails on what actually changed.
+        self.assertIn("@sha256:", pinned)
 
 
 class EntryPointTests(unittest.TestCase):
@@ -642,13 +726,17 @@ class ParserTests(unittest.TestCase):
             _paths_ignore("on:\n  push:\n    paths-ignore:\n  workflow_dispatch:\n")
 
     def test_licence_identifier_recognises_both_texts_and_nothing_else(self) -> None:
+        # The committed texts are the fixtures: a header-only stand-in is exactly what
+        # this function now has to REJECT, so it cannot also be what proves it accepts.
+        # Indentation still has to be tolerated, which is why the header is re-read from
+        # the real file rather than asserted against a hand-typed literal.
         self.assertEqual(
-            _licence_identifier("\n   GNU GENERAL PUBLIC LICENSE\n   Version 3, 29 June 2007\n"),
+            _licence_identifier(LICENSE_FILE.read_text(encoding="utf-8")),
             ("GPL-3.0", "GNU General Public License v3.0"),
         )
         self.assertEqual(
-            _licence_identifier("  Apache License\n  Version 2.0, January 2004\n")[0],
-            "Apache-2.0",
+            _licence_identifier(APACHE_FILE.read_text(encoding="utf-8")),
+            ("Apache-2.0", "Apache License 2.0"),
         )
         with self.assertRaises(AssertionError):
             _licence_identifier("MIT License\n\nPermission is hereby granted")
@@ -656,6 +744,59 @@ class ParserTests(unittest.TestCase):
     def test_defaults_scalar_refuses_a_missing_key(self) -> None:
         with self.assertRaises(AssertionError):
             _defaults_scalar("NO_SUCH_KEY")
+
+    def test_image_repository_strips_a_tag_or_digest_and_nothing_else(self) -> None:
+        for ref, want in (
+            ("quay.io/fedora-ostree-desktops/kinoite:44", "quay.io/fedora-ostree-desktops/kinoite"),
+            ("ghcr.io/ublue-os/brew@sha256:" + "d" * 64, "ghcr.io/ublue-os/brew"),
+            ("ghcr.io/ublue-os/brew", "ghcr.io/ublue-os/brew"),
+            # A port in the registry host is not a tag separator.
+            ("registry:5000/ns/image:1", "registry:5000/ns/image"),
+            ("registry:5000/ns/image", "registry:5000/ns/image"),
+            # Not an image reference; comes back untouched so it compares as written.
+            ("https://github.com/Danathar/akmods.git", "https://github.com/Danathar/akmods.git"),
+        ):
+            with self.subTest(ref=ref):
+                self.assertEqual(_image_repository(ref), want)
+
+    def test_image_repository_does_not_conflate_a_longer_repository_name(self) -> None:
+        """The prefix bug this replaced: `brew` is a prefix of `brew-next`."""
+
+        self.assertNotEqual(
+            _image_repository("ghcr.io/ublue-os/brew-next@sha256:" + "d" * 64),
+            "ghcr.io/ublue-os/brew",
+        )
+        self.assertNotEqual(
+            _image_repository("quay.io/fedora-ostree-desktops/kinoite-custom:44"),
+            "quay.io/fedora-ostree-desktops/kinoite",
+        )
+
+    def test_licence_identifier_rejects_a_truncated_body(self) -> None:
+        """A header that survives a gutted body must not still answer `GPL-3.0`."""
+
+        full = LICENSE_FILE.read_text(encoding="utf-8")
+        self.assertEqual(_licence_identifier(full)[0], "GPL-3.0")
+
+        header_only = "\n".join(full.splitlines()[:5])
+        with self.assertRaises(AssertionError):
+            _licence_identifier(header_only)
+
+        # Every landmark present but the body between them removed.
+        landmarks = _LICENCE_TEXTS[0][2]
+        skeleton = "\n".join(full.splitlines()[:2] + list(landmarks))
+        with self.assertRaises(AssertionError):
+            _licence_identifier(skeleton)
+
+        # The closing marker dropped -- a truncation at the end of the file.
+        self.assertIn("END OF TERMS AND CONDITIONS", full)
+        with self.assertRaises(AssertionError):
+            _licence_identifier(full.replace("END OF TERMS AND CONDITIONS", "", 1))
+
+    def test_licence_identifier_rejects_a_truncated_apache_body(self) -> None:
+        full = APACHE_FILE.read_text(encoding="utf-8")
+        self.assertEqual(_licence_identifier(full)[0], "Apache-2.0")
+        with self.assertRaises(AssertionError):
+            _licence_identifier("\n".join(full.splitlines()[:5]))
 
 
 if __name__ == "__main__":

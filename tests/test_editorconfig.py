@@ -449,11 +449,12 @@ class ShellSectionCommentTests(unittest.TestCase):
         It read "It is the only shell script in the tree" while the tree held
         three. Requiring the comment to name them turns the next added script
         into a failure here rather than a sentence that quietly stops being
-        true.
+        true -- which is what it did when `.claude/hooks/gate-git-diff.sh`
+        arrived and made it four.
         """
         comment = section_comment(self.text, "*.sh")
         scripts = self.resolver.matching("*.sh", self.paths)
-        self.assertEqual(len(scripts), 3, f"tracked shell scripts changed: {scripts}")
+        self.assertEqual(len(scripts), 4, f"tracked shell scripts changed: {scripts}")
         for path in scripts:
             with self.subTest(path=path):
                 self.assertIn(path, comment)

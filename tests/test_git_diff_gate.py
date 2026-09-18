@@ -50,6 +50,37 @@ def payload(command: str) -> str:
     return json.dumps({"tool_name": "Bash", "tool_input": {"command": command}})
 
 
+def two_revisions() -> tuple[str, str]:
+    """Two operand spellings that resolve as commits in *this* checkout.
+
+    The gate decides `git diff <a> <b>` by asking `git rev-parse` whether each
+    operand is a commit, so a case built on revisions this checkout does not
+    have tests the clone rather than the hook. `HEAD~1` is the trap: it exists
+    in a development clone and does not exist under `actions/checkout`, which
+    fetches depth 1 by default, so the gate refuses it there -- correctly, an
+    operand that does not resolve as a revision is how a plain-file read is
+    spelled. Ask git what history is present instead of assuming any.
+
+    Falls back to naming `HEAD` twice when there is only one commit to name:
+    still two operands, still both resolving, which is what the cases below
+    are about.
+    """
+    listed = subprocess.run(
+        ["git", "rev-list", "--max-count=2", "HEAD"],
+        cwd=str(REPO_ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    revisions = listed.stdout.split()
+    if len(revisions) >= 2:
+        return revisions[1], revisions[0]
+    return "HEAD", "HEAD"
+
+
+OLDER_REVISION, NEWER_REVISION = two_revisions()
+
+
 class GateWiringTests(unittest.TestCase):
     """The join between `.claude/settings.json` and the file it names.
 
@@ -221,8 +252,8 @@ class GateBehaviourTests(unittest.TestCase):
         # the reader to ignore the gate.
         for command in (
             "git log --output-indicator-new=% -1",
-            "git diff --output-indicator-old=- HEAD~1 HEAD",
-            "git diff --output-indicator-frag=@ HEAD~1 HEAD",
+            f"git diff --output-indicator-old=- {OLDER_REVISION} {NEWER_REVISION}",
+            f"git diff --output-indicator-frag=@ {OLDER_REVISION} {NEWER_REVISION}",
         ):
             with self.subTest(command=command):
                 self.assertAllowed(command)
@@ -233,10 +264,10 @@ class GateBehaviourTests(unittest.TestCase):
         for command in (
             "git diff",
             "git diff --stat",
-            "git diff HEAD~1 HEAD",
+            f"git diff {OLDER_REVISION} {NEWER_REVISION}",
             "git diff HEAD -- docs/SECURITY-AI.md",
             "git diff -- docs/SECURITY-AI.md",
-            "git diff HEAD~1 HEAD -- tests/",
+            f"git diff {OLDER_REVISION} {NEWER_REVISION} -- tests/",
             "git log --oneline -5",
             "git show HEAD",
             "git status",
@@ -267,6 +298,15 @@ class GateBehaviourTests(unittest.TestCase):
         ):
             with self.subTest(command=command):
                 self.assertRefused(command, "--no-index mode")
+
+    def test_an_operand_that_is_not_a_revision_here_is_refused(self) -> None:
+        # The test is "does this checkout resolve the word as a commit", not
+        # "does the word look like a revision spelling". A name git cannot
+        # resolve is exactly how the plain-file mode is entered, so the gate
+        # refuses it even when it reads like history -- which is also why a
+        # depth-1 clone refuses `git diff HEAD~1 HEAD`, and why the cases
+        # above name revisions this checkout actually has.
+        self.assertRefused("git diff v0.0.0-not-a-tag HEAD", "--no-index mode")
 
     def test_an_empty_or_absent_command_is_not_refused(self) -> None:
         for body in ('{"tool_input": {}}', '{"tool_input": {"command": ""}}'):

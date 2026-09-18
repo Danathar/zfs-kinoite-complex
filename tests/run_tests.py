@@ -24,7 +24,9 @@ point:
   * **Closed:** code from outside this repository. `pytest /tmp/x.py`,
     `--pyargs some.installed.module`, `-p some_plugin` and
     `--confcutdir=/` each import something that was never in a diff and that
-    no reviewer will ever see. Those are refused outright.
+    no reviewer will ever see. Those are refused outright, in every spelling
+    pytest accepts -- including `-o addopts=...`, which splices whatever it
+    is given into the command line after this script has looked at it.
   * **Closed:** a file dropped into `tests/` and not committed. Every `*.py`
     under a selection must be tracked by git, so an untracked module cannot be
     collected. Committing it is a separate step that shows up in
@@ -75,7 +77,11 @@ TESTS_DIR = REPO_ROOT / "tests"
 # sys.path. `--confcutdir` is the upward bound on conftest.py collection, so a
 # value above the repository root pulls in a conftest nobody here wrote.
 # `--rootdir` and `-c`/`--config-file` relocate what pytest considers the
-# project, which moves both of those in turn.
+# project, which moves both of those in turn. `-o`/`--override-ini` sets any
+# ini option for the run, and one of those is `addopts`, whose value pytest
+# splices into the command line before it parses options -- so
+# `-o addopts=--pyargs x` is `--pyargs x` with an allowed option wrapped
+# around it. Refused whole: there is no ini key worth telling apart.
 REFUSED_OPTIONS = (
     "-p",
     "--pyargs",
@@ -84,19 +90,40 @@ REFUSED_OPTIONS = (
     "-c",
     "--config-file",
     "--import-mode",
+    "-o",
+    "--override-ini",
 )
+
+# pytest's short options that take no value, from `pytest -h` (9.1.1). In a
+# single-dash argument these may precede the option that matters: `-vo
+# addopts=x` is `-v -o addopts=x` and `-xp name` is `-x -p name`. Any other
+# letter ends the cluster, either as the option itself or as one whose
+# value is the rest of the argument (`-kfoo`, `-Werror`, `-rp`). A letter a
+# plugin adds is not here and is read as value-taking -- test.yml installs
+# no plugin, and a wrong guess there costs one cluster spelling that can be
+# written as separate arguments, each of which is checked on its own.
+SHORT_FLAGS = frozenset("hlqsvVx")
 
 
 def refused_option(argument: str) -> str | None:
     """Return the refused option `argument` spells, or None.
 
-    Both spellings are checked. pytest accepts `--rootdir=x` and
-    `--rootdir x`, and matching only the bare form would let the `=` spelling
-    through.
+    Every spelling pytest accepts is checked, not only the bare one:
+    `--rootdir x` and `--rootdir=x`; a short option with its value attached
+    (`-poutside.evil`, `-oaddopts=...`); and a short option closing a cluster
+    of flags (`-vo addopts=...`). Matching the bare and `=` forms alone let
+    the attached and clustered spellings reach pytest.
     """
     for option in REFUSED_OPTIONS:
         if argument == option or argument.startswith(f"{option}="):
             return option
+    if argument.startswith("-") and not argument.startswith("--"):
+        for letter in argument[1:]:
+            if letter in SHORT_FLAGS:
+                continue
+            if f"-{letter}" in REFUSED_OPTIONS:
+                return f"-{letter}"
+            break
     return None
 
 

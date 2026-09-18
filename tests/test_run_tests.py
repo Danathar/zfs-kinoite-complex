@@ -29,7 +29,9 @@ only `run_pytest` is observed being called.
 
 from __future__ import annotations
 
+import re
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -144,15 +146,98 @@ class RunnerRefusalTests(unittest.TestCase):
                     self.assertEqual(run_tests.main([argument, "tests"]), 2)
                     self.run_pytest.assert_not_called()
 
+    def test_an_ini_override_cannot_smuggle_a_refused_option(self) -> None:
+        # `-o addopts=...` is spliced into the command line by pytest after
+        # this runner has looked at it, so an allowed option carrying a
+        # refused one inside its value is the refused one (#194). Every
+        # spelling pytest accepts for `-o` is exercised, not only the bare
+        # form: the `=` form, the value attached to the short option, and the
+        # short option closing a cluster of flags.
+        for arguments in (
+            ["-o", "addopts=--pyargs outside.evil", "tests"],
+            ["--override-ini", "addopts=--pyargs outside.evil", "tests"],
+            ["--override-ini=addopts=-p outside.evil", "tests"],
+            ["-oaddopts=--pyargs outside.evil", "tests"],
+            ["-vo", "addopts=--pyargs outside.evil", "tests"],
+        ):
+            with self.subTest(arguments=arguments):
+                self.run_pytest.reset_mock()
+                self.assertEqual(run_tests.main(arguments), 2)
+                self.run_pytest.assert_not_called()
+
+    def test_a_short_option_is_refused_with_its_value_attached_or_in_a_cluster(self) -> None:
+        # argparse accepts `-pname` for `-p name` and `-xp name` for
+        # `-x -p name`. A refusal that matched only the bare `-p` was one a
+        # missing space defeated.
+        for arguments in (
+            ["-poutside.evil", "tests"],
+            ["-xp", "outside.evil", "tests"],
+            ["-c/elsewhere/pytest.ini", "tests"],
+            ["-svc", "/elsewhere/pytest.ini", "tests"],
+        ):
+            with self.subTest(arguments=arguments):
+                self.run_pytest.reset_mock()
+                self.assertEqual(run_tests.main(arguments), 2)
+                self.run_pytest.assert_not_called()
+
+    def test_a_cluster_of_flags_or_an_attached_value_of_another_option_passes(self) -> None:
+        # The cluster walk must stop at the first value-taking option, or a
+        # `-k`, `-W` or `-r` value that happens to contain a refused letter
+        # would be refused for spelling an option it does not: `-rp` reports
+        # passed tests, `-Werror` is a warnings filter, and `-vv` is two
+        # flags and no option at all.
+        for arguments in (["-vv", "tests"], ["-rp", "tests"], ["-Werror", "tests"], ["-kfoo", "tests"]):
+            with self.subTest(arguments=arguments):
+                self.run_pytest.reset_mock()
+                self.assertEqual(run_tests.main(arguments), 0)
+                self.run_pytest.assert_called_once_with(arguments)
+
     def test_the_refused_list_covers_the_options_that_import_from_elsewhere(self) -> None:
         # Pinned by name so that dropping one is a failure rather than a
         # quietly shorter tuple. `--pyargs` turns positionals into module
-        # names, `-p` loads a plugin, and the other three move what pytest
-        # treats as the project, and with it conftest collection.
+        # names, `-p` loads a plugin, `-o` can set `addopts` to either, and
+        # the other three move what pytest treats as the project, and with
+        # it conftest collection.
         self.assertEqual(
             set(run_tests.REFUSED_OPTIONS),
-            {"-p", "--pyargs", "--rootdir", "--confcutdir", "-c", "--config-file", "--import-mode"},
+            {
+                "-p",
+                "--pyargs",
+                "--rootdir",
+                "--confcutdir",
+                "-c",
+                "--config-file",
+                "--import-mode",
+                "-o",
+                "--override-ini",
+            },
         )
+
+    def test_the_flag_table_matches_pytest_when_it_is_installed(self) -> None:
+        # SHORT_FLAGS is what lets the cluster walk tell `-vo` (a flag, then
+        # `-o`) from `-rp` (`-r` with value `p`). A flag pytest adds that is
+        # missing here reads as value-taking, which would let `-<flag>o
+        # addopts=...` through, so hold the table against the installed
+        # pytest's own help text rather than against memory.
+        completed = subprocess.run(
+            [sys.executable, "-m", "pytest", "-h"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if completed.returncode != 0:
+            self.skipTest("pytest is not installed; the table is held against 9.1.1's help")
+        help_text = completed.stdout
+        # A value-taking option is documented with a metavar right after the
+        # option (`-k EXPRESSION`, `-r, --report-chars chars`); a flag has
+        # nothing before the help column (`-s`, `-v, --verbose`).
+        option_line = re.compile(r"^-(\w)(?:,\s--[\w-]+)?(?:\s(\S+))?(?:\s{2,}.*)?$")
+        flags = set()
+        for line in help_text.splitlines():
+            match = option_line.match(line.strip())
+            if match and match.group(2) is None:
+                flags.add(match.group(1))
+        self.assertEqual(flags, set(run_tests.SHORT_FLAGS))
 
 
 class UnittestFallbackTests(unittest.TestCase):

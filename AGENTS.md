@@ -165,6 +165,18 @@ When finished:
 
 Do not pad the report with summaries of code you wrote — the diff speaks for itself. Do not claim verification you did not perform.
 
+## 8. Writing issues, PRs and comments
+
+A person who was not in your head will read what you write. Write for them.
+
+- **Start with a plain summary**: two or three short sentences saying what changed (or what is wrong), why it matters, and what the reader should look at or do. Someone who reads only that should still get the point.
+- Then the detail under short headings: `What changed`, `Why`, `How to review`, and `Also in this PR` for unrelated tidy-ups.
+- Short sentences. One idea per bullet. No nested dash-clauses.
+- Use this project's own words. If you coin a term, define it the first time you use it.
+- Tell the reader what they can check themselves: the command to run, the file to open, the number to compare.
+- Keep the body under about 300 words. Long evidence (mutation lists, full test output, logs) goes in a collapsed `<details>` block.
+- Issues: state the problem as a user would see it, then the evidence, then the proposed fix. The title names the problem, not the finding category.
+
 ---
 
 **These guidelines are working if:** diffs stay small, no invented APIs appear, verification commands are run before "done", and clarifying questions come before implementation rather than after mistakes.

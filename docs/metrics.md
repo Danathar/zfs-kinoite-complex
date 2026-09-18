@@ -142,8 +142,8 @@ is a decision rather than a command.
 - **A repository-wide coverage percentage as a gate.** It falls when code is
   added and lets one module mask another. `CONTRIBUTING.md` is explicit that
   the percentage moving is not a finding.
-- **Time-to-merge and review latency.** At thirteen pull requests these are
-  noise, and optimising them would push toward merging faster, which is the
+- **Time-to-merge and review latency.** At the volume this repository sees these
+  are noise, and optimising them would push toward merging faster, which is the
   opposite of what a repository publishing a signed `:latest` wants.
 - **Production execution coverage.** There is no instrumentation on the
   production workflows, which is a known gap tracked in

@@ -465,6 +465,23 @@ class SecurityDocEnforcementTests(unittest.TestCase):
             "ask",
             ("git push origin HEAD:main",),
         ),
+        # Also not a denial, and the expectation is deliberately `allow`: the
+        # row's whole claim is that the permission layer waves these through
+        # and a PreToolUse hook is what refuses them. If a rule ever does catch
+        # one, this fails and the fix is to say so in the row rather than leave
+        # the doc crediting the hook for a rule's work. The refusals themselves
+        # are exercised in tests/test_git_diff_gate.py.
+        "read or write an arbitrary file": (
+            "allow",
+            (
+                "git diff /dev/null ./cosign.key",
+                "git diff --no-index /etc/passwd /dev/null",
+                "git diff /etc/shadow -",
+                "git diff -- /dev/null ./cosign.key",
+                "git log -p --output=cosign.pub -1",
+                "git show --output=.claude/settings.json HEAD",
+            ),
+        ),
         # Not a denial at all, which is why it carries its own branch in
         # `test_the_denied_rows_really_say_denied`. The claim is that the one
         # test command an agent may run unattended is the wrapper, because a
@@ -521,6 +538,8 @@ class SecurityDocEnforcementTests(unittest.TestCase):
                     self.assertIn("not expressible", enforcement)
                 elif key == "run a test suite":
                     self.assertIn("narrowed, not denied", enforcement)
+                elif key == "read or write an arbitrary file":
+                    self.assertIn("gated by a hook, not by a rule", enforcement)
                 elif expected == "deny":
                     self.assertIn("denied", enforcement)
                 else:

@@ -12,6 +12,7 @@ cosign.key
 # of the shared settings.json, so tracking it would defeat the split.
 .claude/*
 !.claude/commands/
+!.claude/hooks/
 !.claude/memory/
 !.claude/settings.json
 !.claude/session-summary.md

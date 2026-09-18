@@ -302,7 +302,7 @@ from point 4.
 
 The final image is defined by the repository root [`Containerfile`](../Containerfile).
 
-It does four important things:
+It does five important things:
 
 1. starts from the pinned `BASE_IMAGE`
 2. imports Homebrew from the `ublue-os/brew` payload because Fedora Kinoite does not ship it; CI pins this payload too, passing the digest-pinned `DEFAULT_BREW_IMAGE` from `ci/defaults.json` as `BREW_IMAGE` and recording it in the `org.zfs-kinoite-complex.brew-image` label
@@ -310,8 +310,8 @@ It does four important things:
 4. runs [`build_files/build-image.sh`](../build_files/build-image.sh)
 5. runs `bootc container lint`
 
-The buildah invocation uses Docker v2s2 manifest format (`oci: false`) rather than
-OCI image manifests because host update tooling (`bootc upgrade` on booted
+The buildah invocation uses Docker v2s2 manifest format (`--format docker`)
+rather than OCI image manifests because host update tooling (`bootc upgrade` on booted
 machines) works more reliably with the Docker format. The "OCI" terminology
 elsewhere in this project refers to OCI standards for registry interaction and
 layer handling, not the specific container image manifest format produced by

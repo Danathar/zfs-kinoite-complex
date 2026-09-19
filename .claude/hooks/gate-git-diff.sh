@@ -14,7 +14,7 @@
 # gitignored, or outside the checkout entirely. Reading the signing key with
 # the Read tool prompts; the diff form did not.
 #
-# Four things this gate has to get right, each of them a spelling that a
+# Six things this gate has to get right, each of them a spelling that a
 # simpler check misses:
 #
 #   1. The mode has no required flag. `git diff /dev/null ./cosign.key` prints
@@ -40,6 +40,12 @@
 #      repository by a route that leaves it and comes back; git calls that
 #      outside and prints the file, while a test that folds `..` first sees a
 #      tidy in-tree path and allows it. See `path_inside_worktree` below.
+#   6. Bash expands braces before splitting words, so one word here can be two
+#      words at git -- `git diff {/dev/null,./cosign.key}` -- and a flag name
+#      split by a brace is no flag at all to a matcher working on the typed
+#      spelling: `--outpu{t,t}=FILE` reaches git as `--output=FILE`. Both
+#      refusals below are rebuilt by four characters. Braces are refused
+#      inside a git invocation rather than expanded; see `BRACE_MSG`.
 #
 # The write primitive: `--output=FILE` sends the diff git would have printed to
 # a path instead of stdout, so an allow-listed, unprompted call overwrites any
@@ -86,6 +92,8 @@ refuse() {
 DIFF_MSG='blocked: this git diff would compare paths as plain files (git'"'"'s --no-index mode, which needs no flag once two operands are given), so it prints any file on disk -- the signing key, a .env, a private key outside this repository -- past the Read(...) deny rules in .claude/settings.json. Describe such a file with ls -l or wc -c instead.'
 
 OUT_MSG='blocked: git --output=FILE (and the space form) writes this diff or log to the path it names instead of stdout, overwriting any file this uid can reach -- cosign.pub, ci/inputs.lock.json, .claude/settings.json, this hook, ~/.ssh/authorized_keys -- with no Read(...) or Write(...) deny rule in its way. git diff, git log and git show print to stdout; read that instead. --output-indicator-* is a different flag and is unaffected.'
+
+BRACE_MSG='blocked: bash expands braces before git sees the words, and this gate reads the words as typed, so a brace rebuilds both spellings it refuses: `git diff {/dev/null,./cosign.key}` passes the operand scan as one word and reaches git as two operands (the plain-file read), and `--outpu{t,t}=FILE` matches no word here and reaches git as --output=FILE. Expanding braces correctly means reimplementing bash inside a hook; refusing them costs nothing, because no git command in this repository is spelled with one. Write the command out in full. Only words of a git invocation are affected: awk and jq programs elsewhere in the string are not.'
 
 # Fail closed. This gate stands in front of the pre-approved commands that can
 # read a denied path, so a missing dependency must not quietly disable it:
@@ -189,7 +197,36 @@ for word in "${words[@]+"${words[@]}"}"; do
   # rephrased commit message; the alternative is a list of which git
   # subcommands accept the flag, and the subcommand this hook forgot is the
   # hole.
+  # Brace expansion is the last rewrite bash performs that this scan can still
+  # see, and it undoes both refusals below. It splits one word into several --
+  # `git diff {/dev/null,./cosign.key}` is a single word here and two operands
+  # to git, so the operand count never reaches 2 -- and it splits a flag name
+  # apart -- `--outpu{t,t}=FILE` matches neither `--output` nor `--output=*`
+  # here and arrives at git as `--output=FILE --output=FILE`. It needs no
+  # variable and no subshell, so it is not one of the runtime-built arguments
+  # this hook says it cannot see; it is plainly in the string and simply was
+  # not expanded.
+  #
+  # Refused rather than expanded. Expanding means reimplementing bash's rules
+  # in this hook -- nesting, `{1..9}` sequences, and the rule that a brace with
+  # no comma and no range is a literal -- and a half-right expansion is a gate
+  # that disagrees with the shell in some other direction. A refusal cannot be
+  # half-right, and it costs nothing: nothing in this repository spells a git
+  # command with a brace.
+  #
+  # Scoped to `in_git`, the same latch `--output` uses, so `awk '{print}'` and
+  # `jq '{a:1}'` are untouched in a command string that never invokes git. The
+  # cost is a `${VAR}` inside a git invocation, which is a runtime-built
+  # argument this hook already cannot inspect -- refusing it is stricter than
+  # the status quo, not weaker. A brace *before* the first `git` word is not
+  # checked and does not need to be: the allow rules in .claude/settings.json
+  # match a literal `git diff`/`git log` prefix, so a git invocation assembled
+  # out of braces (`{git,:} diff ...`, `g{i,i}t diff ...`) matches no allow
+  # rule and prompts on its own.
   if ((in_git)); then
+    case "${word}" in
+    *[{}]*) refuse "${BRACE_MSG}" ;;
+    esac
     case "${word}" in
     --output | --output=*) refuse "${OUT_MSG}" ;;
     esac

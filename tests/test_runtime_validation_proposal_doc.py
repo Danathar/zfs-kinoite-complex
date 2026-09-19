@@ -507,7 +507,9 @@ class RecommendedSequenceTests(unittest.TestCase):
             )
 
     def test_step_five_loads_the_module_and_creates_a_disposable_pool(self) -> None:
-        self.assertIn("disposable", _normalized(self.section))
+        # Scoped to the step, not the section: the opening sentence also says "disposable VM",
+        # so a section-wide match stays green after the word leaves the pool itself.
+        self.assertIn("disposable", self.steps[4])
         self.assertIn("zpool create", self.install)
         # The module loads itself on a booted machine, which is why the step reads as one action.
         self.assertTrue(MODULES_LOAD_FRAGMENT.is_file())

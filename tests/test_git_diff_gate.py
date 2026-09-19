@@ -17,6 +17,9 @@ claims it makes are each a separate way for it to silently stop working:
     and `--output-indicator-*` is a different flag that must keep working;
   * the shell rewrites quoting and backslashes before git sees the word, so
     matching the typed spelling is not enough;
+  * brace expansion rewrites it further -- one word becomes two operands, and
+    a flag name split across a brace becomes the flag -- so braces are refused
+    inside a git invocation and left alone everywhere else;
   * an operator character with no whitespace around it still starts a command;
   * a two-token git global option (`-C dir`) must not be read as a subcommand;
   * it fails closed when `jq` is missing, per AGENTS.md section 0 rule 1.
@@ -175,6 +178,20 @@ class GateBehaviourTests(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertRefused(command, "--no-index mode")
 
+    def test_a_brace_that_would_become_two_operands_is_refused(self) -> None:
+        # Bash expands braces before it splits words, so `{a,b}` is one word to
+        # a scan working on the typed string and two operands to git. Without
+        # the refusal the operand count never reaches 2 and the plain-file read
+        # goes through unexamined.
+        for command in (
+            "git diff {/dev/null,./cosign.key}",
+            "git diff -- {/dev/null,./LICENSE}",
+            "git diff /dev/nul{l,l} ./cosign.key",
+            "git diff --no-inde{x,x} /dev/null ./LICENSE",
+        ):
+            with self.subTest(command=command):
+                self.assertRefused(command, "expands braces")
+
     def test_a_leading_dashdash_does_not_end_the_mode(self) -> None:
         # git consumes a leading `--` and applies the same two-operand test to
         # what follows, so this prints the file.
@@ -245,6 +262,33 @@ class GateBehaviourTests(unittest.TestCase):
 
     def test_output_is_refused_in_a_second_command_in_the_same_string(self) -> None:
         self.assertRefused("git log -1 && git log -p --output=cosign.pub -1", "--output=FILE")
+
+    def test_a_brace_that_would_rebuild_the_output_flag_is_refused(self) -> None:
+        # The flag name split by a brace matches neither `--output` nor
+        # `--output=*`, and arrives at git as `--output=FILE --output=FILE`.
+        # Every allow-listed subcommand that reaches the diff machinery carries
+        # it, so each is named here rather than `diff` alone.
+        for command in (
+            "git log -p --outpu{t,t}=cosign.pub -1",
+            "git show --outpu{t,t}=.claude/settings.json HEAD",
+            f"git diff --outpu{{t,t}}=cosign.pub {OLDER_REVISION} {NEWER_REVISION}",
+            "git log --{output,output} cosign.pub -1",
+        ):
+            with self.subTest(command=command):
+                self.assertRefused(command, "expands braces")
+
+    def test_a_brace_outside_a_git_invocation_is_left_alone(self) -> None:
+        # The refusal is scoped to the words of a git invocation, because a
+        # brace is ordinary syntax everywhere else and a gate that refused it
+        # wholesale would break the commands an agent runs all day. `in_git`
+        # latches once seen, so these carry no `git` anywhere in the string.
+        for command in (
+            "awk '{print $1}' /dev/null",
+            "jq '{ref: .ref}' ci/inputs.lock.json",
+            "cp cosign.pub{,.bak}",
+        ):
+            with self.subTest(command=command):
+                self.assertAllowed(command)
 
     def test_the_output_indicator_flags_are_a_different_flag(self) -> None:
         # Anchoring matters: these change the marker character, not the

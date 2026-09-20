@@ -1,7 +1,7 @@
 """
 Script: tests/run_tests.py
 What: Runs this repository's test suite, refusing any selection that would import Python from outside tests/.
-Doing: Rejects the pytest options that move collection off this tree, resolves every positional selection inside tests/, requires every .py file it will import to be tracked by git, then execs pytest.
+Doing: Rejects the pytest options that move collection off this tree or write to a path they name, resolves every positional selection inside tests/, requires every .py file it will import to be tracked by git, then execs pytest.
 Why: `.claude/settings.json` has to allow *some* test command unattended, and an unrestricted one is unbounded local code execution -- pytest imports every module it collects, and an import is not a tool call, so nothing in the deny list is consulted.
 Goal: Make the one command an agent may run without a prompt able to import only code that is already in the diff.
 
@@ -27,6 +27,14 @@ point:
     no reviewer will ever see. Those are refused outright, in every spelling
     pytest accepts -- including `-o addopts=...`, which splices whatever it
     is given into the command line after this script has looked at it.
+  * **Closed:** the options that write. pytest can send a report, a log or a
+    debug trace to a path the caller names, and `--basetemp` empties the
+    directory it is given. An allow-listed command carrying one of those
+    overwrites `cosign.pub`, `.claude/settings.json` or the git gate beside it,
+    with no `Read(...)` deny row in the way -- those gate the Read tool -- and
+    no prefix rule able to see a flag in the middle of an ordinary command.
+    That is the write half of the primitive `.claude/hooks/gate-git-diff.sh`
+    refuses for `git`; see `REFUSED_WRITE_OPTIONS`.
   * **Closed:** a file dropped into `tests/` and not committed. Every `*.py`
     under a selection must be tracked by git, so an untracked module cannot be
     collected. Committing it is a separate step that shows up in
@@ -82,7 +90,7 @@ TESTS_DIR = REPO_ROOT / "tests"
 # splices into the command line before it parses options -- so
 # `-o addopts=--pyargs x` is `--pyargs x` with an allowed option wrapped
 # around it. Refused whole: there is no ini key worth telling apart.
-REFUSED_OPTIONS = (
+REFUSED_IMPORT_OPTIONS = (
     "-p",
     "--pyargs",
     "--rootdir",
@@ -93,6 +101,44 @@ REFUSED_OPTIONS = (
     "-o",
     "--override-ini",
 )
+
+# Options whose job is to write a file at a path the caller names. These have
+# nothing to do with what gets imported, which is why they were not on the list
+# above; they are here because the command this runner stands in front of is
+# allow-listed and unprompted, so the flag in the middle of it writes with no
+# rule in its way. `.claude/settings.json` denies the *Read tool* this
+# repository's secret-shaped paths and has no Write rule at all, and a prefix
+# rule cannot see a flag in the middle of an otherwise ordinary command --
+# which is the same pair of sentences `_note_git_diff_gate` makes about
+# `git --output=FILE`.
+#
+# `--junitxml` (and its `--junit-xml` alias) overwrites the path with the XML
+# report. `--log-file` truncates it. `--debug` replaces it with pytest's trace
+# log, and takes no value at all in its bare form. `--basetemp` is worse than a
+# write: pytest empties that directory before using it, so
+# `--basetemp=.claude` deletes the settings file and the hook beside it.
+#
+# `--report-log` and `--cov-report` belong to plugins -- pytest-reportlog is not
+# installed here and pytest-cov is installed only in CI, which runs
+# `python3 -m pytest` directly rather than this wrapper. The strings are refused
+# unconditionally anyway, so installing a plugin later does not quietly reopen
+# this. There is no `--cache-dir`: pytest spells that one as the `cache_dir`
+# ini key, reachable only through `-o`, which the list above already refuses.
+#
+# Option abbreviation is not a further spelling to cover: pytest's parser
+# rejects `--junitx=`, `--basete=` and `--log-fil=`. `--junit-xml` is a real
+# alias and needs its own entry.
+REFUSED_WRITE_OPTIONS = (
+    "--basetemp",
+    "--junitxml",
+    "--junit-xml",
+    "--log-file",
+    "--debug",
+    "--report-log",
+    "--cov-report",
+)
+
+REFUSED_OPTIONS = REFUSED_IMPORT_OPTIONS + REFUSED_WRITE_OPTIONS
 
 # pytest's short options that take no value, from `pytest -h` (9.1.1). In a
 # single-dash argument these may precede the option that matters: `-vo
@@ -125,6 +171,31 @@ def refused_option(argument: str) -> str | None:
                 return f"-{letter}"
             break
     return None
+
+
+def refusal_message(option: str) -> str:
+    """Why `option` is refused, in the words that apply to it.
+
+    The two lists are refused for unrelated reasons, and one message covering
+    both would have to be vague enough to explain neither. A reader who sees
+    `--basetemp` refused for letting pytest import outside code learns nothing
+    they can act on.
+    """
+    tail = (
+        "Run pytest directly if you mean it -- that command is not on the "
+        "unattended allow list."
+    )
+    if option in REFUSED_WRITE_OPTIONS:
+        return (
+            f"{option} is refused here: it writes to a path this command names, "
+            "and this command runs unattended, so the flag reaches any file "
+            f"this uid can touch. {tail}"
+        )
+    return (
+        f"{option} is refused here: it lets pytest import code from outside "
+        "this repository, which is the thing this runner exists to prevent. "
+        f"{tail}"
+    )
 
 
 def tracked_python_files() -> set[Path]:
@@ -285,13 +356,7 @@ def main(argv: list[str] | None = None) -> int:
     for argument in arguments:
         option = refused_option(argument)
         if option is not None:
-            print(
-                f"{option} is refused here: it lets pytest import code from "
-                "outside this repository, which is the thing this runner "
-                "exists to prevent. Run pytest directly if you mean it -- "
-                "that command is not on the unattended allow list.",
-                file=sys.stderr,
-            )
+            print(refusal_message(option), file=sys.stderr)
             return 2
 
     selections = [a for a in arguments if is_selection(a)]

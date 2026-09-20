@@ -13,6 +13,10 @@ test suite unattended" row, in the order they matter:
   * the options that relocate collection or load a plugin are refused, in both
     the `--opt value` and `--opt=value` spellings, because matching one and not
     the other would be a check that a space defeats;
+  * the options that write to a path they name are refused too -- `--junitxml`,
+    `--log-file`, `--debug`, `--basetemp` and the plugin reports -- because the
+    command carrying them runs unattended and nothing else gates what it
+    writes;
   * an untracked `.py` anywhere under a selection is refused, so a module
     dropped into `tests/` cannot be collected until it is committed;
   * a tracked selection *is* run, with the arguments passed through unchanged.
@@ -138,7 +142,7 @@ class RunnerRefusalTests(unittest.TestCase):
         self.assertEqual(run_tests.main(["tests"]), 2)
         self.run_pytest.assert_not_called()
 
-    def test_every_collection_relocating_option_is_refused_in_both_spellings(self) -> None:
+    def test_every_refused_option_is_refused_in_both_spellings(self) -> None:
         for option in run_tests.REFUSED_OPTIONS:
             for argument in (option, f"{option}=x"):
                 with self.subTest(argument=argument):
@@ -192,6 +196,33 @@ class RunnerRefusalTests(unittest.TestCase):
                 self.assertEqual(run_tests.main(arguments), 0)
                 self.run_pytest.assert_called_once_with(arguments)
 
+    def test_a_write_option_is_refused_in_both_spellings(self) -> None:
+        # The write family has no short spelling, so the two forms argparse
+        # accepts are the whole surface: `--junitxml path` and
+        # `--junitxml=path`. `--debug` also has a bare form that writes
+        # `pytestdebug.log` into the working directory, which the loop over
+        # `option` alone covers.
+        for arguments in (
+            ["--junitxml=cosign.pub", "tests"],
+            ["--junitxml", "cosign.pub", "tests"],
+            ["--junit-xml=cosign.pub", "tests"],
+            ["--log-file=.claude/settings.json", "tests"],
+            ["--debug", "tests"],
+            ["--basetemp=.claude", "tests"],
+            ["--cov-report=xml:cosign.pub", "tests"],
+        ):
+            with self.subTest(arguments=arguments):
+                self.run_pytest.reset_mock()
+                self.assertEqual(run_tests.main(arguments), 2)
+                self.run_pytest.assert_not_called()
+
+    def test_a_write_refusal_says_why_it_was_refused(self) -> None:
+        # The two lists are refused for unrelated reasons. A `--basetemp`
+        # refused for "lets pytest import code from outside this repository"
+        # tells the reader something untrue about the option in their hand.
+        self.assertIn("writes to a path", run_tests.refusal_message("--basetemp"))
+        self.assertIn("import code from outside", run_tests.refusal_message("--pyargs"))
+
     def test_the_refused_list_covers_the_options_that_import_from_elsewhere(self) -> None:
         # Pinned by name so that dropping one is a failure rather than a
         # quietly shorter tuple. `--pyargs` turns positionals into module
@@ -199,7 +230,7 @@ class RunnerRefusalTests(unittest.TestCase):
         # the other three move what pytest treats as the project, and with
         # it conftest collection.
         self.assertEqual(
-            set(run_tests.REFUSED_OPTIONS),
+            set(run_tests.REFUSED_IMPORT_OPTIONS),
             {
                 "-p",
                 "--pyargs",
@@ -212,6 +243,59 @@ class RunnerRefusalTests(unittest.TestCase):
                 "--override-ini",
             },
         )
+
+    def test_the_refused_list_covers_the_options_that_write_a_file(self) -> None:
+        # Pinned by name for the same reason as the list above, and separately
+        # from it because the two are refused for unrelated reasons. Each of
+        # these names a path and writes it: the report, log and debug options
+        # overwrite, and `--basetemp` empties the directory first.
+        self.assertEqual(
+            set(run_tests.REFUSED_WRITE_OPTIONS),
+            {
+                "--basetemp",
+                "--junitxml",
+                "--junit-xml",
+                "--log-file",
+                "--debug",
+                "--report-log",
+                "--cov-report",
+            },
+        )
+
+    def test_every_refused_option_is_in_exactly_one_list(self) -> None:
+        # `REFUSED_OPTIONS` is the concatenation, and `refusal_message` picks
+        # its wording by membership. An option in both lists would get the
+        # import wording for a write reason.
+        self.assertEqual(
+            set(run_tests.REFUSED_IMPORT_OPTIONS) & set(run_tests.REFUSED_WRITE_OPTIONS),
+            set(),
+        )
+        self.assertEqual(
+            set(run_tests.REFUSED_OPTIONS),
+            set(run_tests.REFUSED_IMPORT_OPTIONS) | set(run_tests.REFUSED_WRITE_OPTIONS),
+        )
+
+    def test_the_write_options_are_pytests_own_and_take_a_path(self) -> None:
+        # Held against the installed pytest's help text rather than memory, for
+        # the reason the flag table below is: a renamed or dropped option would
+        # leave a refusal here that protects nothing, and reads as protection.
+        # The plugin options are skipped -- `--report-log` and `--cov-report`
+        # are refused so that installing the plugin later cannot reopen this,
+        # so their absence from the help text is the expected state.
+        completed = subprocess.run(
+            [sys.executable, "-m", "pytest", "-h"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if completed.returncode != 0:
+            self.skipTest("pytest is not installed; the list is held against 9.1.1's help")
+        plugin_options = {"--report-log", "--cov-report"}
+        for option in run_tests.REFUSED_WRITE_OPTIONS:
+            if option in plugin_options:
+                continue
+            with self.subTest(option=option):
+                self.assertIn(option, completed.stdout)
 
     def test_the_flag_table_matches_pytest_when_it_is_installed(self) -> None:
         # SHORT_FLAGS is what lets the cluster walk tell `-vo` (a flag, then

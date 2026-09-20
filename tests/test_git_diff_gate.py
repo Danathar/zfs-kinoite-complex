@@ -791,6 +791,15 @@ class GateBehaviourTests(unittest.TestCase):
             "FOO=bar >out git diff HEAD",
             "git status; >cosign.pub /usr/bin/git diff HEAD",
             "> .claude/settings.json git diff HEAD",
+            # Bash's `{name}>` allocates a descriptor into a variable; the
+            # word before the operator is that descriptor, not the command.
+            "git status; {fd}>cosign.pub git diff HEAD",
+            "git diff HEAD {fd}>cosign.pub",
+            # A `$(...)` target is a nested command, and the command around
+            # it goes on afterwards: a scope that reset at the `(` had
+            # forgotten the target by the time it reached `git`.
+            "git status; >$(printf cosign.pub) git diff HEAD",
+            ">$(printf cosign.pub) git diff HEAD",
         ):
             with self.subTest(command=command):
                 self.assertRefused(command, "output redirection")
@@ -805,6 +814,12 @@ class GateBehaviourTests(unittest.TestCase):
             # name the prefix redirection is carried to (review on #220).
             "git status; >out printf %s git",
             ">out echo git; git diff HEAD",
+            # The command around a substitution resumes where it left off.
+            ">$(printf out) echo x; git diff HEAD",
+            "{fd}>out echo x; git diff HEAD",
+            "x=$(date); git diff HEAD",
+            "echo $(date) *.sh; git status",
+            "echo $(git log -1) | git diff HEAD",
         ):
             with self.subTest(command=command):
                 self.assertAllowed(command)

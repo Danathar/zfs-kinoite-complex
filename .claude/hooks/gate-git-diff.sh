@@ -129,6 +129,9 @@ OUT_MSG='blocked: git --output=FILE (and the space form) writes this diff or log
 # shellcheck disable=SC2016 # the backticks quote command spellings for the reader
 REDIRECT_MSG='blocked: an output redirection (>, >>, >|, &>, &>>, N>, >&FILE, <>) inside a git invocation makes the shell open its target for writing before git runs -- `git diff HEAD >cosign.pub` truncates the trust anchor, and `>> .claude/settings.json` or `2> .claude/hooks/gate-git-diff.sh` reach any file this uid can write -- and the allow rule for git diff, git log and git show sees none of it. These commands print to stdout; read that instead. Descriptor forms (2>&1, >&2, >&-) and input redirections (<, <<, <<<, <&) are not affected, and a redirection on another command of the same string is that command'"'"'s own.'
 
+# shellcheck disable=SC2016 # the literal $G and $(...) are what the reader has to see
+CMD_MSG='blocked: the name of a command in this string is built by an expansion (`$G diff ...`, `$(printf git) diff ...`, a backtick in command position), so neither this gate nor the allow rule that matched the string'"'"'s literal prefix can tell which command bash will run -- and `G=git; $G diff /dev/null ./cosign.key` runs the plain-file read this gate exists to refuse. Spell every command name literally, and drop a variable assignment that only exists to build one. A literal name after an assignment (`FOO=bar git diff HEAD`) is fine.'
+
 # shellcheck disable=SC2016 # the literal ${VAR} is what the reader has to see
 BRACE_MSG='blocked: bash expands braces before git sees the words, and this gate reads the words as typed, so a brace rebuilds both spellings it refuses: `git diff {/dev/null,./cosign.key}` passes the operand scan as one word and reaches git as two operands (the plain-file read), and `--outpu{t,t}=FILE` matches no word here and reaches git as --output=FILE. Expanding braces correctly means reimplementing bash inside a hook, so a brace bash could expand -- a { followed, anywhere later in the word, by a comma or a .. and then a }, or a ${VAR} -- is refused instead, and so is a process substitution (`git diff <(...)`), which supplies an operand this gate never saw. Write the command out in full. A brace with neither, such as HEAD@{1} or main@{upstream}, is a literal to bash and is not refused; a .. between two reflog entries (HEAD@{2}..HEAD@{1}) has the refused shape, so write HEAD~2..HEAD~1. Only words of a git invocation are affected: awk and jq programs elsewhere in the string are not.'
 
@@ -331,6 +334,67 @@ for ((i = 0; i < ${#command_string}; i++)); do
   esac
 done
 end_word
+
+# Every scan below looks for a literal `git` word to open its scope, and the
+# allow rules in .claude/settings.json match a literal `git diff`/`git log`
+# prefix. Both are blind to a command whose *name* is built at runtime: in
+# `git status; G=git; $G diff /dev/null ./cosign.key` the string is allowed
+# on its `git status` prefix, `$G` is not the word `git`, so no scope opens
+# and the hook exits 0 -- and bash runs the plain-file read (review on
+# #216). `$(printf git) diff ...` and a backtick in command position are the
+# same thing spelled differently. Whether the permission layer would prompt
+# for the second command on its own is not this gate's to assume.
+#
+# So the word that names each command has to be literal. That word is the
+# first word after a separator (or of the string) that is not a variable
+# assignment (`FOO=bar git diff HEAD` names git), not a shell keyword that
+# takes a command (`{`, `!`, `if`, `then`, `time`, ...), and not one of the
+# wrappers that run their arguments (`command`, `exec`, `env`, `nohup`,
+# `xargs`, `timeout`, ...); after any of those the search goes on, over every
+# remaining word of the command in the wrapper case, since the wrapper's own
+# options are not modelled here. A word in that position carrying a `$` or a
+# backtick is refused, and so is an unquoted backtick opening there, whose
+# output would be the name. A redirection's target is never the name.
+#
+# The cost is a backtick assignment (`X=\`date\``): the split ends the word
+# `X=` at the backtick, and the backtick then opens in command position. The
+# `$(...)` spelling of the same assignment is not affected.
+command_word_pending=1 # the next word of this command may be its name
+in_backtick=0
+for ((idx = 0; idx < ${#words[@]}; idx++)); do
+  case "${kinds[idx]}" in
+  sep)
+    if [[ "${words[idx]}" == '`' ]]; then
+      if ((in_backtick)); then
+        # Closing: the command that contained the substitution has its name.
+        in_backtick=0
+        command_word_pending=0
+        continue
+      fi
+      ((command_word_pending)) && refuse "${CMD_MSG}"
+      in_backtick=1
+    fi
+    command_word_pending=1
+    continue
+    ;;
+  target) continue ;;
+  esac
+  ((command_word_pending)) || continue
+  raw_word="${raw_words[idx]}"
+  if [[ "${raw_word}" =~ ^[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?\+?= ]]; then
+    continue # an assignment; the name is still to come
+  fi
+  if [[ "${raw_word}" == *'$'* || "${raw_word}" == *'`'* ]]; then
+    refuse "${CMD_MSG}"
+  fi
+  case "${words[idx]}" in
+  '{' | '}' | '!' | if | then | else | elif | fi | do | done | while | until | time | coproc | \
+    command | builtin | exec | env | nohup | nice | xargs | timeout | stdbuf | sudo | doas)
+    continue
+    ;;
+  esac
+  command_word_pending=0
+done
 
 # Whether the shell opens a redirection's target for writing. Every operator
 # with a `>` in it does -- `>`, `>>`, `>|`, `&>`, `&>>`, and `<>`, which

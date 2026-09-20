@@ -31,6 +31,11 @@ claims it makes are each a separate way for it to silently stop working:
     flag name -- so every word of a git invocation carrying either is
     refused, while an awk or jq program in another command of the string
     is not;
+  * the word that names a command must be literal: `git status; G=git; $G
+    diff /dev/null ./cosign.key` opens no git scope at `$G` and runs the
+    plain-file read, so a command name carrying a `$` or a backtick is
+    refused wherever it stands in the string, while `FOO=bar git diff HEAD`
+    names git and is left alone;
   * an operator character with no whitespace around it still starts a command;
   * a two-token git global option (`-C dir`) must not be read as a subcommand;
   * it fails closed when `jq` is missing, per AGENTS.md section 0 rule 1.
@@ -355,6 +360,45 @@ class GateBehaviourTests(unittest.TestCase):
             "x=$(date); ls",
             "jq '.[$x]' f | git diff --stat",
             "git diff HEAD | awk '{print $1}'",
+        ):
+            with self.subTest(command=command):
+                self.assertAllowed(command)
+
+    def test_a_command_name_built_by_an_expansion_is_refused(self) -> None:
+        # Every scope in the hook opens at a literal `git` word, and the
+        # allow rule matched the string on its literal prefix. `$G` is not
+        # the word `git`, so after `git status;` nothing reopened and the
+        # hook exited 0 while bash ran the plain-file read (review on #216).
+        # The name of a command is the first word after a separator that is
+        # not an assignment, a keyword taking a command, or a wrapper that
+        # runs its arguments; one carrying a `$` or a backtick, or an
+        # unquoted backtick opening in that position, is refused.
+        for command in (
+            "git status; G=git; $G diff /dev/null ./cosign.key",
+            "git status; $(printf git) diff /dev/null ./cosign.key",
+            "git status; `echo git` diff x",
+            "`echo git` diff x",
+            "$G diff /dev/null ./cosign.key",
+            "G=git $G diff /dev/null ./cosign.key",
+            'git status && "$(printf git)" diff x',
+            "git status; { $G diff x; }",
+            "git status; exec $G diff x",
+            "git status; env G=git $G diff x",
+            "git status; time $G diff x",
+            "git status | $G diff x",
+        ):
+            with self.subTest(command=command):
+                self.assertRefused(command, "Spell every command name literally")
+        for command in (
+            "git status; git diff HEAD@{1}",
+            "FOO=bar git diff HEAD",
+            "X=$(date); git diff HEAD",
+            "echo $HOME; git diff HEAD",
+            "echo `date`; git diff HEAD",
+            "if [ -n \"$x\" ]; then git diff HEAD; fi",
+            "for f in $(ls); do echo $f; done",
+            "ls > out; git status",
+            "env FOO=$x git diff HEAD",
         ):
             with self.subTest(command=command):
                 self.assertAllowed(command)

@@ -404,6 +404,19 @@ class GateBehaviourTests(unittest.TestCase):
         ):
             with self.subTest(command=command):
                 self.assertRefused(command, "Spell every command name literally")
+        # `env -S` is not an option but an interpreter: it splits its quoted
+        # string into a command this scan never sees as words (review on
+        # #217). Any -S after env, clustered or long, is refused; the other
+        # env options are not.
+        for command in (
+            "git status; env -S 'git diff /dev/null ./cosign.key'",
+            "env -iS 'git diff /dev/null ./cosign.key'",
+            "git status; env --split-string='git diff x'",
+            "git status; env --split-string 'git diff x'",
+            "git status; env -u X -S 'git diff x'",
+        ):
+            with self.subTest(command=command):
+                self.assertRefused(command, "env -S")
         for command in (
             "git status; git diff HEAD@{1}",
             "FOO=bar git diff HEAD",
@@ -417,7 +430,9 @@ class GateBehaviourTests(unittest.TestCase):
             "ls > out; git status",
             "env FOO=$x git diff HEAD",
             "env -i PATH=$PATH git diff HEAD",
+            "env -u X git diff HEAD",
             "timeout 60 git diff HEAD",
+            "git status; timeout -s KILL 5 git diff HEAD",
             "xargs -I{} git diff {} < list",
             "command -v shellcheck",
             "find . -name '*.sh'",

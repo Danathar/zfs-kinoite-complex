@@ -49,9 +49,11 @@ branch, what is done, what is not, and what you were about to check.
   not push, promote, tag, or delete.
 - **`main` is not branch-protected.** A green `Python Unit Tests` check blocks
   nothing; a person declining to merge is what blocks.
-- **Image builds are slow.** A pull request triggers `Build Or Reuse Shared ZFS
-  Akmods Cache`, `Build PR Image (No Push)` and `Build Branch Image`, which take
-  tens of minutes. `Python Unit Tests` returns in about ten seconds. Do not
-  read a pending image build as a hang.
+- **Image builds are slow.** Pushing a branch triggers `Build Or Reuse Shared
+  ZFS Akmods Cache` and `Build Branch Image`; opening the pull request triggers
+  `Build PR Image (No Push)`. They take tens of minutes. An `ai-fix/**` branch
+  is excluded from the branch build, so a pull request from one gets only the
+  third. `Python Unit Tests` returns in about ten seconds. Do not read a
+  pending image build as a hang.
 - **`unexpected EOF` during a blob copy is a registry or CDN failure**, common
   enough here to rule out first, and never a reason to change code.

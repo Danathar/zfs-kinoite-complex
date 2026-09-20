@@ -801,6 +801,10 @@ class GateBehaviourTests(unittest.TestCase):
             ">out echo x; git diff HEAD",
             ">out cat f | git diff --stat",
             "echo x > out; git diff HEAD",
+            # A `git` that is an argument of some other command is not the
+            # name the prefix redirection is carried to (review on #220).
+            "git status; >out printf %s git",
+            ">out echo git; git diff HEAD",
         ):
             with self.subTest(command=command):
                 self.assertAllowed(command)
@@ -865,6 +869,11 @@ class GateBehaviourTests(unittest.TestCase):
         ):
             with self.subTest(command=command):
                 self.assertAllowed(command)
+        # The containment test never resolves a leading `~` inside the tree,
+        # quoted or not, so two quoted tildes after a `--` are refused as the
+        # plain-file form although bash would hand git two literal paths.
+        # That is the stricter direction, taken on purpose (review on #220).
+        self.assertRefused("git diff -- '~/x' '~/y'", "--no-index")
 
     # Words a tilde rule has to decide, each inserted verbatim into a bash
     # script: the expansions bash performs (a home directory, a named user's

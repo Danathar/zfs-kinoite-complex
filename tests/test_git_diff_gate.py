@@ -17,9 +17,15 @@ claims it makes are each a separate way for it to silently stop working:
     and `--output-indicator-*` is a different flag that must keep working;
   * an output redirection on the git command is the shell's spelling of the
     same write -- `git diff HEAD >cosign.pub` truncates the file before git
-    starts -- and is refused whatever it targets, while `2>&1`, an input
-    redirection, and a redirection on some other command in the string
-    stay allowed;
+    starts -- and is refused whatever it targets and wherever it is written
+    (`>cosign.pub git diff HEAD` is the same command), while `2>&1`, an
+    input redirection, and a redirection on some other command in the
+    string stay allowed;
+  * an unquoted leading `~` is `$HOME` to bash and a literal directory
+    inside the checkout to a scan of the typed words, so `git diff --
+    ~/.aws/credentials ~/.bashrc` resolved both operands inside the tree and
+    printed both files; such a word is refused in a git invocation, while a
+    quoted tilde and `HEAD~1` are left alone;
   * the shell rewrites quoting and backslashes before git sees the word, so
     matching the typed spelling is not enough;
   * brace expansion rewrites it further -- one word becomes two operands, and
@@ -734,6 +740,186 @@ class GateBehaviourTests(unittest.TestCase):
         # refused once the brace is gone.
         self.assertRefused("git diff HEAD >cosign.{pub,key}", "expands braces")
         self.assertRefused("git diff HEAD >cosign.pub", "output redirection")
+
+    def test_a_redirection_before_the_git_word_really_truncates_the_file(self) -> None:
+        # Bash lets a redirection precede the command name, and the two
+        # spellings are the same command: `>victim git diff HEAD` truncates
+        # the file exactly as `git diff HEAD >victim` does. Shown for real,
+        # against a stand-in in a throwaway repository.
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            subprocess.run(["git", "init", "-q", str(repo)], check=True)
+            victim = repo / "victim"
+            victim.write_text("ORIGINAL-CONTENT\n")
+            subprocess.run(
+                [
+                    BASH,
+                    "--norc",
+                    "--noprofile",
+                    "-c",
+                    "git status --short >/dev/null; >victim git diff HEAD HEAD",
+                ],
+                cwd=str(repo),
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=False,
+            )
+            written = victim.read_text()
+        self.assertNotIn(
+            "ORIGINAL-CONTENT",
+            written,
+            "bash no longer truncates the target of a redirection written before the "
+            "command name; re-derive why prefix redirections are carried to it",
+        )
+
+    def test_an_output_redirection_before_the_git_word_is_refused(self) -> None:
+        # The redirection scope opened at the `git` word and had not yet seen
+        # the target, so `git status; >cosign.pub git diff HEAD` -- allowed
+        # on its `git status` prefix -- exited 0 while bash emptied the trust
+        # anchor (fixed first in arch-bootc, review on #317). A writing target
+        # seen before any `git` word of its command is carried until the
+        # command's name is known and refused if that name is git; it is
+        # dropped at the next separator, so a prefix redirection on some
+        # other command of the string is still that command's own, and the
+        # descriptor and input forms before the git word stay allowed.
+        for command in (
+            ">cosign.pub git diff HEAD",
+            "git status; >cosign.pub git diff HEAD",
+            "2>err git log -1",
+            ">> out git show HEAD",
+            "FOO=bar >out git diff HEAD",
+            "git status; >cosign.pub /usr/bin/git diff HEAD",
+            "> .claude/settings.json git diff HEAD",
+        ):
+            with self.subTest(command=command):
+                self.assertRefused(command, "output redirection")
+        for command in (
+            "</dev/null git diff HEAD",
+            "2>&1 git diff HEAD",
+            ">&2 git diff HEAD",
+            ">out echo x; git diff HEAD",
+            ">out cat f | git diff --stat",
+            "echo x > out; git diff HEAD",
+        ):
+            with self.subTest(command=command):
+                self.assertAllowed(command)
+
+    def test_git_really_reads_a_home_file_named_with_a_tilde(self) -> None:
+        # The reach the tilde rule exists for, run for real with a throwaway
+        # HOME: bash expands `~` before git runs, the operand scan resolved
+        # the literal `~` inside the checkout and counted two inside
+        # operands, and git printed both files as a plain-file diff.
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp) / "home"
+            (home / ".aws").mkdir(parents=True)
+            (home / ".aws" / "credentials").write_text("STAND-IN-NOT-A-SECRET\n")
+            (home / ".bashrc").write_text("export FIXTURE=1\n")
+            shown = subprocess.run(
+                [BASH, "--norc", "--noprofile", "-c", "git diff -- ~/.aws/credentials ~/.bashrc"],
+                cwd=str(REPO_ROOT),
+                capture_output=True,
+                text=True,
+                timeout=60,
+                env={"PATH": os.environ.get("PATH", ""), "HOME": str(home)},
+                check=False,
+            )
+        self.assertIn(
+            "STAND-IN-NOT-A-SECRET",
+            shown.stdout,
+            "git diff no longer prints a home file named through ~; the tilde rule "
+            "may be more than is needed",
+        )
+        self.assertRefused("git diff -- ~/.aws/credentials ~/.bashrc", "unquoted leading ~")
+
+    def test_a_word_with_an_unquoted_leading_tilde_is_refused_in_a_git_invocation(self) -> None:
+        # Every spelling bash would expand -- `~/`, `~user/`, `~` alone, in
+        # any git subcommand and on either side of a `--` -- is refused as
+        # typed. A quoted or escaped tilde is a literal to bash and passes;
+        # so does a tilde that does not lead the word, which is how `HEAD~1`
+        # is spelled, and one in some other command of the string.
+        for command in (
+            "git diff -- ~/.aws/credentials ~/.bashrc",
+            "git diff ~/.bashrc ~/.aws/credentials",
+            "git diff -- ~ ~/.bashrc",
+            "git diff -- ~root/.bashrc ./cosign.pub",
+            "git log -p -- ~/.ssh/config",
+            "git show HEAD -- ~/.ssh/config",
+            "git diff HEAD -- ~/.bashrc",
+            "git status; git diff -- ~/.aws/credentials ~/.bashrc",
+            "echo x | git diff -- ~/.aws/credentials ~/.bashrc",
+        ):
+            with self.subTest(command=command):
+                self.assertRefused(command, "unquoted leading ~")
+        for command in (
+            "git diff HEAD@{1}",
+            "git diff HEAD~1",
+            "git diff -- 'lit~eral'",
+            "git diff -- '~/x'",
+            'git diff -- "~/x"',
+            "git diff -- \\~/x",
+            "git diff HEAD -- x~",
+            "git show HEAD:~/x",
+            "ls ~/.bashrc; git diff HEAD",
+            "echo x > out; git diff HEAD",
+        ):
+            with self.subTest(command=command):
+                self.assertAllowed(command)
+
+    # Words a tilde rule has to decide, each inserted verbatim into a bash
+    # script: the expansions bash performs (a home directory, a named user's
+    # home, the bare `~`), the quoted and escaped spellings it leaves alone,
+    # and the tildes that do not lead the word.
+    LITERAL_TILDE_WORDS = (
+        "'~/x'",
+        '"~/x"',
+        "\\~/x",
+        "HEAD~1",
+        "HEAD~2..HEAD~1",
+        "lit~eral",
+        "x~",
+    )
+    TILDE_CORPUS = LITERAL_TILDE_WORDS + (
+        "~",
+        "~/.aws/credentials",
+        "~/.bashrc",
+        "~root/.bashrc",
+        "~/",
+    )
+
+    @staticmethod
+    def bash_rewrites(word: str) -> bool:
+        """Whether bash hands a command something other than the typed word
+        with its quotes removed -- for a tilde, whether it expanded one."""
+        result = subprocess.run(
+            [BASH, "--norc", "--noprofile", "-c", 'printf "%s\\0" ' + word],
+            capture_output=True,
+            env={"PATH": os.environ.get("PATH", ""), "HOME": "/nonexistent-home"},
+            timeout=60,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise AssertionError(f"bash could not run {word!r}: {result.stderr!r}")
+        stripped = word.replace("'", "").replace('"', "").replace("\\", "")
+        return result.stdout != stripped.encode() + b"\0"
+
+    def test_the_tilde_rule_against_bash_rather_than_a_label(self) -> None:
+        # Bash is the ground truth. Every corpus word bash rewrites must be
+        # refused, and every word of the literal set must be allowed. A word
+        # in neither class is only held to the first rule.
+        self.assertEqual(len(set(self.TILDE_CORPUS)), len(self.TILDE_CORPUS))
+        rewritten = 0
+        for word in self.TILDE_CORPUS:
+            with self.subTest(word=word):
+                if not self.bash_rewrites(word):
+                    continue
+                rewritten += 1
+                self.assertRefused(f"git diff -- {word} ./cosign.pub", "unquoted leading ~")
+        self.assertGreaterEqual(rewritten, 4)
+        for word in self.LITERAL_TILDE_WORDS:
+            with self.subTest(word=word):
+                self.assertFalse(self.bash_rewrites(word), f"bash rewrites {word!r}")
+                self.assertAllowed(f"git log -1 -- {word}")
 
     def test_a_redirection_does_not_reset_the_operand_count(self) -> None:
         # The operand scan reset at the same `&`, so `git diff 2>&1 /dev/null

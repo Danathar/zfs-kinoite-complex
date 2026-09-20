@@ -455,6 +455,72 @@ class GateBehaviourTests(unittest.TestCase):
             with self.subTest(command=command):
                 self.assertRefused(command, "expands braces")
 
+    def test_a_redirection_does_not_end_the_git_scope(self) -> None:
+        # The scope ends only where bash ends the command, and a redirection
+        # is not a separator. The split behind #214 treated every unquoted
+        # `&` as one, so `git log 2>&1 --outpu{t,t}=cosign.pub -1` closed the
+        # brace scope at the `&` of `2>&1`, bash expanded the flag, and git
+        # overwrote the file (review on aurora-zfs-simple#201). `>&`, `<&`,
+        # `&>`, `&>>` and `>|` are all redirections; `|&` is a pipe and still
+        # ends the command. The same split feeds the operand scan, which
+        # counted the words of `2>&1` as diff operands and refused every
+        # `git diff ... 2>&1`; a redirection's descriptor and target are the
+        # shell's and are not counted.
+        for command in (
+            "git diff HEAD@{1} 2>&1 | jq '{a,b}'",
+            "git diff HEAD |& jq '{a,b}'",
+            "git diff HEAD 2>&1",
+            "git diff HEAD 2>/dev/null",
+            "git diff HEAD >out.txt",
+            "git diff HEAD > out.txt",
+            "git diff --stat HEAD -- docs/SECURITY-AI.md 2>&1 | head",
+        ):
+            with self.subTest(command=command):
+                self.assertAllowed(command)
+        for command in (
+            "git log 2>&1 --outpu{t,t}=cosign.pub -1",
+            "git diff &>/dev/null {a,b}",
+            "git diff &>>/dev/null {a,b}",
+            "git diff <&0 {a,b}",
+            "git diff 2>&1 {/dev/null,./cosign.key}",
+            "git log -1 >| out --outpu{t,t}=cosign.pub",
+            "git log -1 |& git diff {a,b}",
+        ):
+            with self.subTest(command=command):
+                self.assertRefused(command, "expands braces")
+
+    def test_a_redirection_does_not_reset_the_operand_count(self) -> None:
+        # The operand scan reset at the same `&`, so `git diff 2>&1 /dev/null
+        # ./cosign.key` printed the key with neither operand counted, and no
+        # brace was needed.
+        for command in (
+            "git diff 2>&1 /dev/null ./cosign.key",
+            "git diff /dev/null ./cosign.key 2>&1",
+        ):
+            with self.subTest(command=command):
+                self.assertRefused(command, "--no-index")
+
+    def test_a_process_substitution_is_refused_inside_a_git_invocation(self) -> None:
+        # A `(` behind an unquoted `<` or `>` is a process substitution, not
+        # a subshell: it hands git a /dev/fd path as an operand the scan never
+        # counted, and the split reset the operand count at its `(` instead.
+        # It is refused in a git invocation, and left alone in any other
+        # command of the string.
+        for command in (
+            "git diff <(true) ./cosign.key",
+            "git diff -- ./cosign.key <(true)",
+            "cat <(git diff {a,b})",
+        ):
+            with self.subTest(command=command):
+                self.assertRefused(command, "expands braces")
+        for command in (
+            "git log -1; cat <(true)",
+            "cat <(git log -1)",
+            "diff <(git log -1) <(git log -2)",
+        ):
+            with self.subTest(command=command):
+                self.assertAllowed(command)
+
     def test_the_output_indicator_flags_are_a_different_flag(self) -> None:
         # Anchoring matters: these change the marker character, not the
         # destination, and refusing them would be a false positive that trains

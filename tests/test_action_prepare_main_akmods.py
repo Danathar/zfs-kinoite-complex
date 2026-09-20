@@ -29,7 +29,7 @@ Nothing here builds a kernel module or touches a registry. `python3` is a stub a
 directories where a real interpreter lives, so a step that stopped being stubbed would fail with
 "command not found" rather than start a build.
 
-PyYAML is a transitive pytest dependency and present in CI (see .github/workflows/test.yml). The
+PyYAML is not a pytest dependency; CI installs it by name (see .github/workflows/test.yml). The
 import is guarded so the suite still runs under `python3 -m unittest discover -s tests` with
 nothing installed, matching tests/test_action_rechunk_native_image.py.
 """

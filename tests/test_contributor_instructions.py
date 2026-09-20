@@ -28,11 +28,10 @@ only test that opened either of them was `tests/test_docs_consistency.py`, which
 globs every tracked `*.md` and checks that their *links* resolve, so their
 content was asserted by nothing.
 
-No PyYAML and no third-party parser, for the reason
-tests/test_workflow_build_container.py gives: the CI job installs only pytest,
-pytest-cov and ruff, so anything else would depend on the runner image and skip
-silently the day that changed. The one workflow this file reads is
-`.github/workflows/test.yml`, whose steps it extracts by indentation.
+No PyYAML and no third-party parser. CI does install PyYAML by name, but the
+one workflow this file reads is `.github/workflows/test.yml` -- the file that
+install line lives in -- and a test of what CI installs must not skip the day
+that line changes. Its steps are extracted by indentation.
 """
 
 from __future__ import annotations
@@ -480,7 +479,7 @@ class CopilotClaimTests(unittest.TestCase):
         # installed" is only true while every third-party import under tests/
         # is optional. An unguarded `import yaml` turns the documented no-install
         # command into a collection error, and CI would not notice: its job
-        # installs pytest, pytest-cov and ruff.
+        # installs PyYAML.
         self.assertIn("python3 -m unittest discover -s tests", self.text)
         unguarded = []
         for path in sorted((REPO_ROOT / "tests").rglob("*.py")):

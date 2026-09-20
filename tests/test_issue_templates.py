@@ -46,8 +46,9 @@ namespace.
 
 The link and marker joins run everywhere. The schema checks need a real YAML
 parser, so PyYAML is imported the way the other configuration tests here import
-it -- used when present, skipped when not -- because the `test.yml` job
-installs pytest, pytest-cov and ruff and nothing else.
+it -- used when present, skipped when not. The `test.yml` job installs it by
+name; pytest does not bring it, so the skip is for a checkout with nothing
+installed, not for CI.
 """
 
 from __future__ import annotations

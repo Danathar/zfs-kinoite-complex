@@ -21,8 +21,8 @@ Nothing here reaches the network. `gh` is a stub that records its argv and print
 scripted `.head.repo.full_name`, and PATH deliberately omits the directory holding the
 real `gh`, so a step that stopped stubbing out would fail rather than call GitHub.
 
-PyYAML is a pytest dependency and is present in CI (see .github/workflows/test.yml,
-which installs pytest, pytest-cov and ruff), but the import is guarded so the suite
+PyYAML is not a pytest dependency; CI installs it by name (see .github/workflows/test.yml,
+which installs pytest, pytest-cov, ruff and pyyaml), but the import is guarded so the suite
 still runs under `python3 -m unittest discover -s tests` with nothing installed --
 matching tests/test_workflow_build_container.py.
 """

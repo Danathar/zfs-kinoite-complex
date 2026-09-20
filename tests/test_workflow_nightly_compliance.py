@@ -36,7 +36,7 @@ This runs the workflow's own text. Copying a step into the test would assert tha
 works; extracting it means a renamed or deleted step fails loudly in `_run_body` rather than
 silently testing nothing.
 
-PyYAML is a transitive pytest dependency and present in CI (see .github/workflows/test.yml).
+PyYAML is not a pytest dependency; CI installs it by name (see .github/workflows/test.yml).
 The import is guarded so the suite still runs under `python3 -m unittest discover -s tests`
 with nothing installed, matching tests/test_workflow_publish_badges.py.
 """

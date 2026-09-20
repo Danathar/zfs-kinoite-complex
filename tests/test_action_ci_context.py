@@ -25,7 +25,7 @@ loudly instead of leaving this file asserting nothing.
 Nothing here installs a package. `sudo` is a stub that records and returns; PATH deliberately
 omits the directories where a real `sudo` lives.
 
-PyYAML is a transitive pytest dependency and present in CI (see .github/workflows/test.yml).
+PyYAML is not a pytest dependency; CI installs it by name (see .github/workflows/test.yml).
 The import is guarded so the suite still runs under `python3 -m unittest discover -s tests`
 with nothing installed, matching tests/test_action_publish_native_image.py.
 """

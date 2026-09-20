@@ -26,9 +26,14 @@ jobs:
         with:
           persist-credentials: false
 
+      # PyYAML is named here because nothing else brings it: it is not a pytest
+      # dependency. The workflow and composite-action tests import it behind
+      # `except ImportError` and skip without it, so an install line that left
+      # it to the runner image would keep this job green while those tests
+      # silently stopped running the day the image changed.
       - name: Install test runner and linter
         shell: bash
-        run: pip install --quiet pytest pytest-cov "ruff==0.16.1"
+        run: pip install --quiet pytest pytest-cov "ruff==0.16.1" pyyaml
 
       - name: Lint with ruff
         shell: bash

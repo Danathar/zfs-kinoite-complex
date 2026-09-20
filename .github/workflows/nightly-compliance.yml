@@ -39,9 +39,12 @@ jobs:
         with:
           persist-credentials: false
 
+      # PyYAML for the same reason test.yml names it: the workflow tests skip
+      # without it, and this job exists to notice a changed runner image, not
+      # to go green on one.
       - name: Install test runner and linter
         shell: bash
-        run: pip install --quiet pytest pytest-cov "ruff==0.16.1"
+        run: pip install --quiet pytest pytest-cov "ruff==0.16.1" pyyaml
 
       - name: Lint with ruff
         shell: bash

@@ -27,8 +27,8 @@ Both are one-line edits and both stayed green. That is the argument for
 checking the file mechanically rather than trusting review to notice.
 
 PyYAML is imported the way the other workflow tests here import it -- used when
-present, skipped when not -- because the CI job installs pytest, pytest-cov and
-ruff and nothing else.
+present, skipped when not. The CI job installs it by name; pytest does not bring
+it, so the skip is for a checkout with nothing installed, not for CI.
 """
 
 from __future__ import annotations

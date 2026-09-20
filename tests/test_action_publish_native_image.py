@@ -25,7 +25,7 @@ omits the directories where the real tools live, so a step that stopped being st
 rather than talk to ghcr.io. The stub registry is a directory of files mapping a reference to the
 digest it resolves to, which is enough to tell "copied the digest" from "copied the tag".
 
-PyYAML is a transitive pytest dependency and present in CI (see .github/workflows/test.yml).
+PyYAML is not a pytest dependency; CI installs it by name (see .github/workflows/test.yml).
 The import is guarded so the suite still runs under `python3 -m unittest discover -s tests`
 with nothing installed, matching tests/test_workflow_build_container.py.
 """

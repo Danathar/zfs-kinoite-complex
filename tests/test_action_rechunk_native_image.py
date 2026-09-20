@@ -32,7 +32,7 @@ the test never touches `/mnt`.
 The step buffers through the literal path `/tmp/chunkah-oci.tar`, which is not configurable from
 outside; the tests below therefore use that path and assert the step removes it again.
 
-PyYAML is a transitive pytest dependency and present in CI (see .github/workflows/test.yml).
+PyYAML is not a pytest dependency; CI installs it by name (see .github/workflows/test.yml).
 The import is guarded so the suite still runs under `python3 -m unittest discover -s tests`
 with nothing installed, matching tests/test_action_publish_native_image.py.
 """

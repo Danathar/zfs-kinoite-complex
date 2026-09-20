@@ -101,11 +101,14 @@
 # primitive needs none of that machinery: `--output` anywhere in a git
 # invocation is refused outright.
 #
-# What it still cannot see, stated rather than implied: a command that builds
-# its arguments at runtime (`git diff $x $y`, `sh -c ...`), one that changes
+# What it still cannot see, stated rather than implied: a command that hides a
+# git invocation behind another interpreter (`sh -c ...`), one that changes
 # directory out of the repository first, and anything a command reads or writes
-# once it has started. This re-gates the pre-approved commands that reach past
-# the deny list; it is not a sandbox.
+# once it has started. A git argument built at runtime (`git diff $x $y`,
+# `$(...)`, a backtick, `$'\x74'`) is no longer waved through -- every `$` and
+# backtick in a word of a git invocation is refused, see `EXPAND_MSG` -- but
+# that is a refusal, not an inspection. This re-gates the pre-approved commands
+# that reach past the deny list; it is not a sandbox.
 
 set -uo pipefail
 
@@ -114,12 +117,20 @@ refuse() {
   exit 2
 }
 
+# shellcheck disable=SC2016 # the message quotes shell spellings as literal
+# text -- $'\x74' and $(...) are what the reader has to see, not what this
+# script should expand.
+EXPAND_MSG='blocked: bash expands ANSI-C quotes and substitutions before git sees the words, and this gate reads the words as typed, so two characters rebuild both spellings it refuses: `git diff $(...)` and a backtick supply operands the operand scan never saw (the plain-file read), and `--outpu$'"'"'\x74'"'"'=FILE` matches no word here and reaches git as --output=FILE. Expanding them correctly means reimplementing bash inside a hook, so every $ and backtick in a word of a git invocation is refused instead. Write the command out in full. Only words of a git invocation are affected: an awk or jq program elsewhere in the string is not, unless it carries a backtick after a git word.'
+
 DIFF_MSG='blocked: this git diff would compare paths as plain files (git'"'"'s --no-index mode, which needs no flag once two operands are given), so it prints any file on disk -- the signing key, a .env, a private key outside this repository -- past the Read(...) deny rules in .claude/settings.json. Describe such a file with ls -l or wc -c instead.'
 
 OUT_MSG='blocked: git --output=FILE (and the space form) writes this diff or log to the path it names instead of stdout, overwriting any file this uid can reach -- cosign.pub, ci/inputs.lock.json, .claude/settings.json, this hook, ~/.ssh/authorized_keys -- with no Read(...) or Write(...) deny rule in its way. git diff, git log and git show print to stdout; read that instead. --output-indicator-* is a different flag and is unaffected.'
 
 # shellcheck disable=SC2016 # the backticks quote command spellings for the reader
 REDIRECT_MSG='blocked: an output redirection (>, >>, >|, &>, &>>, N>, >&FILE, <>) inside a git invocation makes the shell open its target for writing before git runs -- `git diff HEAD >cosign.pub` truncates the trust anchor, and `>> .claude/settings.json` or `2> .claude/hooks/gate-git-diff.sh` reach any file this uid can write -- and the allow rule for git diff, git log and git show sees none of it. These commands print to stdout; read that instead. Descriptor forms (2>&1, >&2, >&-) and input redirections (<, <<, <<<, <&) are not affected, and a redirection on another command of the same string is that command'"'"'s own.'
+
+# shellcheck disable=SC2016 # the literal $G and $(...) are what the reader has to see
+CMD_MSG='blocked: the name of a command in this string is built by an expansion (`$G diff ...`, `$(printf git) diff ...`, a backtick in command position), so neither this gate nor the allow rule that matched the string'"'"'s literal prefix can tell which command bash will run -- and `G=git; $G diff /dev/null ./cosign.key` runs the plain-file read this gate exists to refuse. Spell every command name literally, and drop a variable assignment that only exists to build one. A literal name after an assignment (`FOO=bar git diff HEAD`) is fine.'
 
 # shellcheck disable=SC2016 # the literal ${VAR} is what the reader has to see
 BRACE_MSG='blocked: bash expands braces before git sees the words, and this gate reads the words as typed, so a brace rebuilds both spellings it refuses: `git diff {/dev/null,./cosign.key}` passes the operand scan as one word and reaches git as two operands (the plain-file read), and `--outpu{t,t}=FILE` matches no word here and reaches git as --output=FILE. Expanding braces correctly means reimplementing bash inside a hook, so a brace bash could expand -- a { followed, anywhere later in the word, by a comma or a .. and then a }, or a ${VAR} -- is refused instead, and so is a process substitution (`git diff <(...)`), which supplies an operand this gate never saw. Write the command out in full. A brace with neither, such as HEAD@{1} or main@{upstream}, is a literal to bash and is not refused; a .. between two reflog entries (HEAD@{2}..HEAD@{1}) has the refused shape, so write HEAD~2..HEAD~1. Only words of a git invocation are affected: awk and jq programs elsewhere in the string are not.'
@@ -324,6 +335,67 @@ for ((i = 0; i < ${#command_string}; i++)); do
 done
 end_word
 
+# Every scan below looks for a literal `git` word to open its scope, and the
+# allow rules in .claude/settings.json match a literal `git diff`/`git log`
+# prefix. Both are blind to a command whose *name* is built at runtime: in
+# `git status; G=git; $G diff /dev/null ./cosign.key` the string is allowed
+# on its `git status` prefix, `$G` is not the word `git`, so no scope opens
+# and the hook exits 0 -- and bash runs the plain-file read (review on
+# #216). `$(printf git) diff ...` and a backtick in command position are the
+# same thing spelled differently. Whether the permission layer would prompt
+# for the second command on its own is not this gate's to assume.
+#
+# So the word that names each command has to be literal. That word is the
+# first word after a separator (or of the string) that is not a variable
+# assignment (`FOO=bar git diff HEAD` names git), not a shell keyword that
+# takes a command (`{`, `!`, `if`, `then`, `time`, ...), and not one of the
+# wrappers that run their arguments (`command`, `exec`, `env`, `nohup`,
+# `xargs`, `timeout`, ...); after any of those the search goes on, over every
+# remaining word of the command in the wrapper case, since the wrapper's own
+# options are not modelled here. A word in that position carrying a `$` or a
+# backtick is refused, and so is an unquoted backtick opening there, whose
+# output would be the name. A redirection's target is never the name.
+#
+# The cost is a backtick assignment (`X=\`date\``): the split ends the word
+# `X=` at the backtick, and the backtick then opens in command position. The
+# `$(...)` spelling of the same assignment is not affected.
+command_word_pending=1 # the next word of this command may be its name
+in_backtick=0
+for ((idx = 0; idx < ${#words[@]}; idx++)); do
+  case "${kinds[idx]}" in
+  sep)
+    if [[ "${words[idx]}" == '`' ]]; then
+      if ((in_backtick)); then
+        # Closing: the command that contained the substitution has its name.
+        in_backtick=0
+        command_word_pending=0
+        continue
+      fi
+      ((command_word_pending)) && refuse "${CMD_MSG}"
+      in_backtick=1
+    fi
+    command_word_pending=1
+    continue
+    ;;
+  target) continue ;;
+  esac
+  ((command_word_pending)) || continue
+  raw_word="${raw_words[idx]}"
+  if [[ "${raw_word}" =~ ^[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?\+?= ]]; then
+    continue # an assignment; the name is still to come
+  fi
+  if [[ "${raw_word}" == *'$'* || "${raw_word}" == *'`'* ]]; then
+    refuse "${CMD_MSG}"
+  fi
+  case "${words[idx]}" in
+  '{' | '}' | '!' | if | then | else | elif | fi | do | done | while | until | time | coproc | \
+    command | builtin | exec | env | nohup | nice | xargs | timeout | stdbuf | sudo | doas)
+    continue
+    ;;
+  esac
+  command_word_pending=0
+done
+
 # Whether the shell opens a redirection's target for writing. Every operator
 # with a `>` in it does -- `>`, `>>`, `>|`, `&>`, `&>>`, and `<>`, which
 # opens read-write and creates the file -- and so does `>&` when its target
@@ -416,6 +488,62 @@ path_inside_worktree() {
   candidate="$(realpath -m -s -- "$1" 2>/dev/null)" || return 1
   [[ "${candidate}" == "${toplevel}" || "${candidate}" == "${toplevel}"/* ]]
 }
+
+# Every test below reads a word as typed, and bash rewrites the words before
+# git receives them. `$(...)`, `${x}`, `$x` and a backtick each supply words
+# the operand scan never counted, so `git diff $(echo /dev/null) ./cosign.key`
+# is one operand here and two at git -- one short of the refusal -- and
+# `$'\x74'` is the letter t, so `--outpu$'\x74'=FILE` matches neither
+# `--output` nor `--output=*` here and arrives at git as `--output=FILE`. The
+# brace scan above catches a `${VAR}` and nothing else of this.
+#
+# They are refused rather than expanded, for the reason the brace scan gives:
+# correct expansion means reimplementing bash in a hook -- nesting, quoting,
+# word splitting on $IFS -- and a half-right expansion is a gate that
+# disagrees with the shell in some other direction. A refusal cannot be
+# half-right, and a git argument built at runtime was already outside what
+# this hook can vouch for, so refusing it turns a silent pass into a visible
+# refusal. Neither character has a literal form git relies on, the way
+# `HEAD@{1}` relies on a brace, so unlike the brace test this one is every
+# `$` and every backtick.
+#
+# The `$` half is scoped like the brace scan: to the words as typed of the
+# command that starts at a `git` word and ends at the next separator bash
+# honours, so `git diff HEAD | awk '{print $1}'` and `jq '.[$x]' f | git
+# diff` are left alone while `git log -1; git diff $x` is refused at its
+# own `git`. The words as typed are the right ones here as well: the
+# normalized split cuts a *quoted* operator inside an argument, and a scope
+# that closed there would hand `git log --grep='a|b' --outpu$'\x74'=FILE -1`
+# its `$` word unwatched. A `$` *before* the first `git` word is not checked
+# and does not need to be: the allow rules in .claude/settings.json match a
+# literal `git diff`/`git log` prefix, so an invocation assembled out of an
+# expansion (`$GIT diff ...`) matches no allow rule and prompts on its own.
+expand_in_git=0
+for raw_word in "${raw_words[@]+"${raw_words[@]}"}"; do
+  if [[ -z "${raw_word}" ]]; then
+    expand_in_git=0
+    continue
+  fi
+  if ((expand_in_git)) && [[ "${raw_word}" == *'$'* ]]; then
+    refuse "${EXPAND_MSG}"
+  fi
+  [[ "${raw_word//[\'\"\\]/}" == "git" ]] && expand_in_git=1
+done
+
+# The backtick half cannot use that scope: an unquoted backtick is itself a
+# separator to the split above, so it closes the scope it would have to be
+# refused in and leaves no word behind. It is refused on the normalized
+# words instead -- where it survives as a word of its own -- from the first
+# `git` word to the end of the string, the latch `--output` uses below. The
+# cost is a backtick in a quoted program piped from git, which no session
+# needs; the alternative is `git diff \`echo /dev/null\` ./cosign.key`.
+expand_in_git=0
+for word in "${words[@]+"${words[@]}"}"; do
+  if ((expand_in_git)) && [[ "${word}" == *'`'* ]]; then
+    refuse "${EXPAND_MSG}"
+  fi
+  [[ "${word}" == "git" ]] && expand_in_git=1
+done
 
 seen_git=0
 in_git=0

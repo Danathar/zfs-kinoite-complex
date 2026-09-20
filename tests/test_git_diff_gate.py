@@ -26,6 +26,16 @@ claims it makes are each a separate way for it to silently stop working:
     a flag name split across a brace becomes the flag -- so a brace bash
     would expand is refused inside a git invocation, while a literal one
     (git's own `HEAD@{1}`) and every brace outside git are left alone;
+  * a `$` or a backtick does the same by another route -- `$(...)` and
+    `` `...` `` supply operands the scan never counted, `$'\x74'` rebuilds a
+    flag name -- so every word of a git invocation carrying either is
+    refused, while an awk or jq program in another command of the string
+    is not;
+  * the word that names a command must be literal: `git status; G=git; $G
+    diff /dev/null ./cosign.key` opens no git scope at `$G` and runs the
+    plain-file read, so a command name carrying a `$` or a backtick is
+    refused wherever it stands in the string, while `FOO=bar git diff HEAD`
+    names git and is left alone;
   * an operator character with no whitespace around it still starts a command;
   * a two-token git global option (`-C dir`) must not be read as a subcommand;
   * it fails closed when `jq` is missing, per AGENTS.md section 0 rule 1.
@@ -282,6 +292,116 @@ class GateBehaviourTests(unittest.TestCase):
         ):
             with self.subTest(command=command):
                 self.assertRefused(command, "expands braces")
+
+    def test_a_substitution_or_ansi_c_quote_in_a_git_word_is_refused(self) -> None:
+        # The gate reads the words as typed and bash rewrites them first.
+        # `$(...)` and a backtick supply operands the scan never counted, so
+        # `git diff $(echo /dev/null) ./cosign.key` reached git as the
+        # two-operand plain-file read with one operand here; `$'\x74'` is
+        # the letter t, so `--outpu$'\x74'=FILE` matched no word here and
+        # reached git as --output=FILE; `$x` is a runtime-built argument.
+        # Every word of a git invocation carrying a `$` or a backtick is
+        # refused rather than expanded, the rule aurora-zfs-simple's hook
+        # already carries.
+        for command in (
+            "git diff $(echo /dev/null) ./cosign.key",
+            "git diff $(printf '/dev/null ./cosign.key')",
+            "git diff `printf '/dev/null ./cosign.key'`",
+            "git diff `echo /dev/null` ./cosign.key",
+            "git log -p --outpu$'\\x74'=cosign.pub -1",
+            "git log --outpu$'\\x74'=FILE",
+            "git diff $OPERANDS",
+            "git diff -- $x $y",
+            "git log -1 && git diff $(echo /dev/null) ./cosign.key",
+            # A quoted operator inside an argument is part of the word to
+            # bash; a scope that closed at it would hand the `$` word back
+            # unwatched. The backtick after it is the same test, on the
+            # whole-string latch that half of the rule runs on.
+            "git log --grep='a|b' --outpu$'\\x74'=cosign.pub -1",
+            "git log --grep='a|b' `printf -- --output=cosign.pub` -1",
+        ):
+            with self.subTest(command=command):
+                self.assertRefused(command, "before git sees the words")
+
+    def test_git_really_reads_the_file_beside_a_substitution(self) -> None:
+        # The reach the `$` rule exists for, run for real: bash replaces
+        # `$(echo /dev/null)` before git runs, and git prints the file beside
+        # it. A stand-in in a throwaway repository, never the real key.
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            subprocess.run(["git", "init", "-q", str(repo)], check=True)
+            (repo / "cosign.key").write_text("STAND-IN-NOT-A-KEY\n")
+            shown = subprocess.run(
+                [BASH, "--norc", "--noprofile", "-c", "git diff $(echo /dev/null) ./cosign.key"],
+                cwd=str(repo),
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=False,
+            )
+        self.assertIn(
+            "STAND-IN-NOT-A-KEY",
+            shown.stdout,
+            "git diff no longer prints the file beside a substituted operand; the "
+            "$ rule may be more than is needed",
+        )
+        self.assertRefused("git diff $(echo /dev/null) ./cosign.key", "before git sees the words")
+
+    def test_a_dollar_or_backtick_before_the_first_git_word_is_left_alone(self) -> None:
+        # The `$` half is scoped like the brace rule, to the command that
+        # starts at a `git` word: an awk or jq program in a string that never
+        # invokes git, or in a command before or after it, is somebody
+        # else's argument. A `git` assembled from an expansion matches no
+        # allow rule and prompts on its own.
+        for command in (
+            "awk '{print $1}' README.md",
+            "jq '.[$x]' ci/inputs.lock.json",
+            "echo `date`",
+            "x=$(date); ls",
+            "jq '.[$x]' f | git diff --stat",
+            "git diff HEAD | awk '{print $1}'",
+        ):
+            with self.subTest(command=command):
+                self.assertAllowed(command)
+
+    def test_a_command_name_built_by_an_expansion_is_refused(self) -> None:
+        # Every scope in the hook opens at a literal `git` word, and the
+        # allow rule matched the string on its literal prefix. `$G` is not
+        # the word `git`, so after `git status;` nothing reopened and the
+        # hook exited 0 while bash ran the plain-file read (review on #216).
+        # The name of a command is the first word after a separator that is
+        # not an assignment, a keyword taking a command, or a wrapper that
+        # runs its arguments; one carrying a `$` or a backtick, or an
+        # unquoted backtick opening in that position, is refused.
+        for command in (
+            "git status; G=git; $G diff /dev/null ./cosign.key",
+            "git status; $(printf git) diff /dev/null ./cosign.key",
+            "git status; `echo git` diff x",
+            "`echo git` diff x",
+            "$G diff /dev/null ./cosign.key",
+            "G=git $G diff /dev/null ./cosign.key",
+            'git status && "$(printf git)" diff x',
+            "git status; { $G diff x; }",
+            "git status; exec $G diff x",
+            "git status; env G=git $G diff x",
+            "git status; time $G diff x",
+            "git status | $G diff x",
+        ):
+            with self.subTest(command=command):
+                self.assertRefused(command, "Spell every command name literally")
+        for command in (
+            "git status; git diff HEAD@{1}",
+            "FOO=bar git diff HEAD",
+            "X=$(date); git diff HEAD",
+            "echo $HOME; git diff HEAD",
+            "echo `date`; git diff HEAD",
+            "if [ -n \"$x\" ]; then git diff HEAD; fi",
+            "for f in $(ls); do echo $f; done",
+            "ls > out; git status",
+            "env FOO=$x git diff HEAD",
+        ):
+            with self.subTest(command=command):
+                self.assertAllowed(command)
 
     def test_a_brace_bash_would_not_expand_is_left_alone(self) -> None:
         # Bash expands a brace only when a comma or a `..` range sits inside

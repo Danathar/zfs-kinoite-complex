@@ -80,6 +80,19 @@
 # one subcommand. `--output-indicator-new` and its siblings change the marker
 # character rather than the destination and stay permitted.
 #
+# The shell has its own spelling of the same write, and it is the older one:
+# `git diff HEAD >cosign.pub` truncates the file before git starts, and
+# `>>`, `>|`, `&>`, `&>>`, `2>err`, `>&file` and `<>file` each open a path
+# for writing the same way. Nothing in the allow rule sees it -- the rule
+# matches a `git diff` prefix -- and the operand scan must not, because a
+# redirection's target is the shell's word, not git's (counting it refused
+# `git diff HEAD 2>&1`). So an output redirection inside a git invocation is
+# refused outright, whatever it targets, on the same ground as `--output`:
+# these commands print to stdout, and that is what to read. `>&N`, `N>&M`
+# and `>&-` name a descriptor rather than a path and are not refused; nor is
+# any input redirection (`<`, `<<`, `<<<`, `<&`); nor is a redirection on
+# some other command of the same string (`echo x >out; git diff HEAD`).
+#
 # So this looks at the operands git would actually receive, and refuses the
 # two-operand form unless every operand resolves as a revision -- which is what
 # separates `git diff main feature` from `git diff /dev/null ./cosign.key`.
@@ -104,6 +117,9 @@ refuse() {
 DIFF_MSG='blocked: this git diff would compare paths as plain files (git'"'"'s --no-index mode, which needs no flag once two operands are given), so it prints any file on disk -- the signing key, a .env, a private key outside this repository -- past the Read(...) deny rules in .claude/settings.json. Describe such a file with ls -l or wc -c instead.'
 
 OUT_MSG='blocked: git --output=FILE (and the space form) writes this diff or log to the path it names instead of stdout, overwriting any file this uid can reach -- cosign.pub, ci/inputs.lock.json, .claude/settings.json, this hook, ~/.ssh/authorized_keys -- with no Read(...) or Write(...) deny rule in its way. git diff, git log and git show print to stdout; read that instead. --output-indicator-* is a different flag and is unaffected.'
+
+# shellcheck disable=SC2016 # the backticks quote command spellings for the reader
+REDIRECT_MSG='blocked: an output redirection (>, >>, >|, &>, &>>, N>, >&FILE, <>) inside a git invocation makes the shell open its target for writing before git runs -- `git diff HEAD >cosign.pub` truncates the trust anchor, and `>> .claude/settings.json` or `2> .claude/hooks/gate-git-diff.sh` reach any file this uid can write -- and the allow rule for git diff, git log and git show sees none of it. These commands print to stdout; read that instead. Descriptor forms (2>&1, >&2, >&-) and input redirections (<, <<, <<<, <&) are not affected, and a redirection on another command of the same string is that command'"'"'s own.'
 
 # shellcheck disable=SC2016 # the literal ${VAR} is what the reader has to see
 BRACE_MSG='blocked: bash expands braces before git sees the words, and this gate reads the words as typed, so a brace rebuilds both spellings it refuses: `git diff {/dev/null,./cosign.key}` passes the operand scan as one word and reaches git as two operands (the plain-file read), and `--outpu{t,t}=FILE` matches no word here and reaches git as --output=FILE. Expanding braces correctly means reimplementing bash inside a hook, so a brace bash could expand -- a { followed, anywhere later in the word, by a comma or a .. and then a }, or a ${VAR} -- is refused instead, and so is a process substitution (`git diff <(...)`), which supplies an operand this gate never saw. Write the command out in full. A brace with neither, such as HEAD@{1} or main@{upstream}, is a literal to bash and is not refused; a .. between two reflog entries (HEAD@{2}..HEAD@{1}) has the refused shape, so write HEAD~2..HEAD~1. Only words of a git invocation are affected: awk and jq programs elsewhere in the string are not.'
@@ -176,10 +192,13 @@ brace_would_expand() {
 # A redirection is `[n]op word` -- an optional descriptor number written hard
 # against the operator, one of `<`, `>`, `>>`, `<<`, `<<<`, `<>`, `>&`, `<&`,
 # `>|`, `&>`, `&>>`, and the target word. None of it is a word git receives:
-# the number is dropped, the operator is dropped, and the target is kept as
-# `target` so that the operand scan can skip it. `git diff HEAD 2>&1` is a
-# one-operand diff; counting `2` and `1` refused it. A heredoc's body lines
-# are read as words of the command that opened it, which can only over-refuse.
+# the number is dropped, the target is kept as `target` so that the operand
+# scan can skip it, and the operator is kept beside the target in
+# `redirects`, because which operator it was decides whether the shell opens
+# the target for writing (see `redirection_writes_a_path`). `git diff HEAD
+# 2>&1` is a one-operand diff; counting `2` and `1` refused it. A heredoc's
+# body lines are read as words of the command that opened it, which can only
+# over-refuse.
 #
 # No real word is ever empty in the as-typed spelling: a typed `""` keeps its
 # quotes. An unquoted `\` followed by a newline is a line continuation, which
@@ -187,23 +206,27 @@ brace_would_expand() {
 raw_words=()
 words=()
 kinds=()
+redirects=() # the operator, for a `target`; empty for anything else
 raw_word=''
 raw_quote=''
 raw_escaped=0
 redirect_pending=0 # the next word is the target of a redirection
+redirect_op=''     # the operator of that redirection, as typed
 after_redirect=0   # the previous unquoted character was `<` or `>`
 
 push_word() {
   raw_words+=("${raw_word}")
   words+=("${raw_word//[\'\"\\]/}")
   kinds+=("$1")
+  redirects+=("${2-}")
   raw_word=''
 }
 end_word() {
   [[ -n "${raw_word}" ]] || return 0
   if ((redirect_pending)); then
-    push_word target
+    push_word target "${redirect_op}"
     redirect_pending=0
+    redirect_op=''
   else
     push_word word
   fi
@@ -213,7 +236,9 @@ push_sep() {
   raw_words+=('')
   words+=("$1")
   kinds+=(sep)
+  redirects+=('')
   redirect_pending=0
+  redirect_op=''
 }
 
 for ((i = 0; i < ${#command_string}; i++)); do
@@ -268,21 +293,26 @@ for ((i = 0; i < ${#command_string}; i++)); do
       ((i++))
       continue
     fi
+    # A second `>` or `<` while the target is still to come extends the
+    # operator (`>>`, `<<`, `<<<`, `<>`); after a target it opens a new one
+    # (`>x>y`), and `end_word` above has already emptied `redirect_op`.
+    redirect_op+="${ch}"
     redirect_pending=1
     after_redirect=1
     ;;
   '&')
     if ((prev_redirect)); then
-      : # `>&` or `<&`: the operator continues and its target follows.
+      redirect_op+='&' # `>&` or `<&`: the operator continues and its target follows.
     elif [[ "${next}" == '>' ]]; then
       end_word # `&>` and `&>>`: the `>` that follows opens the redirection.
+      redirect_op='&'
     else
       push_sep '&'
     fi
     ;;
   '|')
     if ((prev_redirect)); then
-      : # `>|`: noclobber redirection, not a pipe.
+      redirect_op+='|' # `>|`: noclobber redirection, not a pipe.
     else
       push_sep '|'
     fi
@@ -293,6 +323,24 @@ for ((i = 0; i < ${#command_string}; i++)); do
   esac
 done
 end_word
+
+# Whether the shell opens a redirection's target for writing. Every operator
+# with a `>` in it does -- `>`, `>>`, `>|`, `&>`, `&>>`, and `<>`, which
+# opens read-write and creates the file -- and so does `>&` when its target
+# is a path: `>&file` is bash's older spelling of `&>file`. The exception is
+# a target that names a descriptor: `>&1`, `2>&1` and `>&-` duplicate or
+# close a descriptor and touch no path. `2>&file` is an "ambiguous redirect"
+# error in bash and writes nothing, and is refused anyway -- the rule is the
+# operator and the target's shape, not a model of bash's error paths. `<`,
+# `<<`, `<<<` and `<&` open nothing for writing.
+redirection_writes_a_path() {
+  local op="$1" target="$2"
+  [[ "${op}" == *'>'* ]] || return 1
+  if [[ "${op}" == *'&' ]]; then
+    [[ "${target}" =~ ^[0-9]+$ || "${target}" == '-' ]] && return 1
+  fi
+  return 0
+}
 
 # From a `git` word to the end of *that command*: the scope opens at `git`
 # and closes at the next separator, so `git diff HEAD | jq '{a,b}'` leaves
@@ -305,7 +353,16 @@ end_word
 # its quotes removed so `'git'` opens the scope as `git` does; a `git`
 # assembled from an expansion (`g{i,i}t`) matches no allow rule and prompts on
 # its own.
+#
+# The same scope decides the output redirections: bash attaches a redirection
+# to the simple command it is written in, so `git diff HEAD >cosign.pub` is
+# git's and `echo x >out; git diff HEAD` and `git diff HEAD | jq . >out` are
+# not -- those are decided by whatever rule covers `echo` and `jq`, the way
+# `git diff HEAD | tee cosign.pub` already is. A brace found anywhere in the
+# string wins the refusal: an expanding brace means the words here are not
+# the words git would receive, and that message is the one to act on first.
 raw_in_git=0
+writing_redirect=0
 for ((idx = 0; idx < ${#raw_words[@]}; idx++)); do
   if [[ "${kinds[idx]}" == sep ]]; then
     raw_in_git=0
@@ -317,9 +374,14 @@ for ((idx = 0; idx < ${#raw_words[@]}; idx++)); do
       [[ "${raw_word}" == '<(' || "${raw_word}" == '>(' ]]; then
       refuse "${BRACE_MSG}"
     fi
+    if [[ "${kinds[idx]}" == target ]] &&
+      redirection_writes_a_path "${redirects[idx]}" "${words[idx]}"; then
+      writing_redirect=1
+    fi
   fi
   [[ "${kinds[idx]}" == word && "${words[idx]}" == "git" ]] && raw_in_git=1
 done
+((writing_redirect)) && refuse "${REDIRECT_MSG}"
 
 # The whole string with quoting removed, for the one test that is a substring
 # match rather than a word: the shell removes quotes and backslashes on the
@@ -381,7 +443,8 @@ for ((idx = 0; idx < ${#words[@]}; idx++)); do
   fi
 
   # The target of a redirection is the shell's, not git's: `git diff HEAD
-  # 2>&1` has one operand, and the `1` is neither a revision nor a path.
+  # 2>&1` has one operand, and the `1` is neither a revision nor a path. The
+  # targets the shell would open for writing were refused above.
   [[ "${kind}" == target ]] && continue
 
   # Scoped to the git invocation as a whole, and checked before anything below

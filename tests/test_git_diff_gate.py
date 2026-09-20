@@ -15,6 +15,11 @@ claims it makes are each a separate way for it to silently stop working:
     counts a lone `-` as its second operand;
   * `--output=FILE` writes, in every git subcommand rather than just `diff`,
     and `--output-indicator-*` is a different flag that must keep working;
+  * an output redirection on the git command is the shell's spelling of the
+    same write -- `git diff HEAD >cosign.pub` truncates the file before git
+    starts -- and is refused whatever it targets, while `2>&1`, an input
+    redirection, and a redirection on some other command in the string
+    stay allowed;
   * the shell rewrites quoting and backslashes before git sees the word, so
     matching the typed spelling is not enough;
   * brace expansion rewrites it further -- one word becomes two operands, and
@@ -470,9 +475,8 @@ class GateBehaviourTests(unittest.TestCase):
             "git diff HEAD@{1} 2>&1 | jq '{a,b}'",
             "git diff HEAD |& jq '{a,b}'",
             "git diff HEAD 2>&1",
-            "git diff HEAD 2>/dev/null",
-            "git diff HEAD >out.txt",
-            "git diff HEAD > out.txt",
+            "git diff HEAD </dev/null",
+            "git diff HEAD < /dev/null",
             "git diff --stat HEAD -- docs/SECURITY-AI.md 2>&1 | head",
         ):
             with self.subTest(command=command):
@@ -488,6 +492,68 @@ class GateBehaviourTests(unittest.TestCase):
         ):
             with self.subTest(command=command):
                 self.assertRefused(command, "expands braces")
+
+    def test_an_output_redirection_inside_a_git_invocation_is_refused(self) -> None:
+        # The split above learned to skip a redirection's target so that
+        # `2>&1` is not counted as two operands -- and with that, `git diff
+        # HEAD >cosign.pub` passed: the target was skipped, and bash had
+        # truncated the file before git ran (review on #215). Before that
+        # split, the same command was refused only by accident: the operand
+        # scan did not know `>` was an operator, counted `>cosign.pub` as a
+        # second operand that was no revision, and printed the --no-index
+        # message; `git log -1 >> out` and `git show HEAD >| x`, which have
+        # no operand scan, went through and wrote the file. It is the shell's
+        # spelling of `--output=FILE` and is refused on the same ground,
+        # whatever the target: `>`, `>>`, `>|`, `&>`, `&>>`, `N>`, `>&FILE`
+        # (bash's older spelling of `&>FILE`) and `<>` (read-write, creates
+        # the file). Descriptor forms name no path and stay allowed, so do
+        # input redirections, and so does a redirection on another command
+        # of the same string, which is that command's own.
+        for command in (
+            "git diff HEAD >cosign.pub",
+            "git diff HEAD > cosign.pub",
+            "git log -1 >> out",
+            "git diff 2>err",
+            "git diff &>/dev/null",
+            "git diff &>>/dev/null",
+            "git show HEAD >| x",
+            "git diff HEAD > .claude/settings.json",
+            "git diff HEAD > .claude/hooks/gate-git-diff.sh",
+            "git diff HEAD >&cosign.pub",
+            "git diff HEAD >& cosign.pub",
+            "git diff HEAD <>cosign.pub",
+            "git diff HEAD 2>&1 >cosign.pub",
+            "git log -1; git diff HEAD >cosign.pub",
+            "echo x | git diff HEAD >cosign.pub",
+            "git diff HEAD 2>&1 | jq . ; git log -1 >out",
+        ):
+            with self.subTest(command=command):
+                self.assertRefused(command, "output redirection")
+        for command in (
+            "git diff HEAD 2>&1",
+            "git diff HEAD 2>&1 | jq '{a,b}'",
+            "git diff HEAD >&2",
+            "git diff HEAD 1>&2",
+            "git diff HEAD >&-",
+            "git diff HEAD 2>&-",
+            "git diff < /dev/null",
+            "git diff HEAD </dev/null",
+            "git diff HEAD <&0",
+            "git diff HEAD <<<''",
+            "git diff HEAD@{1}",
+            "echo x > out; git diff HEAD",
+            "echo x >> out && git diff HEAD",
+            "git diff HEAD | jq . > out",
+        ):
+            with self.subTest(command=command):
+                self.assertAllowed(command)
+
+    def test_a_brace_wins_over_a_redirection_refusal(self) -> None:
+        # An expanding brace means the words here are not the words git
+        # would receive, so its message comes first; the redirection is
+        # refused once the brace is gone.
+        self.assertRefused("git diff HEAD >cosign.{pub,key}", "expands braces")
+        self.assertRefused("git diff HEAD >cosign.pub", "output redirection")
 
     def test_a_redirection_does_not_reset_the_operand_count(self) -> None:
         # The operand scan reset at the same `&`, so `git diff 2>&1 /dev/null

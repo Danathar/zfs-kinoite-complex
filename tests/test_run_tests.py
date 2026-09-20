@@ -276,26 +276,39 @@ class RunnerRefusalTests(unittest.TestCase):
         )
 
     def test_the_write_options_are_pytests_own_and_take_a_path(self) -> None:
-        # Held against the installed pytest's help text rather than memory, for
-        # the reason the flag table below is: a renamed or dropped option would
-        # leave a refusal here that protects nothing, and reads as protection.
-        # The plugin options are skipped -- `--report-log` and `--cov-report`
-        # are refused so that installing the plugin later cannot reopen this,
-        # so their absence from the help text is the expected state.
+        # Held against the installed pytest's option table rather than memory,
+        # for the reason the flag table below is: a renamed or dropped option
+        # would leave a refusal here that protects nothing, and reads as
+        # protection. The table, not `pytest -h`: the help text is a rendering
+        # of it that drops alias spellings, and which ones it drops depends on
+        # the interpreter's argparse -- Python 3.12 prints `--junit-xml=path`
+        # alone where 3.13 prints `--junitxml, --junit-xml=path`, so a check
+        # against the text passed here and failed in CI. The plugin options are
+        # skipped -- `--report-log` and `--cov-report` are refused so that
+        # installing the plugin later cannot reopen this, so their absence from
+        # the table is the expected state.
+        list_options = (
+            "from _pytest.config import get_config\n"
+            "parser = get_config()._parser\n"
+            "for group in [*parser._groups, parser._anonymous]:\n"
+            "    for argument in group.options:\n"
+            "        print(*argument.names())\n"
+        )
         completed = subprocess.run(
-            [sys.executable, "-m", "pytest", "-h"],
+            [sys.executable, "-c", list_options],
             capture_output=True,
             text=True,
             check=False,
         )
         if completed.returncode != 0:
-            self.skipTest("pytest is not installed; the list is held against 9.1.1's help")
+            self.skipTest("pytest is not installed; the list is held against 9.1.1's options")
+        registered = set(completed.stdout.split())
         plugin_options = {"--report-log", "--cov-report"}
         for option in run_tests.REFUSED_WRITE_OPTIONS:
             if option in plugin_options:
                 continue
             with self.subTest(option=option):
-                self.assertIn(option, completed.stdout)
+                self.assertIn(option, registered)
 
     def test_the_flag_table_matches_pytest_when_it_is_installed(self) -> None:
         # SHORT_FLAGS is what lets the cluster walk tell `-vo` (a flag, then

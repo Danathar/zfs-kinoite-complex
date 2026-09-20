@@ -18,8 +18,9 @@ claims it makes are each a separate way for it to silently stop working:
   * the shell rewrites quoting and backslashes before git sees the word, so
     matching the typed spelling is not enough;
   * brace expansion rewrites it further -- one word becomes two operands, and
-    a flag name split across a brace becomes the flag -- so braces are refused
-    inside a git invocation and left alone everywhere else;
+    a flag name split across a brace becomes the flag -- so a brace bash
+    would expand is refused inside a git invocation, while a literal one
+    (git's own `HEAD@{1}`) and every brace outside git are left alone;
   * an operator character with no whitespace around it still starts a command;
   * a two-token git global option (`-C dir`) must not be read as a subcommand;
   * it fails closed when `jq` is missing, per AGENTS.md section 0 rule 1.
@@ -273,6 +274,41 @@ class GateBehaviourTests(unittest.TestCase):
             "git show --outpu{t,t}=.claude/settings.json HEAD",
             f"git diff --outpu{{t,t}}=cosign.pub {OLDER_REVISION} {NEWER_REVISION}",
             "git log --{output,output} cosign.pub -1",
+        ):
+            with self.subTest(command=command):
+                self.assertRefused(command, "expands braces")
+
+    def test_a_brace_bash_would_not_expand_is_left_alone(self) -> None:
+        # Bash expands a brace only when a comma or a `..` range sits inside
+        # it; any other brace is a literal, and git's own `@{...}` revision
+        # syntax is spelled with exactly that. `git diff HEAD@{1}` is the
+        # ordinary diff against the previous commit and touches neither
+        # primitive, so a gate that refused it was a false positive with a
+        # real cost. One operand each, so nothing here depends on the reflog
+        # this checkout happens to have; the last case pins that a `..`
+        # *between* two literal braces is not a range inside one.
+        for command in (
+            "git diff HEAD@{1}",
+            "git diff HEAD@{1} -- docs/SECURITY-AI.md",
+            "git log main@{upstream} -1",
+            "git rev-parse @{-1}",
+            "git log @{2.days.ago} -1",
+            "git log HEAD@{2}..HEAD@{1}",
+        ):
+            with self.subTest(command=command):
+                self.assertAllowed(command)
+
+    def test_the_brace_test_is_what_bash_would_expand_not_the_spelling(self) -> None:
+        # The line is drawn where bash draws it, and errs toward refusing.
+        # `@{1,2}` reads as revision syntax and is two words to bash; `{x..x}`
+        # is a one-element sequence that rebuilds the flag; a comma nested one
+        # level down still expands (`{{a,b}}` is `{a} {b}`); and `${VAR}` is
+        # a runtime-built argument the hook cannot inspect, refused as before.
+        for command in (
+            "git diff HEAD@{1,2}",
+            "git diff --no-inde{x..x} /dev/null ./LICENSE",
+            "git diff {{/dev/null,./cosign.key}}",
+            "git diff ${SECRET} HEAD",
         ):
             with self.subTest(command=command):
                 self.assertRefused(command, "expands braces")

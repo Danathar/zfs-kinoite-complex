@@ -11,16 +11,24 @@ installs whatever RPMs that cache provides.
 Goal: Make a re-introduced override, or a digest that silently drifts from ci/defaults.json,
 fail here rather than in production.
 
-Mostly parses with plain text matching rather than PyYAML: most of these assertions do
+Matches the workflow files as text rather than parsing them: most of these assertions do
 not need a real YAML parse, and a substring check is the stronger statement when the
 claim is "this string appears nowhere in the file".
 
-One assertion is the exception. The ai-fix branch exclusion is a value inside a trigger,
-and the same string appears in a comment a few lines above it, so a substring check would
-pass on the comment alone -- exactly the false green this file exists to prevent. That one
-parses. PyYAML is a pytest dependency and is present in CI (see .github/workflows/test.yml,
-which installs pytest, pytest-cov and ruff), but the import is guarded so the suite still
-runs under `python3 -m unittest discover -s tests` with nothing installed.
+Several of them are the exception, and none of those parses either. The ai-fix branch
+exclusion is a value inside a trigger, `packages: write` is named in the header comment
+that explains why it is *not* granted, and `allowed_bots` is discussed a few lines above
+where it is set -- in each case the string a substring check would find is prose about the
+setting rather than the setting, which is exactly the false green this file exists to
+prevent. Those match against the source with whole-line comments stripped, through
+`_without_comments` below.
+
+No parser, and so no third-party import and no skip path: everything here comes from the
+standard library, and every assertion runs under `python3 -m unittest discover -s tests`
+with nothing installed. docs/reflections/2026-09-04-a-guard-that-guarded-nothing.md
+records why that matters here -- the first version of the `packages:` assertion read the
+header comment and concluded the permission was present, and the version after that parsed,
+which made a security guard depend on a dependency nothing declares.
 """
 
 from __future__ import annotations

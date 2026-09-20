@@ -285,15 +285,15 @@ class GateBehaviourTests(unittest.TestCase):
         # ordinary diff against the previous commit and touches neither
         # primitive, so a gate that refused it was a false positive with a
         # real cost. One operand each, so nothing here depends on the reflog
-        # this checkout happens to have; the last case pins that a `..`
-        # *between* two literal braces is not a range inside one.
+        # this checkout happens to have; the last case pins that a `{` which
+        # never closes is a literal too.
         for command in (
             "git diff HEAD@{1}",
             "git diff HEAD@{1} -- docs/SECURITY-AI.md",
             "git log main@{upstream} -1",
             "git rev-parse @{-1}",
             "git log @{2.days.ago} -1",
-            "git log HEAD@{2}..HEAD@{1}",
+            "git log HEAD@{1 -1",
         ):
             with self.subTest(command=command):
                 self.assertAllowed(command)
@@ -304,14 +304,113 @@ class GateBehaviourTests(unittest.TestCase):
         # is a one-element sequence that rebuilds the flag; a comma nested one
         # level down still expands (`{{a,b}}` is `{a} {b}`); and `${VAR}` is
         # a runtime-built argument the hook cannot inspect, refused as before.
+        # Then the two spellings the sibling ports were found to pass: bash
+        # pairs a `{` with the last `}` it can, so `{a},b}` expands to `a}`
+        # and `b}` and a depth counter that closed at the first `}` never saw
+        # the comma; and a quoted `;` inside the brace is part of the word
+        # bash expands, while the hook's operator split cut the word in two
+        # before the brace test saw it. Last, a `..` between two reflog
+        # entries has the refused shape and is refused, though bash would
+        # leave it alone; the message names the spelling to use.
         for command in (
             "git diff HEAD@{1,2}",
             "git diff --no-inde{x..x} /dev/null ./LICENSE",
             "git diff {{/dev/null,./cosign.key}}",
             "git diff ${SECRET} HEAD",
+            "git diff {a},b} /dev/null ./cosign.key",
+            "git log {--format=%h},--output=cosign.pub} -1",
+            "git diff {/tmp/reference';',./cosign.key}",
+            "git log -p --outpu{t,'t '}=cosign.pub -1",
+            "git log HEAD@{2}..HEAD@{1}",
         ):
             with self.subTest(command=command):
                 self.assertRefused(command, "expands braces")
+        self.assertRefused("git log HEAD@{2}..HEAD@{1}", "HEAD~2..HEAD~1")
+
+    # Git's revision syntax. Bash leaves each of these alone and the hook
+    # must too; `HEAD@{1` pins that an unclosed brace is a literal as well.
+    LITERAL_BRACE_WORDS = (
+        "HEAD@{1}",
+        "main@{upstream}",
+        "@{-1}",
+        "@{2.days.ago}",
+        "HEAD@{1",
+    )
+
+    # The brace rule's corpus: the literal set, the ordinary expansions, the
+    # two bypasses (mismatched braces, a quoted operator inside the brace),
+    # quoted and escaped commas, nesting, ranges, `${VAR}`, mismatched forms
+    # in both directions, braces after --output, and quoted jq/awk programs
+    # that bash leaves alone. Each word is inserted verbatim into a bash
+    # script, so the quoting is bash's.
+    BRACE_CORPUS = LITERAL_BRACE_WORDS + (
+        "HEAD@{2}..HEAD@{1}",
+        "{a,b}",
+        "{1..3}",
+        "x{1..3}y",
+        "a{,b}",
+        "{{a,b}}",
+        "--no-inde{x,x}",
+        "--outpu{t,t}=FILE",
+        "HEAD@{1,2}",
+        "{--src-prefix=x},--no-index}",
+        "{a},b}",
+        "{/tmp/reference';',./cosign.key}",
+        '{a",",b}',
+        "{a\\,b,c}",
+        '"{a,b}"',
+        "'{a,b}'",
+        "{a,b",
+        "{a,b}}",
+        "{{a,b}",
+        "${OPERANDS}",
+        "--output={a,b}",
+        "--output=x{,}",
+        "'{print $1}'",
+        "'{a:1}'",
+        "'{a: .x, b: .y}'",
+    )
+
+    @staticmethod
+    def bash_expands(word: str) -> bool:
+        """Whether bash turns `word` into more than one word.
+
+        The word is inserted verbatim into the script text on purpose: the
+        corpus is this file's, and the point is to hand bash the spelling an
+        agent would type. `OPERANDS` is set so that `${OPERANDS}` splits into
+        two words the way a runtime-built argument would.
+        """
+        result = subprocess.run(
+            [BASH, "--norc", "--noprofile", "-c", 'printf "%s\\0" ' + word],
+            capture_output=True,
+            env={"PATH": os.environ.get("PATH", ""), "OPERANDS": "/dev/null ./cosign.key"},
+            timeout=60,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise AssertionError(f"bash could not run {word!r}: {result.stderr!r}")
+        return result.stdout.count(b"\0") > 1
+
+    def test_the_brace_rule_against_bash_rather_than_a_label(self) -> None:
+        # Bash is the ground truth. Every corpus word bash expands must be
+        # refused, and every word of the literal set must be allowed. A word
+        # in neither class is only held to the first rule, so an over-refusal
+        # there is not a failure. The counts keep the check from going
+        # vacuous if the corpus shrinks or bash reads it differently.
+        self.assertGreaterEqual(len(self.BRACE_CORPUS), 25)
+        self.assertEqual(len(set(self.BRACE_CORPUS)), len(self.BRACE_CORPUS))
+        expanding = 0
+        for word in self.BRACE_CORPUS:
+            with self.subTest(word=word):
+                if not self.bash_expands(word):
+                    continue
+                expanding += 1
+                self.assertRefused(f"git diff {word}", "expands braces")
+        self.assertGreaterEqual(expanding, 15)
+        for word in self.LITERAL_BRACE_WORDS:
+            with self.subTest(word=word):
+                self.assertFalse(self.bash_expands(word), f"bash expands {word!r}")
+                self.assertAllowed(f"git log {word} -1")
 
     def test_a_brace_outside_a_git_invocation_is_left_alone(self) -> None:
         # The refusal is scoped to the words of a git invocation, because a
@@ -321,6 +420,7 @@ class GateBehaviourTests(unittest.TestCase):
         for command in (
             "awk '{print $1}' /dev/null",
             "jq '{ref: .ref}' ci/inputs.lock.json",
+            "jq '{a: .x, b: .y}' ci/inputs.lock.json",
             "cp cosign.pub{,.bak}",
         ):
             with self.subTest(command=command):

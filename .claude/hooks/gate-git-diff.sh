@@ -82,11 +82,14 @@
 # primitive needs none of that machinery: `--output` anywhere in a git
 # invocation is refused outright.
 #
-# What it still cannot see, stated rather than implied: a command that builds
-# its arguments at runtime (`git diff $x $y`, `sh -c ...`), one that changes
+# What it still cannot see, stated rather than implied: a command that hides a
+# git invocation behind another interpreter (`sh -c ...`), one that changes
 # directory out of the repository first, and anything a command reads or writes
-# once it has started. This re-gates the pre-approved commands that reach past
-# the deny list; it is not a sandbox.
+# once it has started. A git argument built at runtime (`git diff $x $y`,
+# `$(...)`, a backtick, `$'\x74'`) is no longer waved through -- every `$` and
+# backtick in a word of a git invocation is refused, see `EXPAND_MSG` -- but
+# that is a refusal, not an inspection. This re-gates the pre-approved commands
+# that reach past the deny list; it is not a sandbox.
 
 set -uo pipefail
 
@@ -94,6 +97,11 @@ refuse() {
   printf '%s\n' "$1" >&2
   exit 2
 }
+
+# shellcheck disable=SC2016 # the message quotes shell spellings as literal
+# text -- $'\x74' and $(...) are what the reader has to see, not what this
+# script should expand.
+EXPAND_MSG='blocked: bash expands ANSI-C quotes and substitutions before git sees the words, and this gate reads the words as typed, so two characters rebuild both spellings it refuses: `git diff $(...)` and a backtick supply operands the operand scan never saw (the plain-file read), and `--outpu$'"'"'\x74'"'"'=FILE` matches no word here and reaches git as --output=FILE. Expanding them correctly means reimplementing bash inside a hook, so every $ and backtick in a word of a git invocation is refused instead. Write the command out in full. Only words of a git invocation are affected: an awk or jq program elsewhere in the string is not, unless it carries a backtick after a git word.'
 
 DIFF_MSG='blocked: this git diff would compare paths as plain files (git'"'"'s --no-index mode, which needs no flag once two operands are given), so it prints any file on disk -- the signing key, a .env, a private key outside this repository -- past the Read(...) deny rules in .claude/settings.json. Describe such a file with ls -l or wc -c instead.'
 
@@ -265,6 +273,62 @@ path_inside_worktree() {
   candidate="$(realpath -m -s -- "$1" 2>/dev/null)" || return 1
   [[ "${candidate}" == "${toplevel}" || "${candidate}" == "${toplevel}"/* ]]
 }
+
+# Every test below reads a word as typed, and bash rewrites the words before
+# git receives them. `$(...)`, `${x}`, `$x` and a backtick each supply words
+# the operand scan never counted, so `git diff $(echo /dev/null) ./cosign.key`
+# is one operand here and two at git -- one short of the refusal -- and
+# `$'\x74'` is the letter t, so `--outpu$'\x74'=FILE` matches neither
+# `--output` nor `--output=*` here and arrives at git as `--output=FILE`. The
+# brace scan above catches a `${VAR}` and nothing else of this.
+#
+# They are refused rather than expanded, for the reason the brace scan gives:
+# correct expansion means reimplementing bash in a hook -- nesting, quoting,
+# word splitting on $IFS -- and a half-right expansion is a gate that
+# disagrees with the shell in some other direction. A refusal cannot be
+# half-right, and a git argument built at runtime was already outside what
+# this hook can vouch for, so refusing it turns a silent pass into a visible
+# refusal. Neither character has a literal form git relies on, the way
+# `HEAD@{1}` relies on a brace, so unlike the brace test this one is every
+# `$` and every backtick.
+#
+# The `$` half is scoped like the brace scan: to the words as typed of the
+# command that starts at a `git` word and ends at the next separator bash
+# honours, so `git diff HEAD | awk '{print $1}'` and `jq '.[$x]' f | git
+# diff` are left alone while `git log -1; git diff $x` is refused at its
+# own `git`. The words as typed are the right ones here as well: the
+# normalized split cuts a *quoted* operator inside an argument, and a scope
+# that closed there would hand `git log --grep='a|b' --outpu$'\x74'=FILE -1`
+# its `$` word unwatched. A `$` *before* the first `git` word is not checked
+# and does not need to be: the allow rules in .claude/settings.json match a
+# literal `git diff`/`git log` prefix, so an invocation assembled out of an
+# expansion (`$GIT diff ...`) matches no allow rule and prompts on its own.
+expand_in_git=0
+for raw_word in "${raw_words[@]+"${raw_words[@]}"}"; do
+  if [[ -z "${raw_word}" ]]; then
+    expand_in_git=0
+    continue
+  fi
+  if ((expand_in_git)) && [[ "${raw_word}" == *'$'* ]]; then
+    refuse "${EXPAND_MSG}"
+  fi
+  [[ "${raw_word//[\'\"\\]/}" == "git" ]] && expand_in_git=1
+done
+
+# The backtick half cannot use that scope: an unquoted backtick is itself a
+# separator to the split above, so it closes the scope it would have to be
+# refused in and leaves no word behind. It is refused on the normalized
+# words instead -- where it survives as a word of its own -- from the first
+# `git` word to the end of the string, the latch `--output` uses below. The
+# cost is a backtick in a quoted program piped from git, which no session
+# needs; the alternative is `git diff \`echo /dev/null\` ./cosign.key`.
+expand_in_git=0
+for word in "${words[@]+"${words[@]}"}"; do
+  if ((expand_in_git)) && [[ "${word}" == *'`'* ]]; then
+    refuse "${EXPAND_MSG}"
+  fi
+  [[ "${word}" == "git" ]] && expand_in_git=1
+done
 
 seen_git=0
 in_git=0

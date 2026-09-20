@@ -482,6 +482,20 @@ class SecurityDocEnforcementTests(unittest.TestCase):
                 "git show --output=.claude/settings.json HEAD",
             ),
         ),
+        # Also not a denial. The row's claim is the opposite of the git one:
+        # this write primitive *is* expressible as a rule, because every ruff
+        # invocation the repository documents is a fixed string. So the two
+        # allowed spellings must still decide `allow` -- a rule that stopped
+        # matching them would make the documented lint command prompt -- and
+        # the `--output-file` spellings must not, which is asserted separately
+        # in `test_the_linter_cannot_write_a_file_it_names`.
+        "allow-listed linter": (
+            "allow",
+            (
+                "ruff check",
+                "ruff check ci_tools/ shared/ tests/ files/ containerfiles/",
+            ),
+        ),
         # Not a denial at all, which is why it carries its own branch in
         # `test_the_denied_rows_really_say_denied`. The claim is that the one
         # test command an agent may run unattended is the wrapper, because a
@@ -540,6 +554,8 @@ class SecurityDocEnforcementTests(unittest.TestCase):
                     self.assertIn("narrowed, not denied", enforcement)
                 elif key == "read or write an arbitrary file":
                     self.assertIn("gated by a hook, not by a rule", enforcement)
+                elif key == "allow-listed linter":
+                    self.assertIn("narrowed to exact commands", enforcement)
                 elif expected == "deny":
                     self.assertIn("denied", enforcement)
                 else:
@@ -594,6 +610,43 @@ class SecurityDocEnforcementTests(unittest.TestCase):
         rule = "Bash(python3 tests/run_tests.py:*)"
         self.assertIn(rule, self.permissions["allow"])
         self.assertTrue((REPO_ROOT / "tests" / "run_tests.py").is_file())
+
+    def test_the_linter_cannot_write_a_file_it_names(self) -> None:
+        # `ruff check -o PATH` writes the report to PATH instead of stdout and
+        # creates the file even when the lint is clean, so `Bash(ruff check:*)`
+        # -- the linter with any arguments -- was a way to overwrite the trust
+        # anchor with no prompt. Both spellings of the flag are checked: a
+        # refusal that caught only the long one is one a short option defeats.
+        for command in (
+            "ruff check --output-file=cosign.pub ci_tools",
+            "ruff check --output-file cosign.pub ci_tools",
+            "ruff check -o cosign.pub ci_tools",
+            "ruff check -ocosign.pub ci_tools",
+        ):
+            with self.subTest(command=command):
+                self.assertNotEqual(decide(command, self.permissions), "allow")
+
+    def test_no_ruff_rule_takes_arbitrary_arguments(self) -> None:
+        # The other half: the row is worth nothing if some later edit puts the
+        # `:*` back. A rule ending in `:*` means "this command with any
+        # arguments", and any argument is what carries `--output-file`.
+        for rule in self.permissions["allow"]:
+            pattern = bash_pattern(rule)
+            if pattern is not None and pattern.startswith("ruff "):
+                with self.subTest(rule=rule):
+                    self.assertFalse(
+                        pattern.endswith(":*"),
+                        f"{rule!r} takes arbitrary arguments, so it allows --output-file",
+                    )
+
+    def test_the_documented_lint_command_still_runs_unprompted(self) -> None:
+        # Narrowing is only correct if it did not narrow past what the project
+        # tells people to run. This is the command in test.yml, CONTRIBUTING,
+        # the pull request template and copilot-instructions.
+        self.assertEqual(
+            decide("ruff check ci_tools/ shared/ tests/ files/ containerfiles/", self.permissions),
+            "allow",
+        )
 
     def test_reading_labels_is_still_permitted(self) -> None:
         # `_note_labels`: minting or renaming a label manufactures an approval

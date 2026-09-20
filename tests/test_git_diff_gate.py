@@ -415,8 +415,8 @@ class GateBehaviourTests(unittest.TestCase):
     def test_a_brace_outside_a_git_invocation_is_left_alone(self) -> None:
         # The refusal is scoped to the words of a git invocation, because a
         # brace is ordinary syntax everywhere else and a gate that refused it
-        # wholesale would break the commands an agent runs all day. `in_git`
-        # latches once seen, so these carry no `git` anywhere in the string.
+        # wholesale would break the commands an agent runs all day. These
+        # carry no `git` anywhere in the string.
         for command in (
             "awk '{print $1}' /dev/null",
             "jq '{ref: .ref}' ci/inputs.lock.json",
@@ -425,6 +425,35 @@ class GateBehaviourTests(unittest.TestCase):
         ):
             with self.subTest(command=command):
                 self.assertAllowed(command)
+
+    def test_the_brace_scope_ends_at_a_command_separator(self) -> None:
+        # The git invocation ends where bash ends it: at an unquoted `;`,
+        # `&`, `|`, `(`, `)`, newline or backtick. A jq or awk program in a
+        # later command of the same string is not a word git receives, and
+        # a hook that kept the scope open from the first `git` to the end of
+        # the string refused `git diff ... | jq '{a: .x, b: .y}'`, which is
+        # the ordinary way to read a diff into a filter. A brace before the
+        # git command is not in its scope either. The scope reopens at the
+        # next `git` word, so a second git command in the string is held to
+        # the same rule as the first, and one that is piped into is not
+        # excused by the command in front of it.
+        for command in (
+            "git diff HEAD -- docs/SECURITY-AI.md | jq '{a: .x, b: .y}'",
+            "git diff HEAD@{1} | jq '{a,b}'",
+            "git diff HEAD | awk '{print $1}'",
+            "jq '{a,b}' < f | git diff --stat",
+        ):
+            with self.subTest(command=command):
+                self.assertAllowed(command)
+        for command in (
+            "git log -1; git diff {a,b}",
+            "echo x | git diff {a,b}",
+            "git log -1 && (git diff {a,b})",
+            "git log -1\ngit diff {a,b}",
+            "git log -1 `git diff {a,b}`",
+        ):
+            with self.subTest(command=command):
+                self.assertRefused(command, "expands braces")
 
     def test_the_output_indicator_flags_are_a_different_flag(self) -> None:
         # Anchoring matters: these change the marker character, not the

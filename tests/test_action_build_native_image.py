@@ -25,7 +25,7 @@ Nothing here builds a container. `buildah` is a stub and PATH deliberately omits
 directories where the real tool lives, so a step that stopped being stubbed would fail rather
 than pull from ghcr.io.
 
-PyYAML is a transitive pytest dependency and present in CI (see .github/workflows/test.yml).
+PyYAML is not a pytest dependency; CI installs it by name (see .github/workflows/test.yml).
 The import is guarded so the suite still runs under `python3 -m unittest discover -s tests`
 with nothing installed, matching tests/test_action_publish_native_image.py.
 """

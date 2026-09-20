@@ -31,7 +31,7 @@ instead, because /proc/<pid>/cmdline is world-readable and a token in argv is re
 uid on the runner. `test_the_token_never_reaches_argv` is what holds that -- it puts a
 recording `git` shim on PATH and fails if the token appears in any git command line.
 
-PyYAML is a transitive pytest dependency and present in CI (see .github/workflows/test.yml).
+PyYAML is not a pytest dependency; CI installs it by name (see .github/workflows/test.yml).
 The import is guarded so the suite still runs under `python3 -m unittest discover -s tests`
 with nothing installed, matching tests/test_workflow_build_container.py.
 """

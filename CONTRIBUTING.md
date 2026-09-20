@@ -39,15 +39,18 @@ the layout and the reading order. To match what
 [`.github/workflows/test.yml`](./.github/workflows/test.yml) installs today:
 
 ```bash
-pip install pytest "ruff==0.16.1"
+pip install pytest "ruff==0.16.1" pyyaml
 python3 -m pytest tests/ -v
 ruff check ci_tools/ shared/ tests/ files/ containerfiles/
 ```
 
 `ruff` is pinned because an unpinned local copy can enable or disable different
 rules release to release and disagree with CI in either direction; a Renovate
-custom manager in [`renovate.json`](./renovate.json) tracks that pin. `pytest`
-is only a runner here — the suite is `unittest.TestCase` throughout, so
+custom manager in [`renovate.json`](./renovate.json) tracks that pin. `pyyaml`
+is what the workflow and composite-action tests parse YAML with; they import it
+behind `except ImportError` and skip without it, so leaving it out does not
+fail the run — it quietly runs fewer tests than CI does. `pytest` is only a
+runner here — the suite is `unittest.TestCase` throughout, so
 `python3 -m unittest discover -s tests` also works with nothing installed at
 all, which is useful when you have no network.
 

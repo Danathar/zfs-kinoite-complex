@@ -33,9 +33,11 @@ claims it makes are each a separate way for it to silently stop working:
     is not;
   * the word that names a command must be literal: `git status; G=git; $G
     diff /dev/null ./cosign.key` opens no git scope at `$G` and runs the
-    plain-file read, so a command name carrying a `$` or a backtick is
-    refused wherever it stands in the string, while `FOO=bar git diff HEAD`
-    names git and is left alone;
+    plain-file read, so a command name carrying a `$`, a backtick, a glob
+    or a brace bash would expand is refused wherever it stands in the
+    string -- every word after a wrapper such as `command` or `env`
+    included -- while `FOO=bar git diff HEAD` names git and is left alone,
+    and a literal path to git (`/usr/bin/git diff`) is read as git;
   * an operator character with no whitespace around it still starts a command;
   * a two-token git global option (`-C dir`) must not be read as a subcommand;
   * it fails closed when `jq` is missing, per AGENTS.md section 0 rule 1.
@@ -370,9 +372,15 @@ class GateBehaviourTests(unittest.TestCase):
         # the word `git`, so after `git status;` nothing reopened and the
         # hook exited 0 while bash ran the plain-file read (review on #216).
         # The name of a command is the first word after a separator that is
-        # not an assignment, a keyword taking a command, or a wrapper that
-        # runs its arguments; one carrying a `$` or a backtick, or an
-        # unquoted backtick opening in that position, is refused.
+        # not an assignment or a keyword taking a command; one carrying a
+        # `$` or a backtick, or an unquoted backtick opening in that
+        # position, is refused. So is a brace bash would expand or a glob
+        # there -- `{,git}`, `g?t`, `/usr/bin/g[i]t` all reach git (review
+        # on aurora-zfs-simple#205) -- and after a wrapper that runs its
+        # arguments (`command`, `env`, `timeout`, ...) every remaining word
+        # of the command is held to the test, because `command -- $G` put
+        # a literal `--` where the first version of this rule stopped
+        # looking. `[` and `[[` are commands, not globs.
         for command in (
             "git status; G=git; $G diff /dev/null ./cosign.key",
             "git status; $(printf git) diff /dev/null ./cosign.key",
@@ -386,6 +394,13 @@ class GateBehaviourTests(unittest.TestCase):
             "git status; env G=git $G diff x",
             "git status; time $G diff x",
             "git status | $G diff x",
+            "git status; {,git} diff /dev/null ./cosign.key",
+            "git status; g?t diff /dev/null ./cosign.key",
+            "git status; gi* diff /dev/null ./cosign.key",
+            "git status; /usr/bin/g[i]t diff /dev/null ./cosign.key",
+            "shellcheck --version; G=git; command -- $G diff /dev/null ./cosign.key",
+            "git status; env -u X $G diff /dev/null ./cosign.key",
+            "git status; timeout -s KILL 5 $G diff x",
         ):
             with self.subTest(command=command):
                 self.assertRefused(command, "Spell every command name literally")
@@ -396,9 +411,39 @@ class GateBehaviourTests(unittest.TestCase):
             "echo $HOME; git diff HEAD",
             "echo `date`; git diff HEAD",
             "if [ -n \"$x\" ]; then git diff HEAD; fi",
+            "[[ -n \"$x\" ]] && git diff HEAD",
+            "git status; [ -f cosign.pub ]",
             "for f in $(ls); do echo $f; done",
             "ls > out; git status",
             "env FOO=$x git diff HEAD",
+            "env -i PATH=$PATH git diff HEAD",
+            "timeout 60 git diff HEAD",
+            "xargs -I{} git diff {} < list",
+            "command -v shellcheck",
+            "find . -name '*.sh'",
+        ):
+            with self.subTest(command=command):
+                self.assertAllowed(command)
+
+    def test_a_literal_path_to_git_is_git(self) -> None:
+        # `/usr/bin/git diff /dev/null ./cosign.key` needs no expansion and
+        # opened no scope, because every scan compared the word to `git`.
+        # A literal name whose last component is git is rewritten to git
+        # before any scan runs, so each refusal reaches it.
+        for command, message in (
+            ("git status; /usr/bin/git diff /dev/null ./cosign.key", "--no-index"),
+            ("/usr/bin/git diff /dev/null ./cosign.key", "--no-index"),
+            ("git status; ~/bin/git diff /dev/null ./cosign.key", "--no-index"),
+            ("git status; command /usr/bin/git diff /dev/null ./cosign.key", "--no-index"),
+            ("/usr/bin/git log -1 --output=cosign.pub", "--output=FILE"),
+            ("git status; /usr/bin/git diff HEAD >cosign.pub", "output redirection"),
+            ("/usr/bin/git diff {/dev/null,./cosign.key}", "expands braces"),
+        ):
+            with self.subTest(command=command):
+                self.assertRefused(command, message)
+        for command in (
+            "/usr/bin/git diff HEAD",
+            "/usr/bin/git log --oneline -5",
         ):
             with self.subTest(command=command):
                 self.assertAllowed(command)

@@ -44,6 +44,16 @@ claims it makes are each a separate way for it to silently stop working:
     string -- every word after a wrapper such as `command` or `env`
     included -- while `FOO=bar git diff HEAD` names git and is left alone,
     and a literal path to git (`/usr/bin/git diff`) is read as git;
+  * the write primitive is not git's alone: a rule ending in `:*` matches a
+    command prefix while a redirection is the rest of the string, so
+    `python3 tests/run_tests.py >cosign.pub` truncates the trust anchor and
+    `gh run view 1 --log >.claude/settings.json` overwrites the settings file
+    with no prompt, and `cosign verify --output-file cosign.pub ...` does the
+    same through a flag cosign's root command carries. Both are refused for
+    the allow rows that take arguments, while a pipe, a descriptor form, an
+    input redirection and a command no allow rule covers stay allowed -- and
+    the list of gated commands is derived from `.claude/settings.json` here,
+    so a rule added there fails until the hook lists it;
   * an operator character with no whitespace around it still starts a command;
   * a two-token git global option (`-C dir`) must not be read as a subcommand;
   * it fails closed when `jq` is missing, per AGENTS.md section 0 rule 1.
@@ -1038,6 +1048,124 @@ class GateBehaviourTests(unittest.TestCase):
         # depth-1 clone refuses `git diff HEAD~1 HEAD`, and why the cases
         # above name revisions this checkout actually has.
         self.assertRefused("git diff v0.0.0-not-a-tag HEAD", "--no-index mode")
+
+    # --- the same write, in the allow-listed commands that are not git -----
+
+    def test_every_allow_rule_with_arguments_is_refused_a_writing_redirection(self) -> None:
+        # The list of gated commands lives in the hook; this is what keeps it
+        # from drifting. A rule ending in `:*` means "this command with any
+        # arguments", and a redirection is part of the string that rule
+        # matches, so every one of them writes any path the caller names
+        # unless the hook refuses it. Deriving the commands from the settings
+        # file rather than restating them means a rule added there fails here
+        # until the hook lists it.
+        #
+        # The two ruff rows are not in this list and do not need to be: they
+        # carry no `:*`, so `ruff check >cosign.pub` matches neither row and
+        # Claude Code prompts. `test_a_redirection_on_an_unlisted_command_is_left_alone`
+        # holds that other half.
+        allow = json.loads(SETTINGS.read_text(encoding="utf-8"))["permissions"]["allow"]
+        patterns = [
+            rule[len("Bash(") : -1]
+            for rule in allow
+            if rule.startswith("Bash(") and rule.endswith(":*)")
+        ]
+        self.assertGreaterEqual(len(patterns), 12, patterns)
+        for pattern in patterns:
+            command = f"{pattern[: -len(':*')]} >cosign.pub"
+            with self.subTest(command=command):
+                result = self.run_gate(command)
+                self.assertEqual(
+                    result.returncode,
+                    2,
+                    f"{command!r} was not refused; stderr={result.stderr!r}",
+                )
+
+    def test_the_redirection_forms_that_write_are_refused_in_a_gated_command(self) -> None:
+        for command in (
+            "python3 tests/run_tests.py >cosign.pub",
+            "python3 tests/run_tests.py >>cosign.pub",
+            "python3 tests/check_coverage.py 2>.claude/settings.json",
+            "gh run view 1 --log >.claude/settings.json",
+            "skopeo inspect docker://ghcr.io/x:latest &>cosign.pub",
+            "cosign verify --key cosign.pub ghcr.io/x:latest >cosign.pub",
+            # Bash lets the redirection precede the name; it is the same
+            # command, and the hook decides it when the command ends.
+            ">cosign.pub python3 tests/run_tests.py",
+            # A substitution is a command of its own. The write belongs to the
+            # command around it, which resumes at the `)` rather than starting
+            # over.
+            "python3 tests/run_tests.py $(date) >cosign.pub",
+            "echo $(gh run view 1 --log >cosign.pub)",
+        ):
+            with self.subTest(command=command):
+                self.assertRefused(command, "allow-listed command")
+
+    def test_reading_the_output_of_a_gated_command_still_works(self) -> None:
+        # The refusal is the operator that opens a path for writing. A pipe, a
+        # descriptor form and an input redirection open none, and docs/metrics.md
+        # tells a session to run the second of these.
+        for command in (
+            "python3 tests/run_tests.py 2>&1 | tail -5",
+            "gh run view 123 --log-failed 2>&1 | sed 's/x/y/'",
+            "skopeo inspect docker://ghcr.io/x:latest | jq .Digest",
+            "python3 tests/run_tests.py <tests/run_tests.py",
+            "cosign verify --key cosign.pub ghcr.io/danathar/zfs-kinoite-complex:latest",
+        ):
+            with self.subTest(command=command):
+                self.assertAllowed(command)
+
+    def test_a_redirection_on_an_unlisted_command_is_left_alone(self) -> None:
+        # The gate re-gates what the permission rules wave through. A command
+        # no allow rule covers prompts on its own, and refusing it here would
+        # be this hook deciding a question the settings file already decides.
+        for command in (
+            "echo x >cosign.pub",
+            "ruff check >cosign.pub",
+            "python3 tests/some_other_script.py >cosign.pub",
+            "echo x >out.txt; python3 tests/run_tests.py",
+        ):
+            with self.subTest(command=command):
+                self.assertAllowed(command)
+
+    def test_cosign_cannot_write_a_file_it_names(self) -> None:
+        # `--output-file` is a persistent flag on cosign's root command, so
+        # `cosign verify` carries it, and cosign creates and truncates the
+        # path before it verifies anything -- the file is emptied even when
+        # the command then fails on a key it could not load (observed with
+        # cosign v3.1.3). Unlike the ruff rows this cannot be narrowed to an
+        # exact allow rule, because the image reference is an argument.
+        for command in (
+            "cosign verify --key cosign.pub --output-file cosign.pub ghcr.io/x:latest",
+            "cosign verify --key cosign.pub --output-file=cosign.pub ghcr.io/x:latest",
+            "cosign verify --output-file ci/inputs.lock.json ghcr.io/x:latest",
+            # The shell spells the same flag other ways, and each of these is
+            # what reopened the git half of this gate before.
+            "cosign verify --output-'file' cosign.pub ghcr.io/x:latest",
+            "cosign verify --output-fil{e,e}=cosign.pub ghcr.io/x:latest",
+            "cosign verify $(printf -- --output-file) cosign.pub ghcr.io/x:latest",
+            "cosign verify --output-file=$HOME/x ghcr.io/x:latest",
+            "cosign verify `printf -- --output-file` cosign.pub ghcr.io/x:latest",
+        ):
+            with self.subTest(command=command):
+                result = self.run_gate(command)
+                self.assertEqual(
+                    result.returncode,
+                    2,
+                    f"{command!r} was not refused; stderr={result.stderr!r}",
+                )
+
+    def test_the_documented_verify_commands_are_not_refused(self) -> None:
+        # docs/install-and-verify.md and docs/signing-and-bootc.md tell a
+        # reader to run these. A refusal that caught them would be narrowing
+        # past what the project documents.
+        for command in (
+            "cosign verify --key cosign.pub ghcr.io/danathar/zfs-kinoite-complex:latest",
+            "cosign verify --new-bundle-format=false --key cosign.pub ghcr.io/x@sha256:0",
+            "cosign verify --key cosign.pub --output json ghcr.io/x:latest",
+        ):
+            with self.subTest(command=command):
+                self.assertAllowed(command)
 
     def test_an_empty_or_absent_command_is_not_refused(self) -> None:
         for body in ('{"tool_input": {}}', '{"tool_input": {"command": ""}}'):

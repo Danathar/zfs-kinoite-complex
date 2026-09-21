@@ -496,6 +496,20 @@ class SecurityDocEnforcementTests(unittest.TestCase):
                 "ruff check ci_tools/ shared/ tests/ files/ containerfiles/",
             ),
         ),
+        # The same claim as the git row, for the allow rows that are not git's:
+        # the permission layer approves every one of these -- a rule ending in
+        # `:*` matches a command prefix, and a redirection is the rest of the
+        # string -- and the hook is what refuses them. The refusals are
+        # exercised in tests/test_git_diff_gate.py.
+        "allow-listed command that is not git": (
+            "allow",
+            (
+                "python3 tests/run_tests.py >cosign.pub",
+                "gh run view 1 --log >.claude/settings.json",
+                "skopeo inspect docker://ghcr.io/danathar/zfs-kinoite-complex:latest >cosign.pub",
+                "cosign verify --output-file cosign.pub --key cosign.pub ghcr.io/x:latest",
+            ),
+        ),
         # Not a denial at all, which is why it carries its own branch in
         # `test_the_denied_rows_really_say_denied`. The claim is that the one
         # test command an agent may run unattended is the wrapper, because a
@@ -556,6 +570,8 @@ class SecurityDocEnforcementTests(unittest.TestCase):
                     self.assertIn("gated by a hook, not by a rule", enforcement)
                 elif key == "allow-listed linter":
                     self.assertIn("narrowed to exact commands", enforcement)
+                elif key == "allow-listed command that is not git":
+                    self.assertIn("gated by the same hook", enforcement)
                 elif expected == "deny":
                     self.assertIn("denied", enforcement)
                 else:

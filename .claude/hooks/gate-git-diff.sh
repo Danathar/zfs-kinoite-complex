@@ -93,7 +93,25 @@
 # these commands print to stdout, and that is what to read. `>&N`, `N>&M`
 # and `>&-` name a descriptor rather than a path and are not refused; nor is
 # any input redirection (`<`, `<<`, `<<<`, `<&`); nor is a redirection on
-# some other command of the same string (`echo x >out; git diff HEAD`).
+# some other command of the same string that no allow rule covers
+# (`echo x >out; git diff HEAD` is echo's own).
+#
+# The write primitive is not git's alone, and the rest of the allow list
+# reaches it two ways. The shell spelling works on every one of them, because
+# a rule ending in `:*` matches a command prefix while the redirection is the
+# rest of the string: `python3 tests/run_tests.py >cosign.pub` truncates the
+# trust anchor before a test is collected, and
+# `gh run view 1 --log >.claude/settings.json` overwrites the file holding
+# these rules. And `cosign verify`, alone among them, carries the flag
+# spelling: `--output-file` is a *persistent* flag on cosign's root command,
+# so every subcommand has it, and cosign creates and truncates the path
+# before it verifies anything -- `cosign verify --output-file cosign.pub
+# --key <key> <ref>` empties the anchor and then exits non-zero on a key it
+# could not load. Both are refused for the commands named in
+# `GATED_PREFIXES` below, which are the allow rows with a trailing `:*` other
+# than git's. The two `ruff` rows are not among them and do not need to be:
+# they carry no `:*`, so a redirection makes the string match neither row and
+# Claude Code prompts, which is what `_note_ruff` narrowed them for.
 #
 # So this looks at the operands git would actually receive, and refuses the
 # two-operand form unless every operand resolves as a revision -- which is what
@@ -602,6 +620,155 @@ for ((idx = 0; idx < ${#raw_words[@]}; idx++)); do
   fi
 done
 ((writing_redirect)) && refuse "${REDIRECT_MSG}"
+
+# The same write, reached by the allow-listed commands that are not git.
+#
+# Everything above is scoped to a `git` word, and the write primitive is not
+# git's alone. `.claude/settings.json` allows twelve other command prefixes
+# with a trailing `:*` -- "this command with any arguments" -- and an output
+# redirection is part of the string that rule matches, so the shell opens the
+# target before the command runs and nothing prompts:
+# `python3 tests/run_tests.py >cosign.pub` truncates the trust anchor before a
+# test is collected, and `gh run view 1 --log >.claude/settings.json`
+# overwrites the file that holds these rules. The `Read(...)` deny rows gate
+# the Read tool and say nothing about it, exactly as they say nothing about
+# `git diff HEAD >cosign.pub`.
+#
+# One of those commands also carries the flag spelling. `--output-file` is a
+# *persistent* flag on cosign's root command ("log output to a file"), so
+# `cosign verify` has it, and cosign creates and truncates the path before it
+# verifies anything: `cosign verify --output-file cosign.pub --key k <ref>`
+# empties the trust anchor and then exits 1 on a key it could not load
+# (observed with cosign v3.1.3). `_note_ruff` narrowed the two ruff rows to
+# exact commands instead of a hook because every documented ruff invocation is
+# a fixed string; cosign's is not -- the image reference is an argument -- so
+# the rule keeps its `:*` and the refusal has to live here.
+#
+# The prefixes below are the allow rows with a trailing `:*` other than git's,
+# which the scan above already covers. `Bash(ruff check)` and the full lint
+# command are absent on purpose: they carry no `:*`, so a redirection makes
+# the string match neither row and Claude Code prompts.
+# `tests/test_git_diff_gate.py` derives this list from the settings file
+# rather than restating it, so a rule added there fails here until it is
+# listed.
+GATED_PREFIXES=(
+  'cosign verify'
+  'gh issue list'
+  'gh issue view'
+  'gh pr diff'
+  'gh pr list'
+  'gh pr view'
+  'gh run list'
+  'gh run view'
+  'python3 -m ci_tools.cli --help'
+  'python3 tests/check_coverage.py'
+  'python3 tests/run_tests.py'
+  'skopeo inspect'
+)
+
+# shellcheck disable=SC2016 # the message quotes shell spellings as literal text
+GATED_REDIRECT_MSG='blocked: an output redirection (>, >>, >|, &>, &>>, N>, >&FILE, <>) inside an allow-listed command makes the shell open its target for writing before the command runs, and the allow rule matches a command prefix while the redirection is the rest of the string, so nothing prompts: `python3 tests/run_tests.py >cosign.pub` truncates the trust anchor before a test is collected, and `gh run view 1 --log >.claude/settings.json` overwrites the file holding these rules. It is the same write .claude/hooks/gate-git-diff.sh already refuses for `git diff HEAD >cosign.pub`. These commands print to stdout; read that, or pipe it. Descriptor forms (2>&1, >&2, >&-) and input redirections (<, <<, <<<, <&) are not affected, and a command no allow rule covers is left alone -- that one prompts on its own.'
+
+# shellcheck disable=SC2016 # the backticks quote a command spelling for the reader
+COSIGN_OUT_MSG='blocked: cosign --output-file FILE (and the = form) sends cosign output to the path it names, and cosign creates and truncates that path before it verifies anything, so `cosign verify --output-file cosign.pub --key cosign.pub <ref>` empties the trust anchor and then fails. It is a persistent flag on cosign root command, so every subcommand carries it, and Bash(cosign verify:*) approves the whole command line -- the image reference is an argument, so that rule cannot drop its trailing :* the way the ruff rows did. cosign prints to stdout; read that instead.'
+
+# shellcheck disable=SC2016 # the literal ${VAR} and $(...) are what the reader has to see
+COSIGN_EXPAND_MSG='blocked: a brace bash could expand, a $ or a backtick in a word of a cosign invocation is refused rather than expanded, for the reason BRACE_MSG and EXPAND_MSG give for git: bash rewrites the words before cosign sees them, so `--output-fil{e,e}=FILE` matches no flag spelling here and reaches cosign as --output-file=FILE, and $(...), ${VAR} and a backtick supply a word this gate never saw. Four characters rebuilt the git refusals twice this way. Write the command out in full.'
+
+command_is_gated() {
+  local joined="$1" prefix
+  for prefix in "${GATED_PREFIXES[@]}"; do
+    [[ "${joined}" == "${prefix}" ]] && return 0
+  done
+  return 1
+}
+
+# The command that just ended. Only two facts about it are kept -- whether its
+# leading words matched one of the prefixes above, and whether a redirection
+# in it opens a path -- because a redirection can be written before the name
+# (`>cosign.pub cosign verify <ref>` is the same command as
+# `cosign verify <ref> >cosign.pub`), so neither fact is complete until the
+# command ends.
+check_gated_command() {
+  ((cmd_gated && cmd_writes)) && refuse "${GATED_REDIRECT_MSG}"
+  return 0
+}
+
+reset_command() {
+  cmd_prefix=''
+  cmd_writes=0
+  cmd_cosign=0
+  cmd_named=0
+  cmd_gated=0
+}
+
+# The words of a command from its *name* onward: a leading assignment
+# (`FOO=bar cosign verify ...`) is not part of the prefix an allow rule
+# matches, and neither is a redirection's target, which is the shell's word
+# rather than the command's. `command_names` above marks the name, and every
+# word after it belongs to the same command until a separator.
+cmd_prefix='' # the words so far, space-joined, while a prefix is still possible
+cmd_writes=0  # a redirection in this command opens a path for writing
+cmd_cosign=0  # its name is cosign, so the flag and expansion rules apply
+cmd_named=0   # the name has been seen; every later word belongs to it
+cmd_gated=0   # its leading words matched one of GATED_PREFIXES
+cmd_stack=()  # the outer command's state, while a `$(...)` is being read
+reset_command
+for ((idx = 0; idx < ${#words[@]}; idx++)); do
+  case "${kinds[idx]}" in
+  sep)
+    # A `$(...)` or a backtick inside a cosign invocation builds a word this
+    # gate never saw, the way one inside a git invocation does.
+    # shellcheck disable=SC2016 # the literal `$(` is the separator's name
+    if ((cmd_cosign)) && [[ "${words[idx]}" == '$(' || "${words[idx]}" == *'`'* ]]; then
+      refuse "${COSIGN_EXPAND_MSG}"
+    fi
+    # A `$(...)` substitution is a nested command: it is decided on its own,
+    # and the command around it -- including a redirection of its own already
+    # seen -- resumes at the `)` rather than starting over, so
+    # `python3 tests/run_tests.py $(date) >cosign.pub` is still that command's
+    # write.
+    # shellcheck disable=SC2016 # the literal `$(` is the separator's name
+    if [[ "${words[idx]}" == '$(' ]]; then
+      cmd_stack+=("${cmd_writes} ${cmd_cosign} ${cmd_named} ${cmd_gated} ${cmd_prefix}")
+      reset_command
+      continue
+    fi
+    if [[ "${words[idx]}" == '$)' ]] && ((${#cmd_stack[@]})); then
+      check_gated_command
+      read -r cmd_writes cmd_cosign cmd_named cmd_gated cmd_prefix <<<"${cmd_stack[-1]}"
+      unset 'cmd_stack[-1]'
+      continue
+    fi
+    check_gated_command
+    reset_command
+    continue
+    ;;
+  target)
+    redirection_writes_a_path "${redirects[idx]}" "${words[idx]}" && cmd_writes=1
+    continue
+    ;;
+  *) ;;
+  esac
+  ((cmd_named)) || ((${command_names[idx]:-0})) || continue
+  if ((cmd_named == 0)); then
+    cmd_named=1
+    [[ "${words[idx]}" == "cosign" ]] && cmd_cosign=1
+  fi
+  if ((cmd_gated == 0)); then
+    cmd_prefix="${cmd_prefix:+${cmd_prefix} }${words[idx]}"
+    command_is_gated "${cmd_prefix}" && cmd_gated=1
+  fi
+  ((cmd_cosign)) || continue
+  case "${words[idx]}" in
+  --output-file | --output-file=*) refuse "${COSIGN_OUT_MSG}" ;;
+  *) ;;
+  esac
+  if brace_would_expand "${raw_words[idx]}" || [[ "${raw_words[idx]}" == *'$'* ]]; then
+    refuse "${COSIGN_EXPAND_MSG}"
+  fi
+done
+check_gated_command
 
 # The whole string with quoting removed, for the one test that is a substring
 # match rather than a word: the shell removes quotes and backslashes on the

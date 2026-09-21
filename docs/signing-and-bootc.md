@@ -59,22 +59,26 @@ all of them.
 
 The main workflow avoids leaving user-facing tags on unsigned content.
 
-For the candidate image, `.github/actions/publish-native-image/action.yml` does
-this:
+`.github/actions/build-native-image/action.yml` builds the local image under the
+requested candidate tag. `.github/actions/publish-native-image/action.yml` then
+does this:
 
-1. builds the local image with the requested candidate tag
-2. retags it to a transient non-publishable tag:
+1. retags it to a transient non-publishable tag:
    `candidate-<sha>-<fedora>-unsigned-<run_id>`
-3. pushes only the transient tag first
-4. resolves the transient tag to a digest
-5. signs that digest
-6. verifies that digest signature
-7. copies the same digest to the requested candidate tag
+2. pushes only the transient tag first
+3. resolves the transient tag to a digest
+4. signs that digest
+5. verifies that digest signature
+6. copies the same digest to the requested candidate tag
 
 Then the promote job copies the same digest to:
 
-1. `latest`
-2. `stable-<run>-<sha>`
+1. `stable-<run>-<sha>`
+2. `latest`
+
+That order is deliberate. `build.yml` cancels an in-progress run on a newer
+push, so a cancellation between the two copies should leave an audit record with
+no `latest` move rather than a moved `latest` with no audit record.
 
 If the sign step fails, the user-facing candidate tag and `latest` do not move.
 

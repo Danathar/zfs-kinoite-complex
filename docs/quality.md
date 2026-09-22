@@ -3,7 +3,7 @@
 Where the signal about this repository actually comes from, and what each source
 can and cannot tell you.
 
-There is no dashboard service here. The dashboard is three badges in
+There is no dashboard service here. The dashboard is five badges in
 [`README.md`](../README.md), a handful of gates, and a set of fail-closed checks
 — and the useful thing to write down is what each one *means*, because two of
 the badges are routinely misread and the most important gates are the ones that
@@ -17,6 +17,8 @@ signals mean, that one is how to get numbers.
 | Badge | Source | Answers |
 | --- | --- | --- |
 | **build** | Actions status for `build.yml` on `main` | Did the last production run pass? |
+| **tests** | Actions status for `test.yml` on `main` | Did lint, the unit suite and the per-module coverage floors pass on `main`? |
+| **nightly compliance** | Actions status for `nightly-compliance.yml` on `main` | Does the image a user would pull right now still verify against the committed `cosign.pub`? |
 | **last good build** | `status` branch payload written from the published `:latest` image | Is there a usable signed image, and how old is it? |
 | **OpenZFS/kernel status** | `status` branch payload written by `akmods-failure-triage.yml` | If the build is red, is it because ZFS cannot be built for the current kernel? |
 
@@ -72,7 +74,7 @@ Two properties of the badge pipeline are deliberate:
 | `Python Unit Tests` (`test.yml`) | every PR and push to `main` | **nothing automatically** — see below |
 | `ruff check` | same job | same |
 | Per-module coverage floors (`tests/check_coverage.py`) | same job | same |
-| `Evaluate Stable Signal Gate` (`build.yml`) | scheduled and `main` pushes | *skips* the build on a scheduled run when upstream has not moved (`build.yml:97`) — a skip, not a failure |
+| `Evaluate Stable Signal Gate` (`build.yml`) | scheduled and `main` pushes | *skips* the build on a scheduled run when upstream has not moved (`build.yml:120`) — a skip, not a failure |
 | `check-akmods-cache` strict mode | before the candidate build | the build, if the cache does not carry a matching `kmod-zfs` |
 | `sign-image` | before publish | publishing — an unsigned production image is refused outright |
 | `promote-stable` digest re-read | after the copy to `:latest` | the run, not the copy — it detects a bad promotion, it does not prevent one. See the warning above. |
@@ -105,9 +107,13 @@ publish itself.
 `tests/e2e/` mocks every external call, and `tests/e2e/` runs the CLI as a
 subprocess but touches no registry, `cosign`, `podman`, or `git`. The
 `Containerfile` and `build_files/build-image.sh` execute only inside an image
-build, against a real RPM database and module tree — they are the two entries in
-`.coverage-thresholds.json`'s `unmeasured` section, and a green suite is not
-evidence for a change to either.
+build, against a real RPM database and module tree — they are two of the five
+entries in `.coverage-thresholds.json`'s `unmeasured` section, and a green suite
+is not evidence for a change to either. The other three —
+`build_files/check-brew-payload-inventory.sh`, `.claude/hooks/gate-git-diff.sh`
+and `files/etc/profile.d/brew-path.sh` — are outside `coverage.py`'s reach
+because they are shell, not because nothing exercises them; that section names
+the test that runs or reads each one.
 
 The image-side *Python* is a different case and worth separating, because
 conflating the two understates what is covered. `install_zfs_from_akmods_cache.py`
@@ -123,8 +129,11 @@ three tiers and the priority order for a real gap.
 
 **There is no coverage instrumentation on the production workflows.** Whether a
 path actually runs in production is established by hand today, which does not
-scale as a review practice. That is a known gap, tracked in
-[#10](https://github.com/Danathar/zfs-kinoite-complex/issues/10).
+scale as a review practice. That is a known gap, and no issue currently tracks
+it: the one that used to be cited here was about `test.yml` collecting no
+coverage at all, and it was closed when the coverage job and
+`tests/check_coverage.py` landed. Those measure the unit tier on the host, not
+what a production run reaches.
 
 ### The nightly job answers a question the others cannot
 

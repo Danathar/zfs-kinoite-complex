@@ -511,11 +511,20 @@ for ((idx = 0; idx < ${#words[@]}; idx++)); do
   ((command_word_pending)) || continue
   raw_word="${raw_words[idx]}"
   word="${words[idx]}"
-  if [[ "${raw_word}" =~ ^[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?\+?= ]]; then
+  if [[ "${word}" =~ ^[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?\+?= ]]; then
     # An assignment; the name is still to come. Recorded, because this scan
     # is the only one that knows an assignment stands *before* a name: the
     # per-command scan below reads words of the command, and bash hands the
-    # assignment to the environment instead of to the argv.
+    # assignment to the environment instead of to the argv. Read with its
+    # quotes already removed (`${word}`, not `${raw_word}`): a wrapper such
+    # as `env` reads its own argument after bash has stripped the quotes,
+    # so `env 'GIT_EXTERNAL_DIFF'=/tmp/evil git diff HEAD` sets it although
+    # the quote mark keeps bash's own leading-assignment grammar from
+    # reading the word that way at all -- a plain `'FOO=bar' cmd` runs
+    # nothing bash treats as `cmd`, since the quote disqualifies the word
+    # as an assignment and bash tries to run the literal text `FOO=bar` as
+    # a command instead, so reading it as an assignment here can only
+    # over-refuse a command line bash would already have failed to run.
     name_assignments[idx]=1
     continue
   fi
@@ -775,6 +784,7 @@ cmd_git=0     # its name is git, which the allow rows cover with their own `*`
 cmd_export=0  # its name is export/declare/typeset/readonly: its own words assign
 cmd_stack=()  # the outer command's state, while a `$(...)` is being read
 export_idx=-1 # the first word that an export-family command assigns
+allexport=0   # `set -a`/`set -o allexport` ran: every later bare assignment exports
 gate_idx=-1   # the last word at which a gated command or git is running
 reset_command
 for ((idx = 0; idx < ${#words[@]}; idx++)); do
@@ -817,8 +827,14 @@ for ((idx = 0; idx < ${#words[@]}; idx++)); do
   # never a word of its argv, so the scans that read words never see it. It is
   # recorded for the command and decided when the command ends, because a
   # refusal here would have to guess at a name that has not been seen yet.
+  # `set -a`/`set -o allexport` (below) turns *every* bare assignment after
+  # it into the export family's own reach, without an `export` word anywhere
+  # near it, so a bare assignment seen while that mode is on is treated the
+  # same as one exported (arms export_idx too), the same over-refusing
+  # direction `readonly`/bare `declare` already take.
   if ((${name_assignments[idx]:-0})); then
     cmd_assign=1
+    ((allexport)) && ((export_idx < 0)) && export_idx=${idx}
     continue
   fi
   ((cmd_named)) || ((${command_names[idx]:-0})) || continue
@@ -848,6 +864,16 @@ for ((idx = 0; idx < ${#words[@]}; idx++)); do
       export | declare | typeset | readonly) cmd_export=1 ;;
       *) ;;
       esac
+    fi
+    # `set -a`/`set -o allexport` puts the shell itself into a mode where
+    # every later bare assignment exports, with no `export` word anywhere
+    # near it -- checked against `cmd_prefix` before this word is appended
+    # to it, so it reads a *later* word of a `set` command (`-a`, clustered
+    # as `-ea`, or the long form's own argument `allexport`) rather than
+    # the name `set` itself.
+    if [[ "${cmd_prefix}" == "set" || "${cmd_prefix}" == "set "* ]] &&
+      [[ "${words[idx]}" == -*a* || "${words[idx]}" == "allexport" ]]; then
+      allexport=1
     fi
     cmd_prefix="${cmd_prefix:+${cmd_prefix} }${words[idx]}"
     command_is_gated "${cmd_prefix}" && cmd_gated=1

@@ -1560,10 +1560,15 @@ CORPUS: tuple[Row, ...] = (
         "git status --short; export GIT_EXTERNAL_DIFF=/tmp/evil",
         "allowed",
         "an export with nothing gated after it in the same string is not this gate's business "
-        "(EXPORT_ENV_MSG's own text says so): the tool's shell does outlive one call, so an "
-        "export approved here could still poison a later call's git diff, but a PreToolUse "
-        "hook reading one command string cannot see that call to refuse it, and refusing "
-        "every export unconditionally would refuse ordinary, unrelated environment setup too",
+        "(EXPORT_ENV_MSG's own text says so): Claude Code's own permission matcher, not this "
+        "hook, is what stops the export half -- an allow rule for `git status` matches only "
+        "that subcommand, and the recognized separators (`;`, `&&`, `||`, `|`, `|&`, `&`, a "
+        "newline) each start a fresh match, so `export GIT_EXTERNAL_DIFF=/tmp/evil` still "
+        "prompts on its own account even though `git status --short` alone is allow-matched. "
+        "(A Bash tool call also starts with a fresh shell -- an export made in one call is not "
+        "present in the next -- so there is no later call left for this shape to poison either.) "
+        "Refusing every export unconditionally, ordered or not, would refuse ordinary, "
+        "unrelated environment setup that reaches no gated command in the string at all",
     ),
     Row(
         "environment",
@@ -2022,13 +2027,13 @@ MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
         "env 'GIT_EXTERNAL_DIFF'=/tmp/evil git diff HEAD",
     ),
     (
-        "the export latch",
+        "the ordered export-before-gated check",
         '((export_idx >= 0 && gate_idx > export_idx)) && refuse "${EXPORT_ENV_MSG}"',
         "((export_idx >= 0 && gate_idx > export_idx)) && true",
         "export GIT_EXTERNAL_DIFF=/tmp/evil; git diff HEAD",
     ),
     (
-        "the -x option of declare, typeset, local and readonly",
+        "declare, typeset and readonly counted as the export family",
         "export | declare | typeset | readonly) cmd_export=1 ;;",
         "export) cmd_export=1 ;;",
         "declare -x GIT_EXTERNAL_DIFF=/tmp/evil; git diff HEAD",

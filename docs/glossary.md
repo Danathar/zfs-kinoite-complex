@@ -82,7 +82,7 @@ This page defines terms used across this repository's docs and workflow comments
 - `AKMODS_UPSTREAM_TRACK`: floating akmods branch or tag resolved to a concrete SHA when no explicit upstream ref is pinned.
 - `DEFAULT_AKMODS_REF`: process-level environment override that can force one akmods source ref for a run; it is not wired as a formal workflow-dispatch input.
 - `ZFS_MINOR_VERSION`: OpenZFS minor line (for example `2.4`) passed into the akmods build.
-- `zfs_version`: the exact OpenZFS patch version (for example `2.4.3`) resolved on that line for one run, via [`ci_tools/zfs_release.py`](../ci_tools/zfs_release.py). The scheduled-build gate and the akmods cache-reuse check both compare on this exact value, not the minor line, so a new patch release forces a rebuild instead of being masked by a cache that only matches the line.
+- `zfs_version`: the exact OpenZFS patch version (for example `2.4.3`) resolved on that line for one run, via [`ci_tools/zfs_release.py`](../ci_tools/zfs_release.py). The scheduled-build gate and the akmods cache-reuse check both compare on this exact value, not the minor line, so a new patch release forces a rebuild instead of being masked by a cache that only matches the line. The CI helpers read this value from the environment as `ZFS_VERSION`.
 - `AKMODS_KERNEL`: kernel flavor value passed to upstream akmods tooling; this repo uses `main`.
 - `AKMODS_TARGET`: akmods target name; this repo uses `zfs`.
 - `AKMODS_VERSION`: Fedora major version value passed to upstream akmods tooling.
@@ -108,6 +108,9 @@ This page defines terms used across this repository's docs and workflow comments
 - `BUILD_CONTAINER_REF`: build-container image ref before digest pinning.
 - `BUILD_CONTAINER_PINNED`: digest-pinned build-container ref used by the akmods job.
 - `BUILD_CONTAINER_DIGEST`: digest portion of the selected build-container image.
+- `BREW_IMAGE_REF`: Homebrew payload image ref before digest pinning.
+- `BREW_IMAGE_PINNED`: digest-pinned Homebrew payload ref passed into the image build.
+- `BREW_IMAGE_DIGEST`: digest portion of the selected Homebrew payload image.
 
 ### Signing And Registry
 
@@ -118,6 +121,8 @@ This page defines terms used across this repository's docs and workflow comments
 - `REGISTRY_USER`: workflow-local registry username used by the Docker login step.
 - `REGISTRY_PASSWORD`: workflow-local registry password or token used by the Docker login step.
 - `IMAGE_ORG`: normalized image-owner portion used in GHCR paths.
+- `IMAGE_REGISTRY`: GHCR registry path for this owner, `ghcr.io/` followed by `IMAGE_ORG`. Exported by the same helper call that exports `IMAGE_ORG` and `ACTOR_IS_BOT`.
+- `ACTOR_IS_BOT`: workflow-local boolean that records whether the triggering account is an automation account, so branch workflows can skip publishing throwaway images.
 - `IMAGE_NAME`: final OS image repository name.
 - `IMAGE_TAG`: image tag being pushed, signed, or promoted.
 - `HAS_SIGNING_SECRET`: workflow-local boolean that records whether `SIGNING_SECRET` is configured.

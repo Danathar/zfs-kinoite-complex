@@ -63,7 +63,12 @@ claims it makes are each a separate way for it to silently stop working:
     to the command it runs, so `printf '%s\\n' /dev/null ./cosign.key |
     xargs git diff` was the plain-file read with no operand in the string.
     xargs in front of git or a gated prefix is refused wherever it stands
-    among the wrappers; xargs in front of anything else is left alone;
+    among the wrappers; its own options are read, so xargs in front of
+    anything else (`xargs grep -l git`) is left alone;
+  * Claude Code's matcher cuts a wrapper's path at its last `/` or `\\`,
+    while bash runs the file at that path, so a wrapper is stepped over
+    only by its bare name or as `/usr/bin/<name>` or `/bin/<name>`, and
+    any other path to one (`./shim/nohup git diff HEAD`) is refused;
   * the write primitive is not git's alone: a rule ending in `:*` matches a
     command prefix while a redirection is the rest of the string, so
     `python3 tests/run_tests.py >cosign.pub` truncates the trust anchor and
@@ -1937,16 +1942,49 @@ CORPUS: tuple[Row, ...] = (
         "command name",
         "git status; /usr/bin/xargs git diff",
         "refused",
-        "a literal path to a wrapper is that wrapper, as a literal path to git is git; read as "
-        "the name it hid the git behind it from every scan (review on #235)",
+        "/usr/bin/xargs is the system xargs and is stepped over as xargs; read as the name it "
+        "hid the git behind it from every scan (review on #235)",
         "xargs adds the words it reads",
     ),
     Row(
         "command name",
         "git status; /usr/bin/env python3 tests/run_tests.py >cosign.pub",
         "refused",
-        "the same for every wrapper: the gated prefix starts at the word the wrapper runs",
+        "the same for every wrapper at /usr/bin or /bin: the gated prefix starts at the word "
+        "the wrapper runs",
         "inside an allow-listed command",
+    ),
+    # Claude Code's matcher cuts a wrapper's path at its last / or \ and
+    # matches the allow rule against the words after it, while bash runs the
+    # file at that path -- which an agent can write (review on
+    # atomic-image-builder#438).
+    Row(
+        "command name",
+        "./shim/nohup git diff HEAD",
+        "refused",
+        "an agent-made file named nohup runs with the approval meant for git diff HEAD",
+        "a wrapper written as a path",
+    ),
+    Row(
+        "command name",
+        "'./shim\\nohup' git diff HEAD",
+        "refused",
+        "bash runs the file shim\\nohup; the matcher cuts at the backslash and sees nohup",
+        "a wrapper written as a path",
+    ),
+    Row(
+        "command name",
+        "/tmp/timeout 5 python3 tests/run_tests.py",
+        "refused",
+        "the same in front of a gated prefix: /tmp/timeout is whatever file is there",
+        "a wrapper written as a path",
+    ),
+    Row(
+        "command name",
+        "/usr/bin/timeout 60 git diff HEAD",
+        "allowed",
+        "the system copy of a wrapper is the wrapper; only /usr/bin/<name> and /bin/<name> "
+        "are stepped over as a path",
     ),
     Row(
         "command name",
@@ -1955,6 +1993,28 @@ CORPUS: tuple[Row, ...] = (
         "a wrapper is matched by path only once the word is literal; $D/env runs whatever $D "
         "holds, so it is a name built at runtime rather than a wrapper to step over",
         "Spell every command name literally",
+    ),
+    Row(
+        "command name",
+        "xargs -J % git diff % <list.txt",
+        "refused",
+        "BSD xargs's -J takes a value; an option this gate does not model is not assumed to be "
+        "a flag, so every later word is held to the name test and git is still found",
+        "xargs adds the words it reads",
+    ),
+    Row(
+        "command name",
+        "git ls-files | xargs grep -l git",
+        "allowed",
+        "xargs's options are read, so grep is the command it runs and git is grep's pattern, "
+        "not a command behind xargs (review on aurora-zfs-simple#224)",
+    ),
+    Row(
+        "command name",
+        "find . -name '*.md' | xargs -0 -n 1 grep -n 'cosign verify'",
+        "allowed",
+        "the same with options before the command: a pattern that spells a gated prefix is "
+        "still grep's argument",
     ),
     Row(
         "command name",
@@ -2126,7 +2186,9 @@ UNREACHABLE_SHAPES: tuple[tuple[str, str, str], ...] = (
 
 # Disabling any one of the new rules must fail at least one row of the corpus.
 # Each entry names the edit that disables the rule and the row that catches it:
-# a rule whose removal nothing notices is a rule the suite does not hold.
+# a refused row the rule alone refuses, or, for a rule that narrows a refusal,
+# an allowed row the rule alone lets through. A rule whose removal nothing
+# notices is a rule the suite does not hold.
 MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
     (
         "the leading-assignment refusal",
@@ -2195,10 +2257,22 @@ MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
         "printf '%s\\n' /dev/null ./cosign.key | xargs git diff",
     ),
     (
-        "a literal path to a wrapper read as that wrapper",
-        'case "${word##*/}" in',
-        'case "${word}" in',
-        "git status; /usr/bin/xargs git diff",
+        "the refusal of a wrapper written as a path",
+        '*) refuse "${WRAPPER_PATH_MSG}" ;;',
+        "*) ;;",
+        "./shim/nohup git diff HEAD",
+    ),
+    (
+        "a wrapper's path cut at a backslash as well as a slash",
+        'wrapper="${wrapper##*[\\\\/]}"',
+        'wrapper="${wrapper##*/}"',
+        "'./shim\\nohup' git diff HEAD",
+    ),
+    (
+        "the words after xargs's command read as its arguments",
+        "after_wrapper=0 # the words after xargs's command are that command's arguments",
+        "after_wrapper=1",
+        "git ls-files | xargs grep -l git",
     ),
 )
 
@@ -2384,9 +2458,9 @@ class CorpusTests(GateRunner, unittest.TestCase):
     def test_disabling_any_new_rule_fails_a_row_of_the_corpus(self) -> None:
         # The issue asks for this directly: a rule nothing notices the absence
         # of is a rule the suite does not hold. Each mutation is applied to a
-        # copy of the hook, and the row it names must stop being refused.
+        # copy of the hook, and the row it names must change its decision.
         source = GATE.read_text(encoding="utf-8")
-        refused = {row.command for row in CORPUS if row.decision == "refused"}
+        decisions = {row.command: row.decision for row in CORPUS}
         with tempfile.TemporaryDirectory() as tmp:
             mutant = Path(tmp) / "gate-git-diff.sh"
             for label, before, after, witness in MUTATIONS:
@@ -2396,14 +2470,14 @@ class CorpusTests(GateRunner, unittest.TestCase):
                         1,
                         f"the mutation for {label} no longer names one line of the hook",
                     )
-                    self.assertIn(witness, refused, f"{witness!r} is not a refused row")
+                    self.assertIn(witness, decisions, f"{witness!r} is not a row of the corpus")
                     mutant.write_text(source.replace(before, after), encoding="utf-8")
                     result = self.run_gate(witness, gate=mutant)
                     self.assertEqual(
                         result.returncode,
-                        0,
-                        f"disabling {label} changed nothing: {witness!r} is refused without it, "
-                        f"so the row does not hold the rule (stderr={result.stderr!r})",
+                        0 if decisions[witness] == "refused" else 2,
+                        f"disabling {label} changed nothing: {witness!r} is decided the same "
+                        f"without it, so the row does not hold the rule (stderr={result.stderr!r})",
                     )
 
 

@@ -1935,6 +1935,29 @@ CORPUS: tuple[Row, ...] = (
     ),
     Row(
         "command name",
+        "git status; /usr/bin/xargs git diff",
+        "refused",
+        "a literal path to a wrapper is that wrapper, as a literal path to git is git; read as "
+        "the name it hid the git behind it from every scan (review on #235)",
+        "xargs adds the words it reads",
+    ),
+    Row(
+        "command name",
+        "git status; /usr/bin/env python3 tests/run_tests.py >cosign.pub",
+        "refused",
+        "the same for every wrapper: the gated prefix starts at the word the wrapper runs",
+        "inside an allow-listed command",
+    ),
+    Row(
+        "command name",
+        "git status; $D/env git diff HEAD",
+        "refused",
+        "a wrapper is matched by path only once the word is literal; $D/env runs whatever $D "
+        "holds, so it is a name built at runtime rather than a wrapper to step over",
+        "Spell every command name literally",
+    ),
+    Row(
+        "command name",
         "xargs -I{} git diff {} <list.txt",
         "refused",
         "-I puts each line where the {} is, which is still an operand the string never names",
@@ -2170,6 +2193,12 @@ MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
         '((cmd_xargs && (cmd_gated || cmd_git))) && refuse "${XARGS_MSG}"',
         "((cmd_xargs && (cmd_gated || cmd_git))) && true",
         "printf '%s\\n' /dev/null ./cosign.key | xargs git diff",
+    ),
+    (
+        "a literal path to a wrapper read as that wrapper",
+        'case "${word##*/}" in',
+        'case "${word}" in',
+        "git status; /usr/bin/xargs git diff",
     ),
 )
 

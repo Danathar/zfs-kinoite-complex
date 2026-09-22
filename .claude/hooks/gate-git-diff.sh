@@ -546,12 +546,6 @@ for ((idx = 0; idx < ${#words[@]}; idx++)); do
   '{' | '}' | '!' | if | then | else | elif | fi | do | done | while | until | time | coproc)
     continue # a keyword; the name is still to come
     ;;
-  command | builtin | exec | env | nohup | nice | noglob | xargs | timeout | stdbuf | sudo | doas)
-    after_wrapper=1
-    wrapper_name="${word}"
-    [[ "${word}" == xargs ]] && xargs_words[idx]=1
-    continue
-    ;;
   *) ;;
   esac
   if [[ "${wrapper_name}" == env ]] &&
@@ -564,6 +558,21 @@ for ((idx = 0; idx < ${#words[@]}; idx++)); do
     { [[ "${raw_word}" == *'['* ]] && [[ "${word}" != '[' && "${word}" != '[[' ]]; }; then
     refuse "${CMD_MSG}"
   fi
+  # A wrapper, matched on its last path component once the word is known to
+  # be literal: a literal path to a wrapper is that wrapper, as a literal path
+  # to git is git below. Read as the name, `git status; /usr/bin/xargs git
+  # diff` hid the git behind it from every scan, and bash ran xargs all the
+  # same (review on #235). Checked after the literal test so that `$D/env`
+  # is still refused as a name built at runtime rather than stepped over.
+  case "${word##*/}" in
+  command | builtin | exec | env | nohup | nice | noglob | xargs | timeout | stdbuf | sudo | doas)
+    after_wrapper=1
+    wrapper_name="${word##*/}"
+    [[ "${wrapper_name}" == xargs ]] && xargs_words[idx]=1
+    continue
+    ;;
+  *) ;;
+  esac
   if [[ "${word}" == */git ]]; then
     words[idx]=git
     raw_words[idx]=git

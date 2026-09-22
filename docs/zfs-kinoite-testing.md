@@ -129,8 +129,16 @@ The workflow passes build arguments directly into [`Containerfile`](../Container
 
 1. `BASE_IMAGE`
 2. `AKMODS_IMAGE`
-3. `IMAGE_REPO`
-4. `SIGNING_KEY_FILENAME`
+3. `BREW_IMAGE`
+4. `IMAGE_REPO`
+5. `SIGNING_KEY_FILENAME`
+
+`BREW_IMAGE` is the third digest-pinned image this build consumes, alongside the
+base image and the shared akmods cache. `Containerfile` pulls it in as a build
+stage and copies its `/system_files` into the image, after
+[`build_files/check-brew-payload-inventory.sh`](../build_files/check-brew-payload-inventory.sh)
+checks that payload against [`build_files/brew-payload.manifest`](../build_files/brew-payload.manifest).
+Its digest is resolved by the same akmods job that pins the other two.
 
 That means there is no generated workspace and no per-run file mutation layer.
 `AKMODS_IMAGE_TEMPLATE` is still available as a `Containerfile` fallback for

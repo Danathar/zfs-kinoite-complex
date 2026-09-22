@@ -171,7 +171,7 @@ REDIRECT_MSG='blocked: an output redirection (>, >>, >|, &>, &>>, N>, >&FILE, <>
 TILDE_MSG='blocked: an unquoted leading ~ is $HOME to bash and a literal directory inside this checkout to this gate, so the path checked here is not the path git would open: `git diff -- ~/.aws/credentials ~/.bashrc` resolved both operands inside the working tree and printed both files out of the home directory as a plain-file diff, past the Read(...) deny rules in .claude/settings.json. A word of a git invocation that begins with an unquoted ~ (~/..., ~user/..., or ~ alone) is refused rather than expanded. Spell the path out in full, relative to the checkout. A tilde inside a word (HEAD~1) and a quoted or escaped one are literals to bash and are not refused by this rule.'
 
 # shellcheck disable=SC2016 # the literal $G and $(...) are what the reader has to see
-CMD_MSG='blocked: the name of a command in this string is not spelled literally -- it is built by an expansion (`$G diff ...`, `$(printf git) diff ...`, a backtick in command position), by a brace (`{,git} diff ...`), or by a glob (`g?t`, `/usr/bin/g[i]t`) -- so neither this gate nor the allow rule that matched the string'"'"'s literal prefix can tell which command bash will run, and `G=git; $G diff /dev/null ./cosign.key` runs the plain-file read this gate exists to refuse. Spell every command name literally, and drop a variable assignment that only exists to build one. After a wrapper such as command, env, exec, timeout or xargs the same holds for every word of that command, since the wrapper'"'"'s own options are not modelled here. A literal name after an assignment (`FOO=bar git diff HEAD`) is fine, and a literal path to git (`/usr/bin/git diff`) is read as git. env -S (--split-string) splits a quoted string into a command this gate never sees and is refused outright.'
+CMD_MSG='blocked: the name of a command in this string is not spelled literally -- it is built by an expansion (`$G diff ...`, `$(printf git) diff ...`, a backtick in command position), by a brace (`{,git} diff ...`), or by a glob (`g?t`, `/usr/bin/g[i]t`) -- so neither this gate nor the allow rule that matched the string'"'"'s literal prefix can tell which command bash will run, and `G=git; $G diff /dev/null ./cosign.key` runs the plain-file read this gate exists to refuse. Spell every command name literally, and drop a variable assignment that only exists to build one. After a wrapper such as command, env, exec, timeout or xargs the same holds for every word of that command, since the wrapper'"'"'s own options are not modelled here. A literal name after an assignment is not what this rule refuses -- the assignment has a refusal of its own -- and a literal path to git (`/usr/bin/git diff`) is read as git. env -S (--split-string) splits a quoted string into a command this gate never sees and is refused outright.'
 
 # shellcheck disable=SC2016 # the literal ${VAR} is what the reader has to see
 BRACE_MSG='blocked: bash expands braces before git sees the words, and this gate reads the words as typed, so a brace rebuilds both spellings it refuses: `git diff {/dev/null,./cosign.key}` passes the operand scan as one word and reaches git as two operands (the plain-file read), and `--outpu{t,t}=FILE` matches no word here and reaches git as --output=FILE. Expanding braces correctly means reimplementing bash inside a hook, so a brace bash could expand -- a { followed, anywhere later in the word, by a comma or a .. and then a }, or a ${VAR} -- is refused instead, and so is a process substitution (`git diff <(...)`), which supplies an operand this gate never saw. Write the command out in full. A brace with neither, such as HEAD@{1} or main@{upstream}, is a literal to bash and is not refused; a .. between two reflog entries (HEAD@{2}..HEAD@{1}) has the refused shape, so write HEAD~2..HEAD~1. Only words of a git invocation are affected: awk and jq programs elsewhere in the string are not.'
@@ -444,6 +444,7 @@ end_word
 command_word_pending=1 # the next word of this command may be its name
 after_wrapper=0        # a wrapper ran: every remaining word may be the name
 command_names=()       # 1 at each index that names, or may name, a command
+name_assignments=()    # 1 at each assignment this scan skipped before a name
 wrapper_name=''
 in_backtick=0
 name_stack=() # the outer command's state, while a `$(...)` is being read
@@ -491,7 +492,12 @@ for ((idx = 0; idx < ${#words[@]}; idx++)); do
   raw_word="${raw_words[idx]}"
   word="${words[idx]}"
   if [[ "${raw_word}" =~ ^[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?\+?= ]]; then
-    continue # an assignment; the name is still to come
+    # An assignment; the name is still to come. Recorded, because this scan
+    # is the only one that knows an assignment stands *before* a name: the
+    # per-command scan below reads words of the command, and bash hands the
+    # assignment to the environment instead of to the argv.
+    name_assignments[idx]=1
+    continue
   fi
   case "${word}" in
   '{' | '}' | '!' | if | then | else | elif | fi | do | done | while | until | time | coproc)
@@ -675,10 +681,28 @@ COSIGN_OUT_MSG='blocked: cosign --output-file FILE (and the = form) sends cosign
 # shellcheck disable=SC2016 # the literal ${VAR} and $(...) are what the reader has to see
 COSIGN_EXPAND_MSG='blocked: a brace bash could expand, a $ or a backtick in a word of a cosign invocation is refused rather than expanded, for the reason BRACE_MSG and EXPAND_MSG give for git: bash rewrites the words before cosign sees them, so `--output-fil{e,e}=FILE` matches no flag spelling here and reaches cosign as --output-file=FILE, and $(...), ${VAR} and a backtick supply a word this gate never saw. Four characters rebuilt the git refusals twice this way. Write the command out in full.'
 
+# shellcheck disable=SC2016 # the message quotes shell spellings as literal text
+GATED_ENV_MSG='blocked: an assignment before a command (`NAME=value cmd ...`) is an environment the command runs under rather than a word of it, and for the commands this gate covers that environment changes what runs or where it goes. A git invocation carries both primitives refused elsewhere here: `GIT_EXTERNAL_DIFF=prog git diff HEAD~1 HEAD` runs prog once per changed path, `GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=diff.external GIT_CONFIG_VALUE_0=prog` reaches that same driver under another name, `PATH=dir git diff HEAD` runs a different git, and `GIT_DIR` and `GIT_INDEX_FILE` re-point the repository the operand scan was reasoning about -- each of them from a string the allow rows match on their `git diff` prefix. The other allow-listed families are the same: `GH_HOST=other gh pr list` and `GH_CONFIG_DIR=dir gh run view 1` send the token somewhere else. A deny list of variable names is the wrong shape for this, since it would have to track git'"'"'s own environment as git grows it. Run the command without the assignment.'
+
+# shellcheck disable=SC2016 # the message quotes shell spellings as literal text
+EXPORT_ENV_MSG='blocked: an assignment made by the export family (`export NAME=value`, `declare -x`, `typeset -x`, `readonly`) reaches a later command of the same string exactly as a leading `NAME=value` does, and this string arms one and then runs git or an allow-listed command: `export GIT_EXTERNAL_DIFF=prog; git diff HEAD~1 HEAD` runs prog once per changed path while no word of the git invocation carries an assignment at all. The builtin is refused rather than its options read, because the flag that exports has several spellings (-x, -gx, an earlier `declare -x NAME` with a plain `NAME=value` after it) and a half-modelled option list is a gate that disagrees with bash in some other direction. Only a string that also runs one of those commands is refused; an export on its own is not this gate'"'"'s business. Residual, stated rather than implied: bash keeps an exported variable across Bash calls, so an export approved in an earlier call is outside what a PreToolUse hook reading one command string can see.'
+
 command_is_gated() {
   local joined="$1" prefix
   for prefix in "${GATED_PREFIXES[@]}"; do
     [[ "${joined}" == "${prefix}" ]] && return 0
+  done
+  return 1
+}
+
+# Whether the words so far could still grow into a gated prefix. A command whose
+# leading words cannot -- because a wrapper's own option took the first name
+# slot (`env -u X python3 tests/run_tests.py`) -- starts its prefix over at the
+# next name candidate, which is the word the wrapper actually runs.
+prefix_could_match() {
+  local joined="$1" prefix
+  for prefix in "${GATED_PREFIXES[@]}"; do
+    [[ "${prefix}" == "${joined} "* ]] && return 0
   done
   return 1
 }
@@ -691,6 +715,14 @@ command_is_gated() {
 # command ends.
 check_gated_command() {
   ((cmd_gated && cmd_writes)) && refuse "${GATED_REDIRECT_MSG}"
+  # An assignment before the name is an environment the command runs under.
+  # Git was exempt until this refusal, on the reading that a git invocation is
+  # decided by the operand scan below; that scan reads words, and an assignment
+  # is not one. `GIT_EXTERNAL_DIFF=prog git diff HEAD~1 HEAD` runs prog once
+  # per changed path, and the allow row matches the string on its `git diff`
+  # prefix all the same.
+  ((cmd_gated && cmd_assign)) && refuse "${GATED_ENV_MSG}"
+  ((cmd_git && cmd_assign)) && refuse "${GATED_ENV_MSG}"
   return 0
 }
 
@@ -698,8 +730,11 @@ reset_command() {
   cmd_prefix=''
   cmd_writes=0
   cmd_cosign=0
+  cmd_assign=0
   cmd_named=0
   cmd_gated=0
+  cmd_git=0
+  cmd_export=0
 }
 
 # The words of a command from its *name* onward: a leading assignment
@@ -710,9 +745,14 @@ reset_command() {
 cmd_prefix='' # the words so far, space-joined, while a prefix is still possible
 cmd_writes=0  # a redirection in this command opens a path for writing
 cmd_cosign=0  # its name is cosign, so the flag and expansion rules apply
+cmd_assign=0  # an assignment stands before this command's name
 cmd_named=0   # the name has been seen; every later word belongs to it
 cmd_gated=0   # its leading words matched one of GATED_PREFIXES
+cmd_git=0     # its name is git, which the allow rows cover with their own `*`
+cmd_export=0  # its name is export/declare/typeset/readonly: its own words assign
 cmd_stack=()  # the outer command's state, while a `$(...)` is being read
+export_idx=-1 # the first word that an export-family command assigns
+gate_idx=-1   # the last word at which a gated command or git is running
 reset_command
 for ((idx = 0; idx < ${#words[@]}; idx++)); do
   case "${kinds[idx]}" in
@@ -730,13 +770,13 @@ for ((idx = 0; idx < ${#words[@]}; idx++)); do
     # write.
     # shellcheck disable=SC2016 # the literal `$(` is the separator's name
     if [[ "${words[idx]}" == '$(' ]]; then
-      cmd_stack+=("${cmd_writes} ${cmd_cosign} ${cmd_named} ${cmd_gated} ${cmd_prefix}")
+      cmd_stack+=("${cmd_writes} ${cmd_cosign} ${cmd_assign} ${cmd_named} ${cmd_gated} ${cmd_git} ${cmd_export} ${cmd_prefix}")
       reset_command
       continue
     fi
     if [[ "${words[idx]}" == '$)' ]] && ((${#cmd_stack[@]})); then
       check_gated_command
-      read -r cmd_writes cmd_cosign cmd_named cmd_gated cmd_prefix <<<"${cmd_stack[-1]}"
+      read -r cmd_writes cmd_cosign cmd_assign cmd_named cmd_gated cmd_git cmd_export cmd_prefix <<<"${cmd_stack[-1]}"
       unset 'cmd_stack[-1]'
       continue
     fi
@@ -750,14 +790,56 @@ for ((idx = 0; idx < ${#words[@]}; idx++)); do
     ;;
   *) ;;
   esac
-  ((cmd_named)) || ((${command_names[idx]:-0})) || continue
-  if ((cmd_named == 0)); then
-    cmd_named=1
-    [[ "${words[idx]}" == "cosign" ]] && cmd_cosign=1
+  # An assignment before the name is an environment the command runs under,
+  # never a word of its argv, so the scans that read words never see it. It is
+  # recorded for the command and decided when the command ends, because a
+  # refusal here would have to guess at a name that has not been seen yet.
+  if ((${name_assignments[idx]:-0})); then
+    cmd_assign=1
+    continue
   fi
+  ((cmd_named)) || ((${command_names[idx]:-0})) || continue
+  cmd_named=1
   if ((cmd_gated == 0)); then
+    # The words so far cannot grow into a gated prefix and this word may still
+    # be the name (a wrapper's own option came first): start over here. Without
+    # it `env -u X python3 tests/run_tests.py >cosign.pub` built the prefix
+    # `-u X python3 ...`, matched no row, and the redirection refusal never
+    # fired.
+    if [[ -n "${cmd_prefix}" ]] && ((cmd_git == 0)) && ((cmd_cosign == 0)) &&
+      ((${command_names[idx]:-0})) && ! prefix_could_match "${cmd_prefix}"; then
+      cmd_prefix=''
+    fi
+    # The name, decided here rather than at the first word of the command,
+    # because after a wrapper the wrapper's own option is a name candidate of
+    # its own (`env -u X git diff`). Once the name is git or cosign the restart
+    # above stops: every later word is a name candidate too, and `git`, `diff`
+    # and `HEAD` would each take their turn as the name.
+    [[ -z "${cmd_prefix}" && "${words[idx]}" == "git" ]] && cmd_git=1
+    [[ -z "${cmd_prefix}" && "${words[idx]}" == "cosign" ]] && cmd_cosign=1
+    # The export family. Its assignments stand *after* the name rather than
+    # before it, so the scan that records a leading `NAME=value` never sees
+    # them, and bash applies them to every later command of the string.
+    if [[ -z "${cmd_prefix}" ]]; then
+      case "${words[idx]}" in
+      export | declare | typeset | readonly) cmd_export=1 ;;
+      *) ;;
+      esac
+    fi
     cmd_prefix="${cmd_prefix:+${cmd_prefix} }${words[idx]}"
     command_is_gated "${cmd_prefix}" && cmd_gated=1
+  fi
+  # The last word position at which this string runs something the gate covers.
+  # Compared against the first exported assignment below, so that an export
+  # written *after* the command it cannot reach is left alone.
+  ((cmd_gated || cmd_git)) && gate_idx=${idx}
+  # A word of an export-family command that assigns. `export FOO=1` and
+  # `declare -x FOO=1` put FOO in the environment of every command bash runs
+  # after them in this string, which is the same reach as `FOO=1 cmd` by a
+  # spelling the leading-assignment scan is not looking at.
+  if ((cmd_export)) && ((export_idx < 0)) &&
+    [[ "${raw_words[idx]}" =~ ^[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?\+?= ]]; then
+    export_idx=${idx}
   fi
   ((cmd_cosign)) || continue
   case "${words[idx]}" in
@@ -769,6 +851,9 @@ for ((idx = 0; idx < ${#words[@]}; idx++)); do
   fi
 done
 check_gated_command
+# Decided once, over the whole string: the export may be written before the
+# command it arms, and only then does it reach it.
+((export_idx >= 0 && gate_idx > export_idx)) && refuse "${EXPORT_ENV_MSG}"
 
 # The whole string with quoting removed, for the one test that is a substring
 # match rather than a word: the shell removes quotes and backslashes on the

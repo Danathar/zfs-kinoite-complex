@@ -176,6 +176,12 @@ CMD_MSG='blocked: the name of a command in this string is not spelled literally 
 # shellcheck disable=SC2016 # the literal ${VAR} is what the reader has to see
 BRACE_MSG='blocked: bash expands braces before git sees the words, and this gate reads the words as typed, so a brace rebuilds both spellings it refuses: `git diff {/dev/null,./cosign.key}` passes the operand scan as one word and reaches git as two operands (the plain-file read), and `--outpu{t,t}=FILE` matches no word here and reaches git as --output=FILE. Expanding braces correctly means reimplementing bash inside a hook, so a brace bash could expand -- a { followed, anywhere later in the word, by a comma or a .. and then a }, or a ${VAR} -- is refused instead, and so is a process substitution (`git diff <(...)`), which supplies an operand this gate never saw. Write the command out in full. A brace with neither, such as HEAD@{1} or main@{upstream}, is a literal to bash and is not refused; a .. between two reflog entries (HEAD@{2}..HEAD@{1}) has the refused shape, so write HEAD~2..HEAD~1. Only words of a git invocation are affected: awk and jq programs elsewhere in the string are not.'
 
+# shellcheck disable=SC2016 # the backticks quote command spellings for the reader
+GIT_GLOBAL_MSG='blocked: a git global option written before the subcommand reaches the same primitives from outside the part an allow rule matches. `-c diff.external=/tmp/evil` runs that program once per changed path -- the config spelling of GIT_EXTERNAL_DIFF -- and `-c core.sshCommand`, `-c credential.helper` and `-c alias.x=!cmd` are the same shape; `--config-env` names an environment variable to take the value from; `-C <dir>` moves git to another directory, so `git -C /home/<user> diff -- .netrc .profile` printed a file outside this checkout while the containment test below resolved both operands inside it; and `--exec-path` is the value form of GIT_EXEC_PATH, which the environment rule refuses in every other spelling. So -c, -C, --config-env and --exec-path are refused between the name and the subcommand rather than stepped over. --git-dir, --work-tree, --namespace, --super-prefix and --attr-source only rename or relocate what git reports and are still stepped over.'
+
+# shellcheck disable=SC2016 # the backticks quote command spellings for the reader
+GLOB_MSG='blocked: bash expands a glob before git sees the words, so one word here is several operands at git and the operand scan never reaches the count it refuses at: `git diff /home/<user>/.ssh/*` is a single word to this gate and two operands to git, which prints the file. "A glob cannot leave the working directory" is no reason to expand it and check the result either, because the Read(...) deny rules this gate stands in front of name paths inside the checkout -- ./cosign.key, ./.env, **/*.pem. So a `*`, `?` or `[` bash would expand in a word of a git invocation is refused rather than expanded, for the reason the brace and $ rules give: expanding correctly means reimplementing bash in a hook. Quote the pathspec (`git diff -- '"'"'*.md'"'"'`), which is git'"'"'s own glob and is matched against repository content rather than the filesystem, or write the paths out.'
+
 # Fail closed. This gate stands in front of the pre-approved commands that can
 # read a denied path, so a missing dependency must not quietly disable it:
 # AGENTS.md section 0 rule 1 says a fail-closed check is never weakened to make
@@ -259,7 +265,9 @@ raw_words=()
 words=()
 kinds=()
 redirects=() # the operator, for a `target`; empty for anything else
+globs=()     # 1 when the word carries a `*`, `?` or `[` bash would expand
 raw_word=''
+raw_glob=0
 raw_quote=''
 raw_escaped=0
 redirect_pending=0 # the next word is the target of a redirection
@@ -272,7 +280,9 @@ push_word() {
   words+=("${raw_word//[\'\"\\]/}")
   kinds+=("$1")
   redirects+=("${2-}")
+  globs+=("${raw_glob}")
   raw_word=''
+  raw_glob=0
 }
 end_word() {
   [[ -n "${raw_word}" ]] || return 0
@@ -290,6 +300,7 @@ push_sep() {
   words+=("$1")
   kinds+=(sep)
   redirects+=('')
+  globs+=(0)
   redirect_pending=0
   redirect_op=''
 }
@@ -334,6 +345,7 @@ for ((i = 0; i < ${#command_string}; i++)); do
     # bash's `{name}>` form, which allocates a descriptor into the variable.
     if ((!redirect_pending)) && [[ "${raw_word}" =~ ^([0-9]+|\{[A-Za-z_][A-Za-z0-9_]*\})$ ]]; then
       raw_word=''
+      raw_glob=0
     else
       end_word
     fi
@@ -397,6 +409,14 @@ for ((i = 0; i < ${#command_string}; i++)); do
     fi
     ;;
   ';' | '`') push_sep "${ch}" ;;
+  '*' | '?' | '[')
+    # A pathname expansion. Recorded on the way past, where the quoting is
+    # still known: the spellings kept above have had their quotes removed,
+    # and `'*.md'` is a literal to bash while `*.md` is however many files
+    # match.
+    raw_glob=1
+    raw_word+="${ch}"
+    ;;
   *) raw_word+="${ch}" ;;
   esac
 done
@@ -611,6 +631,9 @@ for ((idx = 0; idx < ${#raw_words[@]}; idx++)); do
     fi
     if [[ "${kinds[idx]}" == word && "${raw_word}" == '~'* ]]; then
       refuse "${TILDE_MSG}"
+    fi
+    if [[ "${kinds[idx]}" == word ]] && ((${globs[idx]:-0})); then
+      refuse "${GLOB_MSG}"
     fi
     if [[ "${kinds[idx]}" == target ]] &&
       redirection_writes_a_path "${redirects[idx]}" "${words[idx]}"; then
@@ -1081,7 +1104,18 @@ for ((idx = 0; idx < ${#words[@]}; idx++)); do
       continue
     fi
     case "${word}" in
-    -C | -c | --git-dir | --work-tree | --namespace | --super-prefix | --config-env | --attr-source)
+    # The git-level options that load a program or move git somewhere else.
+    # Stepping over them was enough while the only question was where the
+    # subcommand is; it is not, because each reaches past the words an allow
+    # rule matched: `-c diff.external=` runs a program per changed path, and
+    # `-C <dir>` makes the containment test below answer about a directory
+    # git has already left. Both attached and separated values are the same
+    # option to git (`-C/tmp`, `-ccolor.ui=false`), so the pattern is the
+    # prefix; in this position no other git option begins with `-c` or `-C`.
+    -c* | -C* | --config-env | --config-env=* | --exec-path | --exec-path=*)
+      refuse "${GIT_GLOBAL_MSG}"
+      ;;
+    --git-dir | --work-tree | --namespace | --super-prefix | --attr-source)
       skip_git_option_value=1
       continue
       ;;

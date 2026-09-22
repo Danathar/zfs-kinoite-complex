@@ -1128,15 +1128,19 @@ class GateBehaviourTests(unittest.TestCase):
     # --- the scan's own edges ---------------------------------------------
 
     def test_a_two_token_git_global_option_does_not_hide_the_subcommand(self) -> None:
-        # Without skipping the value half, `/` is read as the subcommand, git
-        # is forgotten, and the operand scan never starts.
+        # `--git-dir` is stepped over rather than refused outright, so without
+        # skipping its value half, `/tmp/x` is read as the subcommand, git is
+        # forgotten, and the operand scan never starts.
+        self.assertRefused("git --git-dir=/tmp/x diff /dev/null /etc/shadow", "--no-index mode")
+        # `-C` and `-c` are refused outright now (GIT_GLOBAL_MSG), which is a
+        # stricter answer than the old two-operand fallback these used to
+        # reach only by accident.
         for command in (
             "git -C / diff /dev/null /etc/shadow",
             "git -c core.pager=cat diff /dev/null /etc/shadow",
-            "git --git-dir=/tmp/x diff /dev/null /etc/shadow",
         ):
             with self.subTest(command=command):
-                self.assertRefused(command, "--no-index mode")
+                self.assertRefused(command, "git global option")
 
     def test_an_operand_that_is_not_a_revision_here_is_refused(self) -> None:
         # The test is "does this checkout resolve the word as a commit", not
@@ -1146,6 +1150,64 @@ class GateBehaviourTests(unittest.TestCase):
         # depth-1 clone refuses `git diff HEAD~1 HEAD`, and why the cases
         # above name revisions this checkout actually has.
         self.assertRefused("git diff v0.0.0-not-a-tag HEAD", "--no-index mode")
+
+    def test_a_git_global_option_that_reaches_a_program_is_refused(self) -> None:
+        # `-c diff.external=` and its neighbours run a program from outside
+        # the part of the string an allow rule matched, exactly as
+        # GIT_EXTERNAL_DIFF does. Attached and separated spellings are the
+        # same option to git.
+        for command in (
+            "git -c diff.external=/tmp/evil diff HEAD~1 HEAD",
+            "git -cdiff.external=/tmp/evil diff HEAD~1 HEAD",
+            "git -c core.sshCommand=/tmp/evil diff HEAD~1 HEAD",
+            "git -c credential.helper=/tmp/evil diff HEAD~1 HEAD",
+            "git -c alias.x=!/tmp/evil diff HEAD~1 HEAD",
+            "git --config-env=diff.external=EVIL diff HEAD~1 HEAD",
+            "git --exec-path=/tmp/evil diff HEAD~1 HEAD",
+            "git --exec-path /tmp/evil diff HEAD~1 HEAD",
+        ):
+            with self.subTest(command=command):
+                self.assertRefused(command, "git global option")
+
+    def test_a_git_dash_capital_c_relocation_is_refused(self) -> None:
+        # `-C <dir>` moves git to another directory before the subcommand
+        # runs, so the containment test below would resolve both operands
+        # against a directory git already left. Attached (`-C/etc`) and
+        # separated (`-C /etc`) spellings are the same option.
+        for command in (
+            "git -C /etc diff -- passwd shadow",
+            "git -C/etc diff -- passwd shadow",
+        ):
+            with self.subTest(command=command):
+                self.assertRefused(command, "git global option")
+
+    def test_relocation_only_git_global_options_are_still_stepped_over(self) -> None:
+        # `--git-dir`, `--work-tree`, `--namespace`, `--super-prefix` and
+        # `--attr-source` only report where git looks; they load no program
+        # and the operand scan still runs on the words that follow.
+        self.assertAllowed("git --git-dir=.git diff HEAD")
+        self.assertAllowed("git --work-tree=. --git-dir=.git diff HEAD")
+
+    def test_a_glob_that_bash_expands_into_extra_operands_is_refused(self) -> None:
+        # Bash rewrites `/home/<user>/.ssh/*` into however many files match
+        # before git ever sees the word, so one operand in this string is
+        # several at git -- the same gap the two-operand test cannot close on
+        # its own, since it only counts what bash left behind.
+        for command in (
+            "git diff /home/user/.ssh/*",
+            "git diff HEAD -- *.key",
+            "git diff -- config.d/?ecret",
+            "git diff -- 'literal'*",
+        ):
+            with self.subTest(command=command):
+                self.assertRefused(command, "bash expands a glob")
+
+    def test_a_quoted_glob_character_is_gits_own_pathspec_and_is_allowed(self) -> None:
+        # `'*.md'` is a literal argument to bash; git receives the asterisk
+        # itself and applies its own pathspec matching. Nothing here expands
+        # it, so the extra-operand gap the refusal above closes never opens.
+        self.assertAllowed("git diff -- '*.md'")
+        self.assertAllowed("git diff HEAD -- \"*.md\"")
 
     # --- the same write, in the allow-listed commands that are not git -----
 

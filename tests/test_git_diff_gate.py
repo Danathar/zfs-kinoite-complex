@@ -510,6 +510,10 @@ class GateBehaviourTests(unittest.TestCase):
             "env FOO=$x git diff HEAD",
             "env -i PATH=$PATH git diff HEAD",
             "env -u X GIT_EXTERNAL_DIFF=/tmp/evil.sh git diff HEAD~1 HEAD",
+            "nice -n 5 GIT_EXTERNAL_DIFF=/tmp/evil.sh git diff HEAD~1 HEAD",
+            "timeout -s KILL 5 GIT_EXTERNAL_DIFF=/tmp/evil.sh git diff HEAD~1 HEAD",
+            "timeout 5 GIT_EXTERNAL_DIFF=/tmp/evil.sh git diff HEAD~1 HEAD",
+            "stdbuf -oL GIT_EXTERNAL_DIFF=/tmp/evil.sh git diff HEAD~1 HEAD",
             "git status; GIT_EXTERNAL_DIFF=/tmp/evil.sh git diff HEAD~1 HEAD",
             # The gated prefixes are covered by the same rule: the environment
             # decides where `gh` sends the token it is holding.

@@ -180,7 +180,7 @@ TILDE_MSG='blocked: an unquoted leading ~ is $HOME to bash and a literal directo
 CMD_MSG='blocked: the name of a command in this string is not spelled literally -- it is built by an expansion (`$G diff ...`, `$(printf git) diff ...`, a backtick in command position), by a brace (`{,git} diff ...`), or by a glob (`g?t`, `/usr/bin/g[i]t`) -- so neither this gate nor the allow rule that matched the string'"'"'s literal prefix can tell which command bash will run, and `G=git; $G diff /dev/null ./cosign.key` runs the plain-file read this gate exists to refuse. Spell every command name literally, and drop a variable assignment that only exists to build one. After a wrapper such as command, env, exec or timeout the same holds for every word of that command, since the wrapper'"'"'s own options are not modelled here; xargs'"'"'s own options are read, and held to the same test. A literal name after an assignment is not what this rule refuses -- the assignment has a refusal of its own -- and a literal path to git (`/usr/bin/git diff`) is read as git. env -S (--split-string) splits a quoted string into a command this gate never sees and is refused outright.'
 
 # shellcheck disable=SC2016 # the backticks quote command spellings for the reader
-WRAPPER_PATH_MSG='blocked: a wrapper written as a path (`./shim/nohup git diff HEAD`, `/tmp/timeout 5 python3 tests/run_tests.py`) runs the file at that path, while Claude Code'"'"'s permission matcher cuts a wrapper'"'"'s path at its last / or \ and matches the allow rule against the words after it -- so a file an agent wrote and named nohup or timeout runs with the approval meant for `git diff HEAD`. Only the bare name and /usr/bin/NAME or /bin/NAME are stepped over. Write the bare name (`nohup git diff HEAD`).'
+WRAPPER_PATH_MSG='blocked: a wrapper written as a path (`./shim/nohup git diff HEAD`, `/tmp/timeout 5 python3 tests/run_tests.py`) runs the file at that path, while Claude Code'"'"'s permission matcher cuts a wrapper'"'"'s path at its last / or \ and matches the allow rule against the words after it -- so a file an agent wrote and named nohup or timeout runs with the approval meant for `git diff HEAD`. An unquoted backslash needs no file: bash reads `/usr/bin\timeout 5 python3 tests/run_tests.py >out` as the missing command /usr/bintimeout, but truncates out before it says so, while the matcher saw timeout. Only the bare name and /usr/bin/NAME or /bin/NAME, typed without a backslash, are stepped over. Write the bare name (`nohup git diff HEAD`).'
 
 # shellcheck disable=SC2016 # the literal ${VAR} is what the reader has to see
 BRACE_MSG='blocked: bash expands braces before git sees the words, and this gate reads the words as typed, so a brace rebuilds both spellings it refuses: `git diff {/dev/null,./cosign.key}` passes the operand scan as one word and reaches git as two operands (the plain-file read), and `--outpu{t,t}=FILE` matches no word here and reaches git as --output=FILE. Expanding braces correctly means reimplementing bash inside a hook, so a brace bash could expand -- a { followed, anywhere later in the word, by a comma or a .. and then a }, or a ${VAR} -- is refused instead, and so is a process substitution (`git diff <(...)`), which supplies an operand this gate never saw. Write the command out in full. A brace with neither, such as HEAD@{1} or main@{upstream}, is a literal to bash and is not refused; a .. between two reflog entries (HEAD@{2}..HEAD@{1}) has the refused shape, so write HEAD~2..HEAD~1. Only words of a git invocation are affected: awk and jq programs elsewhere in the string are not.'
@@ -641,24 +641,28 @@ for ((idx = 0; idx < ${#words[@]}; idx++)); do
   fi
   word_is_literal "${raw_word}" "${word}" || refuse "${CMD_MSG}"
   # A wrapper, found by the last component of the word. Claude Code's
-  # matcher cuts a wrapper's path at its last `/` or `\` and matches the
-  # allow rule against the words after it, so `./shim/nohup git diff HEAD`
-  # and `'./shim\nohup' git diff HEAD` are approved as `git diff HEAD` --
-  # while bash runs the file at that path, which an agent can write. Only
-  # the bare name and the system copies, `/usr/bin/<name>` and
-  # `/bin/<name>`, are stepped over; any other path to a wrapper is refused
-  # (`WRAPPER_PATH_MSG`). The last component is read both ways: from the
-  # word bash runs, cut at `/`, and from the word with its quotes removed
-  # but its backslashes kept, cut at `/` or `\`, which is the matcher's.
-  # This runs after the literal test, so `$D/env` is still refused as a
-  # name built at runtime.
+  # matcher cuts a wrapper's path at its last `/` or `\`, on the text as
+  # typed, and matches the allow rule against the words after it, so
+  # `./shim/nohup git diff HEAD` and `'./shim\nohup' git diff HEAD` are
+  # approved as `git diff HEAD` -- while bash runs the file at that path,
+  # which an agent can write. An unquoted backslash does the same without a
+  # file: bash reads `/usr/bin\timeout` as `/usr/bintimeout`, which does not
+  # exist, but it has already truncated the target of
+  # `/usr/bin\timeout 5 python3 tests/run_tests.py >out` before it says so,
+  # and the matcher saw `timeout` and approved the rest. So the word as
+  # typed (quotes removed, backslashes kept) decides: a wrapper is stepped
+  # over only when that is exactly its bare name, `/usr/bin/<name>` or
+  # `/bin/<name>`, and any other spelling of one is refused
+  # (`WRAPPER_PATH_MSG`). The last component is read both ways -- from the
+  # word bash runs, cut at `/`, and from the typed word, cut at `/` or `\`
+  # -- so neither view can hide a wrapper from the other. This runs after
+  # the literal test, so `$D/env` is still refused as a name built at
+  # runtime.
+  typed="${raw_word//[\'\"]/}"
   wrapper="${word##*/}"
-  if ! is_wrapper "${wrapper}"; then
-    wrapper="${raw_word//[\'\"]/}"
-    wrapper="${wrapper##*[\\/]}"
-  fi
+  is_wrapper "${wrapper}" || wrapper="${typed##*[\\/]}"
   if is_wrapper "${wrapper}"; then
-    case "${word}" in
+    case "${typed}" in
     "${wrapper}" | "/usr/bin/${wrapper}" | "/bin/${wrapper}") ;;
     *) refuse "${WRAPPER_PATH_MSG}" ;;
     esac

@@ -1981,6 +1981,22 @@ CORPUS: tuple[Row, ...] = (
     ),
     Row(
         "command name",
+        "/usr/bin\\timeout 5 python3 tests/run_tests.py >out",
+        "refused",
+        "an unquoted backslash needs no file: bash looks for /usr/bintimeout, which does not "
+        "exist, after truncating out; the matcher cut at the backslash and saw timeout "
+        "(review on sensi#259)",
+        "a wrapper written as a path",
+    ),
+    Row(
+        "command name",
+        "x\\nohup python3 tests/run_tests.py >out",
+        "refused",
+        "the same with no path at all: the typed word ends in nohup at its last backslash",
+        "a wrapper written as a path",
+    ),
+    Row(
+        "command name",
         "/usr/bin/timeout 60 git diff HEAD",
         "allowed",
         "the system copy of a wrapper is the wrapper; only /usr/bin/<name> and /bin/<name> "
@@ -2263,10 +2279,10 @@ MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
         "./shim/nohup git diff HEAD",
     ),
     (
-        "a wrapper's path cut at a backslash as well as a slash",
-        'wrapper="${wrapper##*[\\\\/]}"',
-        'wrapper="${wrapper##*/}"',
-        "'./shim\\nohup' git diff HEAD",
+        "a wrapper's typed word cut at a backslash as well as a slash",
+        'wrapper="${typed##*[\\\\/]}"',
+        'wrapper="${typed##*/}"',
+        "/usr/bin\\timeout 5 python3 tests/run_tests.py >out",
     ),
     (
         "the words after xargs's command read as its arguments",

@@ -29,12 +29,13 @@ architecture overview. The install logic itself lives in
 
 ## Local Build
 
-CI uses [`.github/actions/build-native-image`](../.github/actions/build-native-image/action.yml), which calls `buildah build` directly with the same flags shown below. For local iteration you can invoke `podman build` directly against the repository root. `AKMODS_IMAGE` is the only build argument that is genuinely required outside CI, because the shared akmods cache image is the source of the `kmod-zfs` RPM for the primary kernel.
+CI uses [`.github/actions/build-native-image`](../.github/actions/build-native-image/action.yml), which calls `buildah build` directly with five build arguments -- `BASE_IMAGE`, `AKMODS_IMAGE`, `BREW_IMAGE`, `IMAGE_REPO` and `SIGNING_KEY_FILENAME` -- each set to the digest-pinned or run-specific value resolved for that run, plus provenance labels and `--format docker`. For local iteration you can invoke `podman build` directly against the repository root with the subset shown below. No build argument is strictly required, because every one has a default in `Containerfile`; the two worth passing are `AKMODS_IMAGE`, because the shared akmods cache image is the source of the `kmod-zfs` RPM for the primary kernel, and `BREW_IMAGE`, because its default is a floating tag (see note 4).
 
 ```bash
 podman build \
     --build-arg BASE_IMAGE=quay.io/fedora-ostree-desktops/kinoite:44 \
     --build-arg AKMODS_IMAGE=ghcr.io/danathar/zfs-kinoite-complex-akmods:main-44 \
+    --build-arg BREW_IMAGE="$(jq -r .DEFAULT_BREW_IMAGE ci/defaults.json)" \
     -t zfs-kinoite-complex:local \
     .
 ```
@@ -44,6 +45,8 @@ Notes:
 1. the `AKMODS_IMAGE` tag must match the Fedora major version of the chosen base image; inspect the base image (`skopeo inspect docker://<base>`) to confirm which `main-<fedora>` tag to reference. CI uses the digest-pinned form of that same cache image.
 2. `AKMODS_IMAGE` can be omitted for offline experiments; the install helper falls back to `AKMODS_IMAGE_TEMPLATE` and auto-detects the Fedora version from the base image, but that fallback still requires network access to pull the cache image
 3. local builds do not go through the candidate-before-promote flow or signing; the resulting image tag is ephemeral and is not trusted by any `bootc` policy
+4. `BREW_IMAGE` defaults to the floating `ghcr.io/ublue-os/brew:latest` in `Containerfile`. The build compares the brew payload's complete file list against [`build_files/brew-payload.manifest`](../build_files/brew-payload.manifest) and fails on any difference, and that manifest is kept in step with the digest-pinned `DEFAULT_BREW_IMAGE` in `ci/defaults.json`. Pass that pinned ref as above; a newer `latest` that adds or removes a path stops a local build at that check.
+5. `IMAGE_REPO` and `SIGNING_KEY_FILENAME` default to this repository's own values in `Containerfile`; pass them only when a fork publishes under a different name
 
 For reproducing a specific published image, prefer the CI workflow with `use_input_lock=true` (see [`ci/inputs.lock.json`](../ci/inputs.lock.json)) rather than a local `podman build`. The lock file pins the base image ref, the build container ref, the Homebrew payload image ref (if set; empty falls back to `DEFAULT_BREW_IMAGE` in `ci/defaults.json`), and the OpenZFS version (line plus, if set, the exact patch) from a prior run. It deliberately does **not** pin the akmods fork commit — that comes from `ci/defaults.json` so there is one source of truth — and it does not record the kernel set, which is re-derived from the pinned base image. Replay is therefore close to, but not the same as, a bit-for-bit reproduction.
 
@@ -54,10 +57,11 @@ If you clone this repository and want it to build from a different upstream base
 1. [`ci/defaults.json`](../ci/defaults.json)
    - update `DEFAULT_BASE_IMAGE`
    - this is the default base image used by the GitHub Actions workflows
+   - update `STABLE_SIGNAL_IMAGE` to the same image; the scheduled-build gate watches it, and the gate is only meaningful when it names the image the build actually consumes
 2. [`Containerfile`](../Containerfile)
    - update the fallback `ARG BASE_IMAGE`
    - this keeps local `podman build` runs aligned with CI defaults
-3. [`README.md`](../README.md) and any other docs/examples that mention the old base image
+3. this page's `podman build` example, and any other docs that name the old base image -- today [`docs/architecture-overview.md`](./architecture-overview.md) and [`docs/glossary.md`](./glossary.md)
    - update example `BASE_IMAGE` arguments and descriptive text so the docs match the build
 
 If you use workflow replay mode with `use_input_lock=true`, also check [`ci/inputs.lock.json`](../ci/inputs.lock.json). That lock file can pin one exact base image for a specific replayed run even after the normal defaults have changed.

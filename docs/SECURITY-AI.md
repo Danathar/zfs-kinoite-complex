@@ -140,7 +140,12 @@ Requires a human decision first — these mirror AGENTS.md section 0:
   `check_akmods_cache.py`, `install_zfs_from_akmods_cache.py`,
   `configure_signing_policy.py`.
 - **Widening any workflow's `permissions:` block**, or adding a secret to a job
-  that did not have one.
+  that did not have one. What each workflow's token may do is written down
+  twice: in the workflow, and in
+  [`.github/policies/workflow-permissions.json`](../.github/policies/workflow-permissions.json).
+  `tests/test_workflow_permissions_policy.py` fails when the two disagree, so a
+  workflow cannot gain a scope unless the same pull request also changes the
+  policy file, which is Tier 3.
 - **Lowering a coverage floor**, which is a claim that a code path went away.
 - **Adding a runtime dependency.** Everything here is Python standard library;
   see [`.github/copilot-instructions.md`](../.github/copilot-instructions.md).

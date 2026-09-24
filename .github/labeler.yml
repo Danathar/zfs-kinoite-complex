@@ -45,6 +45,11 @@
           # is a pool-compatibility decision, and DEFAULT_BUILD_CONTAINER_IMAGE
           # pins the privileged container that builds the akmods cache.
           - 'ci/defaults.json'
+          # What each workflow's GITHUB_TOKEN may do. docs/risk-tiers.md puts it
+          # in Tier 3: widening a token is a human decision (docs/SECURITY-AI.md),
+          # and tests/test_workflow_permissions_policy.py makes every widening
+          # an edit to this file.
+          - '.github/policies/workflow-permissions.json'
 
 'area/build':
   - changed-files:

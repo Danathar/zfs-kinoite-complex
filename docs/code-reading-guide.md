@@ -25,7 +25,7 @@ tests/                                unit tests plus the tests/e2e/ tier
 - `.github/workflows/build.yml`
   - main push/schedule/manual workflow
   - candidate-first build and promotion
-  - scheduled runs skip when the upstream Kinoite base image has not advanced since the last promoted image (see [`docs/safety-model.md`](./safety-model.md))
+  - scheduled runs skip when neither the upstream Kinoite base image nor the OpenZFS patch release has moved since the last promoted image (see [`docs/safety-model.md`](./safety-model.md))
 - `.github/workflows/build-branch.yml`
   - branch-tagged test builds
   - reuse or rebuild the shared akmods cache when the branch targets a new primary kernel

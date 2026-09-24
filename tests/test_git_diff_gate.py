@@ -2474,10 +2474,16 @@ class CorpusTests(GateRunner, unittest.TestCase):
 
     def test_the_shapes_recorded_as_not_reachable_are_still_not_reachable(self) -> None:
         allow = json.loads(SETTINGS.read_text(encoding="utf-8"))["permissions"]["allow"]
+        # A rule that names its program by path (`Bash(/usr/bin/bash -n:*)`)
+        # runs the same program, so the first word is compared by its last
+        # path component (review on #245).
         patterns = [
-            rule[len("Bash(") : -1].removesuffix(":*")
-            for rule in allow
-            if rule.startswith("Bash(")
+            " ".join([first.rsplit("/", 1)[-1], *rest])
+            for first, *rest in (
+                rule[len("Bash(") : -1].removesuffix(":*").split(" ")
+                for rule in allow
+                if rule.startswith("Bash(")
+            )
         ]
         self.assertTrue(patterns)
         for shape, command, why in UNREACHABLE_SHAPES:

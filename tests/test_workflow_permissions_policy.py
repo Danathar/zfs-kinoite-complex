@@ -4,7 +4,8 @@ What: Holds every workflow's token permissions to .github/policies/workflow-perm
 Doing: Reads each workflow's top-level and job-level `permissions:` blocks and compares them
 with the policy file in both directions: every workflow is listed and every listed workflow
 exists; each declared block matches the policy exactly; the jobs that declare a block are
-exactly the jobs the policy lists.
+exactly the jobs the policy lists; and no job is left on the repository's default token by
+declaring nothing under a workflow that declares nothing.
 Why: A workflow's permissions decide what its GITHUB_TOKEN can do -- push an image to GHCR,
 push a branch, open a pull request, mint an OIDC token. The only record of what each one is
 meant to hold was the workflow itself, so widening a token was a one-line edit inside a file a
@@ -148,6 +149,24 @@ def declared(text: str) -> dict[str, object]:
     return {"workflow": permissions_block(lines, 0), "jobs": jobs}
 
 
+def default_token_jobs(text: str) -> list[str]:
+    """
+    Jobs that get the repository's default token, because neither they nor
+    the workflow declare a block.
+
+    The policy can only hold what a workflow writes down. A job like that
+    gets whatever the repository or organisation default is, which can be
+    broader than any block here, and it would add nothing to the policy file
+    for a reviewer to see.
+    """
+
+    lines = text.splitlines()
+    if permissions_block(lines, 0) is not None:
+        return []
+    bodies, _ = job_lines(lines)
+    return sorted(set(bodies) - set(declared(text)["jobs"]))
+
+
 def workflow_files() -> list[Path]:
     return sorted(p for p in WORKFLOWS.iterdir() if p.suffix in {".yml", ".yaml"})
 
@@ -204,6 +223,20 @@ class PolicyMatchesWorkflowsTests(unittest.TestCase):
             with self.subTest(workflow=name):
                 self.assertTrue(entry["workflow"] or entry["jobs"], f"{name} declares no permissions")
 
+    def test_no_job_falls_back_to_the_default_token(self) -> None:
+        # A job with no block, in a workflow with no top-level block, gets the
+        # repository default token. The policy cannot record that, so adding
+        # such a job would widen a token without touching the policy file.
+        for path in workflow_files():
+            with self.subTest(workflow=path.name):
+                self.assertEqual(
+                    default_token_jobs(path.read_text(encoding="utf-8")),
+                    [],
+                    f"{path.name} has jobs that declare no permissions under a workflow that "
+                    "declares none, so they get the repository's default token. Give each "
+                    "one a permissions block and list it in the policy.",
+                )
+
 
 @unittest.skipIf(yaml is None, "PyYAML not installed")
 class ParserAgreesWithYamlTests(unittest.TestCase):
@@ -228,6 +261,9 @@ class ParserAgreesWithYamlTests(unittest.TestCase):
                     },
                 }
                 self.assertEqual(declared(text), expected)
+                # The default-token check counts jobs; a job the parser missed
+                # would be a job it could not flag.
+                self.assertEqual(sorted(job_lines(text.splitlines())[0]), sorted(loaded["jobs"]))
 
 
 class ParserTests(unittest.TestCase):
@@ -272,6 +308,18 @@ class ParserTests(unittest.TestCase):
         )
         self.assertNotEqual(widened, text, "test.yml no longer has the job block this case widens")
         self.assertNotEqual(declared(widened)["jobs"], POLICY["test.yml"]["jobs"])
+
+    def test_a_job_on_the_default_token_is_caught(self) -> None:
+        # Found by Codex on #249: test.yml declares no top-level block, so a
+        # new job with no block of its own matched the policy unchanged.
+        text = (WORKFLOWS / "test.yml").read_text(encoding="utf-8")
+        added = text + "  extra:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: echo hi\n"
+        self.assertEqual(default_token_jobs(text), [])
+        self.assertEqual(default_token_jobs(added), ["extra"])
+
+    def test_a_top_level_block_covers_jobs_without_one(self) -> None:
+        text = "permissions:\n  contents: read\njobs:\n  a:\n    runs-on: x\n"
+        self.assertEqual(default_token_jobs(text), [])
 
 
 if __name__ == "__main__":

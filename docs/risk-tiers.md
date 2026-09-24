@@ -18,7 +18,8 @@ how much of it to do.
 ### Tier 3 — can reach a booted machine
 
 **Anything touching the seven files in `AGENTS.md` section 0 rule 2**, plus the
-ZFS line and anything pool-facing. Labelled `area/safety-critical`.
+ZFS line, anything pool-facing, and the policy file that says what each
+workflow's token may do. Labelled `area/safety-critical`.
 
 - `.github/workflows/build.yml`
 - `.github/actions/publish-native-image/`
@@ -28,6 +29,8 @@ ZFS line and anything pool-facing. Labelled `area/safety-critical`.
 - `containerfiles/zfs-akmods/install_zfs_from_akmods_cache.py`
 - `files/scripts/configure_signing_policy.py`
 - `cosign.pub`, `ci/defaults.json`'s ZFS and base-image values
+- `.github/policies/workflow-permissions.json`, because a token that gains
+  `packages: write` can push an image to the registry these machines pull from
 
 **What it requires:** the full rubric. The safety-critical statement is
 mandatory and is the review, not a formality (`CONTRIBUTING.md` item 3). If the
@@ -54,7 +57,9 @@ image build, so say how the change was verified or say plainly that it was not.
 
 Watch specifically for a widened `permissions:` block, a new secret reference,
 or a new external action. Those are Tier 3 questions arriving inside a Tier 2
-diff.
+diff. A widened block cannot arrive alone: the unit suite fails until
+`.github/policies/workflow-permissions.json` changes in the same pull request,
+and that file is Tier 3.
 
 ### Tier 1 — can only break CI or mislead a reader
 

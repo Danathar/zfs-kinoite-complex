@@ -1,6 +1,6 @@
 """
 Script: tests/test_metrics_doc.py
-What: Holds docs/metrics.md to the commands, workflows and guard messages it tells an operator to run and read.
+What: Holds docs/metrics.md, and the dated snapshots under docs/metrics/, to the commands, workflows and guard messages they tell an operator to run and read.
 Doing: Tokenizes the document's bash blocks, joins every `gh` invocation's `--json` field list to the jq filter that reads it, compares the quoted coverage command against the three workflows that run it, executes tests/check_coverage.py to prove the message the document quotes is the message the gate prints, and runs the documented failure classifier against the real guard strings.
 Why: Almost every line of this page is either a command someone will run or a literal copied by hand out of the machine, and each one fails silently when the machine moves -- a dropped `--json` field prints `null`, a reworded guard makes the triage grep match nothing, which reads as "no failures of that class".
 Goal: Make a change that invalidates the documented measurement recipe fail in CI, instead of leaving an operator holding a command that quietly reports the wrong thing.
@@ -48,6 +48,7 @@ from tests.check_coverage import main as coverage_gate_main
 from tests.test_docs_consistency import REPO_ROOT
 
 DOC_PATH = REPO_ROOT / "docs" / "metrics.md"
+SNAPSHOT_DIR = REPO_ROOT / "docs" / "metrics"
 WORKFLOW_DIR = REPO_ROOT / ".github" / "workflows"
 THRESHOLDS_PATH = REPO_ROOT / ".coverage-thresholds.json"
 
@@ -82,6 +83,27 @@ JQ_FIELD = re.compile(r"(?<![A-Za-z0-9_])\.([A-Za-z_][A-Za-z0-9_]*)")
 
 def doc() -> str:
     return DOC_PATH.read_text(encoding="utf-8")
+
+
+def snapshots() -> list[Path]:
+    """The dated readings under docs/metrics/, oldest first."""
+
+    return sorted(SNAPSHOT_DIR.glob("*.md"))
+
+
+def pages() -> list[tuple[str, str]]:
+    """
+    docs/metrics.md and every dated snapshot, as `(path, text)`.
+
+    A snapshot is the same commands run once and pinned, so every check on a
+    command's shape -- the field/filter join, read-only, a workflow that
+    exists -- applies to it exactly as it applies to the page.
+    """
+
+    found = [(str(DOC_PATH.relative_to(REPO_ROOT)), doc())]
+    for path in snapshots():
+        found.append((str(path.relative_to(REPO_ROOT)), path.read_text(encoding="utf-8")))
+    return found
 
 
 def workflow(name: str) -> str:
@@ -195,11 +217,11 @@ def tokenize(text: str) -> list[str]:
 BOUNDARIES = frozenset({"|", ";", "(", ")", "\n"})
 
 
-def invocations(program: str) -> list[list[str]]:
-    """Every `program ...` argv in the document's bash blocks, in document order."""
+def invocations(program: str, text: str | None = None) -> list[list[str]]:
+    """Every `program ...` argv in a page's bash blocks (docs/metrics.md by default), in order."""
 
     found: list[list[str]] = []
-    for block in fenced_blocks(doc(), "bash"):
+    for block in fenced_blocks(doc() if text is None else text, "bash"):
         tokens = tokenize(block)
         for position, token in enumerate(tokens):
             if token != program:
@@ -236,11 +258,11 @@ def fields_read(program: str) -> set[str]:
     return set(JQ_FIELD.findall(head))
 
 
-def json_filter_pairs() -> list[tuple[list[str], list[str], str]]:
+def json_filter_pairs(text: str | None = None) -> list[tuple[list[str], list[str], str]]:
     """Every documented `gh` call that pairs `--json` with a jq filter."""
 
     pairs = []
-    for argv in invocations("gh"):
+    for argv in invocations("gh", text):
         fields = flag_value(argv, "--json")
         program = flag_value(argv, "-q", "--jq")
         if fields is None or program is None:
@@ -270,29 +292,30 @@ class GhInvocationTests(unittest.TestCase):
         self.assertGreaterEqual(len(json_filter_pairs()), 6)
 
     def test_every_filter_only_reads_requested_fields(self) -> None:
-        for argv, fields, program in json_filter_pairs():
-            with self.subTest(filter=program):
-                read = fields_read(program)
-                if not read:
-                    # The only filter allowed to read nothing is a bare count:
-                    # `-q 'length'` works whatever `--json` asked for. Anything
-                    # else reading nothing means the parse failed, and a failed
-                    # parse would make this whole test pass while checking
-                    # nothing.
+        for page, text in pages():
+            for argv, fields, program in json_filter_pairs(text):
+                with self.subTest(page=page, filter=program):
+                    read = fields_read(program)
+                    if not read:
+                        # The only filter allowed to read nothing is a bare
+                        # count: `-q 'length'` works whatever `--json` asked
+                        # for. Anything else reading nothing means the parse
+                        # failed, and a failed parse would make this whole test
+                        # pass while checking nothing.
+                        self.assertEqual(
+                            program.strip(),
+                            "length",
+                            f"no field read parsed out of {program!r}; the join is vacuous for "
+                            f"{' '.join(argv)}",
+                        )
+                        continue
+                    missing = sorted(read - set(fields))
                     self.assertEqual(
-                        program.strip(),
-                        "length",
-                        f"no field read parsed out of {program!r}; the join is vacuous for "
-                        f"{' '.join(argv)}",
+                        missing,
+                        [],
+                        f"{page}: {' '.join(argv)} filters on {missing} but does not request "
+                        "it with --json, so the documented command prints null",
                     )
-                    continue
-                missing = sorted(read - set(fields))
-                self.assertEqual(
-                    missing,
-                    [],
-                    f"{' '.join(argv)} filters on {missing} but does not request it with "
-                    "--json, so the documented command prints null",
-                )
 
     def test_every_gh_command_is_a_read(self) -> None:
         """
@@ -303,20 +326,21 @@ class GhInvocationTests(unittest.TestCase):
         """
 
         readers = {("pr", "list"), ("run", "list"), ("run", "view"), ("api",)}
-        for argv in invocations("gh"):
-            words = tuple(word for word in argv[1:] if not word.startswith("-"))
-            with self.subTest(command=" ".join(argv)):
-                self.assertIn(
-                    words[:2] if words[:2] in readers else words[:1],
-                    readers,
-                    f"{' '.join(argv)} is not one of the documented read commands",
-                )
-                if words[:1] == ("api",):
-                    self.assertIsNone(
-                        flag_value(argv, "-X", "--method"),
-                        "a documented `gh api` call names an HTTP method, so it is no "
-                        "longer a plain read",
+        for page, text in pages():
+            for argv in invocations("gh", text):
+                words = tuple(word for word in argv[1:] if not word.startswith("-"))
+                with self.subTest(page=page, command=" ".join(argv)):
+                    self.assertIn(
+                        words[:2] if words[:2] in readers else words[:1],
+                        readers,
+                        f"{page}: {' '.join(argv)} is not one of the documented read commands",
                     )
+                    if words[:1] == ("api",):
+                        self.assertIsNone(
+                            flag_value(argv, "-X", "--method"),
+                            f"a `gh api` call in {page} names an HTTP method, so it is no "
+                            "longer a plain read",
+                        )
 
     @unittest.skipUnless(shutil.which("jq"), "jq is not installed")
     def test_every_filter_runs_against_the_fields_it_requests(self) -> None:
@@ -327,42 +351,44 @@ class GhInvocationTests(unittest.TestCase):
         requested field the wrong way.
         """
 
-        for argv, fields, program in json_filter_pairs():
-            with self.subTest(filter=program):
-                # `gh pr list` and `gh run list` both return an array of objects;
-                # the values are shaped to the ones the document's own worked
-                # examples show.
-                sample = {
-                    "number": 28,
-                    "mergedAt": "2026-09-04T00:00:00Z",
-                    "author": {"login": "Danathar"},
-                    "createdAt": "2026-09-04T06:00:00Z",
-                    "conclusion": "failure",
-                    "databaseId": 4242,
-                }
-                one = {field: sample[field] for field in fields}
-                # `gh <thing> list` returns an array; `gh <thing> view` returns
-                # the object itself, and the documented filters are written for
-                # exactly that difference.
-                payload = json.dumps(one if "view" in argv else [one])
-                result = subprocess.run(
-                    ["jq", "-r", program],
-                    input=payload,
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                )
-                self.assertEqual(
-                    result.returncode,
-                    0,
-                    f"{' '.join(argv)}'s filter failed on its own fields: {result.stderr.strip()}",
-                )
-                self.assertNotIn(
-                    "null",
-                    result.stdout,
-                    f"{' '.join(argv)} prints null for a payload carrying every field it "
-                    "requested",
-                )
+        # `gh pr list` and `gh run list` both return an array of objects; the
+        # values are shaped to the ones the document's own worked examples show.
+        sample = {
+            "number": 28,
+            "state": "MERGED",
+            "mergedAt": "2026-09-04T00:00:00Z",
+            "author": {"login": "Danathar"},
+            "createdAt": "2026-09-04T06:00:00Z",
+            "conclusion": "failure",
+            "databaseId": 4242,
+        }
+        for page, text in pages():
+            for argv, fields, program in json_filter_pairs(text):
+                with self.subTest(page=page, filter=program):
+                    one = {field: sample[field] for field in fields}
+                    # `gh <thing> list` returns an array; `gh <thing> view`
+                    # returns the object itself, and the documented filters are
+                    # written for exactly that difference.
+                    payload = json.dumps(one if "view" in argv else [one])
+                    result = subprocess.run(
+                        ["jq", "-r", program],
+                        input=payload,
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    self.assertEqual(
+                        result.returncode,
+                        0,
+                        f"{page}: {' '.join(argv)}'s filter failed on its own fields: "
+                        f"{result.stderr.strip()}",
+                    )
+                    self.assertNotIn(
+                        "null",
+                        result.stdout,
+                        f"{page}: {' '.join(argv)} prints null for a payload carrying every "
+                        "field it requested",
+                    )
 
 
 class WorkflowTargetTests(unittest.TestCase):
@@ -374,41 +400,43 @@ class WorkflowTargetTests(unittest.TestCase):
     health.
     """
 
-    def documented_workflows(self) -> list[tuple[list[str], str, str | None]]:
+    def documented_workflows(self, text: str | None = None) -> list[tuple[list[str], str, str | None]]:
         named = []
-        for argv in invocations("gh"):
+        for argv in invocations("gh", text):
             name = flag_value(argv, "--workflow", "-w")
             if name is not None:
                 named.append((argv, name, flag_value(argv, "--event", "-e")))
         return named
 
     def test_every_named_workflow_is_tracked(self) -> None:
-        named = self.documented_workflows()
-        self.assertGreaterEqual(len(named), 3)
-        for argv, name, _ in named:
-            with self.subTest(workflow=name):
-                self.assertTrue(
-                    (WORKFLOW_DIR / name).is_file(),
-                    f"{' '.join(argv)} names .github/workflows/{name}, which does not exist",
-                )
+        self.assertGreaterEqual(len(self.documented_workflows()), 3)
+        for page, text in pages():
+            for argv, name, _ in self.documented_workflows(text):
+                with self.subTest(page=page, workflow=name):
+                    self.assertTrue(
+                        (WORKFLOW_DIR / name).is_file(),
+                        f"{page}: {' '.join(argv)} names .github/workflows/{name}, which does "
+                        "not exist",
+                    )
 
     def test_event_schedule_is_only_asked_of_a_scheduled_workflow(self) -> None:
-        for argv, name, event in self.documented_workflows():
-            if event != "schedule":
-                continue
-            with self.subTest(workflow=name):
-                text = workflow(name)
-                self.assertRegex(
-                    text,
-                    r"(?m)^  schedule:$",
-                    f"{' '.join(argv)} filters on --event schedule but {name} has no "
-                    "schedule trigger, so the documented command returns nothing",
-                )
-                self.assertRegex(
-                    text,
-                    r"(?m)^\s+- cron: ",
-                    f"{name} has a schedule: block with no cron entry",
-                )
+        for page, text in pages():
+            for argv, name, event in self.documented_workflows(text):
+                if event != "schedule":
+                    continue
+                with self.subTest(page=page, workflow=name):
+                    source = workflow(name)
+                    self.assertRegex(
+                        source,
+                        r"(?m)^  schedule:$",
+                        f"{page}: {' '.join(argv)} filters on --event schedule but {name} has "
+                        "no schedule trigger, so the documented command returns nothing",
+                    )
+                    self.assertRegex(
+                        source,
+                        r"(?m)^\s+- cron: ",
+                        f"{name} has a schedule: block with no cron entry",
+                    )
 
     def test_the_scheduled_workflow_is_the_one_that_moves_latest(self) -> None:
         """
@@ -943,13 +971,94 @@ class DatedFigureTests(unittest.TestCase):
         for path in sorted(WORKFLOW_DIR.glob("*.yml")):
             with self.subTest(workflow=path.name):
                 text = path.read_text(encoding="utf-8")
-                self.assertNotIn("docs/metrics.md", text)
+                # Covers the dated snapshots under docs/metrics/ too: each is
+                # read by hand and left as it was read.
+                self.assertNotIn("docs/metrics", text)
                 named = [
                     line.strip()
                     for line in text.splitlines()
                     if re.match(r"\s*(-\s*)?(name|run):", line) and "metric" in line.lower()
                 ]
                 self.assertEqual(named, [], f"{path.name} now collects metrics: {named}")
+
+
+class SnapshotTests(unittest.TestCase):
+    """
+    docs/metrics/YYYY-MM-DD.md is one reading of this page's numbers, and it
+    makes three promises in its first paragraph: it was read on the day in its
+    name, every command names this repository, and every command is pinned so
+    rerunning it later prints the numbers in the table. Each promise is a
+    string an edit can quietly break -- a `--repo` dropped when a command is
+    copied from the page, or a `--created` bound left at an older date -- and
+    the command still runs, printing numbers that no longer match the table.
+
+    The command-shape checks above (fields against filters, read-only, named
+    workflows) already run over every snapshot through pages().
+    """
+
+    # The repository every snapshot command names, so it reads this repository
+    # whatever the clone's remotes are.
+    REPO = "Danathar/zfs-kinoite-complex"
+
+    def test_the_page_points_at_a_snapshot_that_exists(self) -> None:
+        found = snapshots()
+        self.assertNotEqual(found, [], "docs/metrics/ holds no snapshot")
+        linked = re.findall(r"\]\(\./metrics/([^)#]+)\)", doc())
+        self.assertNotEqual(linked, [], "docs/metrics.md no longer links into docs/metrics/")
+        for name in linked:
+            with self.subTest(link=name):
+                self.assertIn(name, [path.name for path in found])
+
+    def test_each_snapshot_is_named_for_the_day_it_was_read(self) -> None:
+        for path in snapshots():
+            with self.subTest(snapshot=path.name):
+                day = dt.date.fromisoformat(path.stem).isoformat()
+                text = path.read_text(encoding="utf-8")
+                self.assertEqual(text.splitlines()[0], f"# Metrics snapshot — {day}")
+                self.assertIn(f"read once on {day}", " ".join(text.split()))
+
+    def test_each_snapshot_still_carries_its_commands(self) -> None:
+        # A floor on the tokenizer for these files, for the same reason as the
+        # page's own: every check below iterates over what it finds.
+        for path in snapshots():
+            with self.subTest(snapshot=path.name):
+                text = path.read_text(encoding="utf-8")
+                self.assertGreaterEqual(len(fenced_blocks(text, "bash")), 4)
+                self.assertGreaterEqual(len(invocations("gh", text)), 6)
+
+    def test_every_command_names_this_repository(self) -> None:
+        for path in snapshots():
+            for argv in invocations("gh", path.read_text(encoding="utf-8")):
+                with self.subTest(snapshot=path.name, command=" ".join(argv)):
+                    if argv[1] == "api":
+                        endpoint = next(word for word in argv[2:] if not word.startswith("-"))
+                        self.assertTrue(
+                            endpoint.startswith(f"repos/{self.REPO}/"),
+                            f"{endpoint} does not name {self.REPO}",
+                        )
+                    else:
+                        self.assertEqual(flag_value(argv, "--repo", "-R"), self.REPO)
+
+    def test_every_list_command_is_pinned_to_the_reading(self) -> None:
+        """
+        A run list is bounded by `--created '<day'`, the day in the file's
+        name, and a pull request list by one `.number <= N` shared by the whole
+        file. `gh run view` and `gh api` read one item named by a pinned list,
+        so they need no bound of their own.
+        """
+
+        for path in snapshots():
+            bounds: set[str] = set()
+            for argv in invocations("gh", path.read_text(encoding="utf-8")):
+                with self.subTest(snapshot=path.name, command=" ".join(argv)):
+                    if argv[1:3] == ["run", "list"]:
+                        self.assertEqual(flag_value(argv, "--created"), f"<{path.stem}")
+                    elif argv[1:3] == ["pr", "list"]:
+                        match = re.search(r"\.number <= (\d+)", flag_value(argv, "-q", "--jq") or "")
+                        self.assertIsNotNone(match, "a pull request list with no .number <= bound")
+                        bounds.add(match.group(1))
+            with self.subTest(snapshot=path.name):
+                self.assertEqual(len(bounds), 1, f"pull request bounds disagree: {sorted(bounds)}")
 
 
 if __name__ == "__main__":

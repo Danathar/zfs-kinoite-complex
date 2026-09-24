@@ -50,6 +50,10 @@
           # and tests/test_workflow_permissions_policy.py makes every widening
           # an edit to this file.
           - '.github/policies/workflow-permissions.json'
+          # The ruleset that keeps main behind a pull request. docs/risk-tiers.md
+          # puts it in Tier 3: loosening it reopens a direct push to main, and a
+          # push to main starts the build that signs and promotes.
+          - '.github/rulesets/**'
 
 'area/build':
   - changed-files:

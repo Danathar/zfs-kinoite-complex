@@ -42,6 +42,8 @@ docs/
   SECURITY-AI.md              <- what an agent may do unattended, and which inputs are hostile
   quality.md                  <- what each badge, gate, and fail-closed refusal actually means
   metrics.md                  <- reproducible commands, and what the numbers are worth at this scale
+docs/metrics/
+  YYYY-MM-DD.md               <- one dated reading of the numbers metrics.md describes, left as it was read
 docs/reflections/
   README.md                   <- what earns a retrospective entry, and how it differs from corrections.md
   YYYY-MM-DD-*.md             <- one durable lesson each, append-only

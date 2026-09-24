@@ -47,8 +47,9 @@ branch, what is done, what is not, and what you were about to check.
   (excluding `**/*.md` and `docs/**`), then builds, signs, and promotes to
   `:latest`. There is no staging tier. AGENTS.md section 0 rule 6: propose, do
   not push, promote, tag, or delete.
-- **`main` is not branch-protected.** A green `Python Unit Tests` check blocks
-  nothing; a person declining to merge is what blocks.
+- **`main` only changes through a pull request.** A ruleset refuses direct and
+  force pushes, and a pull request cannot merge until a green `Python Unit Tests`
+  check reports. See [`docs/branch-protection.md`](../docs/branch-protection.md).
 - **Image builds are slow.** Pushing a branch triggers `Build Or Reuse Shared
   ZFS Akmods Cache` and `Build Branch Image`; opening the pull request triggers
   `Build PR Image (No Push)`. They take tens of minutes. An `ai-fix/**` branch

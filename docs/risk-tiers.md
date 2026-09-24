@@ -18,8 +18,9 @@ how much of it to do.
 ### Tier 3 — can reach a booted machine
 
 **Anything touching the seven files in `AGENTS.md` section 0 rule 2**, plus the
-ZFS line, anything pool-facing, and the policy file that says what each
-workflow's token may do. Labelled `area/safety-critical`.
+ZFS line, anything pool-facing, the policy file that says what each
+workflow's token may do, and the ruleset that keeps `main` behind a pull request.
+Labelled `area/safety-critical`.
 
 - `.github/workflows/build.yml`
 - `.github/actions/publish-native-image/`
@@ -31,6 +32,9 @@ workflow's token may do. Labelled `area/safety-critical`.
 - `cosign.pub`, `ci/defaults.json`'s ZFS and base-image values
 - `.github/policies/workflow-permissions.json`, because a token that gains
   `packages: write` can push an image to the registry these machines pull from
+- `.github/rulesets/`, because the ruleset in it is what keeps `main`, and so
+  the signing build, behind a pull request. Loosening it reopens the direct
+  push; see [`branch-protection.md`](./branch-protection.md)
 
 **What it requires:** the full rubric. The safety-critical statement is
 mandatory and is the review, not a formality (`CONTRIBUTING.md` item 3). If the

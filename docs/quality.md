@@ -71,7 +71,7 @@ Two properties of the badge pipeline are deliberate:
 
 | Gate | Runs on | Blocks |
 | --- | --- | --- |
-| `Python Unit Tests` (`test.yml`) | every PR and push to `main` | **nothing automatically** — see below |
+| `Python Unit Tests` (`test.yml`) | every PR and push to `main` | **merging the pull request**, through the ruleset on `main` — not publishing. See below |
 | `ruff check` | same job | same |
 | Per-module coverage floors (`tests/check_coverage.py`) | same job | same |
 | `Evaluate Stable Signal Gate` (`build.yml`) | scheduled and `main` pushes | *skips* the build on a scheduled run when upstream has not moved (`build.yml:120`) — a skip, not a failure |
@@ -91,12 +91,14 @@ Two properties of the badge pipeline are deliberate:
 > in [`install-and-verify.md`](./install-and-verify.md); do not infer it from
 > the run's colour.
 
-### The first three block nothing on their own
+### The first three block a merge, not a publish
 
-`main` is **not branch-protected** — `gh api repos/{owner}/{repo}/branches/main/protection`
-returns `Branch not protected`. So a red `Python Unit Tests` does not prevent a
-merge; a person deciding not to merge is what prevents it. Worth knowing before
-treating a green check mark as a gate.
+`main` has a ruleset that requires `Python Unit Tests` to pass before a pull
+request can merge, and refuses any push to `main` that is not a pull request
+merge. [`branch-protection.md`](./branch-protection.md) explains each rule and
+how to check that it is still applied. So a red `Python Unit Tests` stops the
+merge. It does not stop a publish: `build.yml` does not run the unit suite, so
+the daily scheduled build signs and promotes whatever is on `main` without it.
 
 The rows below it are different: those run inside `build.yml` and stop the
 publish itself.
@@ -180,9 +182,9 @@ only one of them can publish anything signed:
 | Workflow | Runs on | A red run means |
 | --- | --- | --- |
 | `build.yml` | push to `main`, and 06:00 UTC daily | The production path — **the only one that can have moved `:latest`.** Usually nothing was published, but not always: see the warning below. |
-| `build-pr.yml` | every pull request | Validation only. Its header says it intentionally stops before any push or signing step, so nothing was published either way. |
+| `build-pr.yml` | every pull request that changes something other than Markdown or `docs/**` | Validation only. Its header says it intentionally stops before any push or signing step, so nothing was published either way. |
 | `build-branch.yml` | push to any branch except `main` and `ai-fix/**` | A branch test image. Publishes *unsigned* `br-*` tags, and only for human-attributed pushes. Never promoted. |
-| `test.yml` | every pull request and push to `main` | Lint, unit suite, coverage floors. Blocks nothing automatically — see above. |
+| `test.yml` | every pull request and push to `main` | Lint, unit suite, coverage floors. A red run on a pull request stops it merging — see above. |
 
 **Then check that it actually failed.** `gh run list --workflow build.yml
 --limit 10 --json createdAt,conclusion` distinguishes `failure` from

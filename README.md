@@ -128,6 +128,7 @@ Start here depending on what you want:
 | review someone else's change | [`docs/review-rubric.md`](./docs/review-rubric.md) |
 | know how much scrutiny a change needs | [`docs/risk-tiers.md`](./docs/risk-tiers.md) |
 | let an AI agent work here safely | [`docs/SECURITY-AI.md`](./docs/SECURITY-AI.md) |
+| know what stops a direct push to `main` | [`docs/branch-protection.md`](./docs/branch-protection.md) |
 | learn what past mistakes here should change | [`docs/reflections/`](./docs/reflections/) |
 | know what green means here, and what it does not | [`docs/quality.md`](./docs/quality.md) |
 | get a number out of this repo without over-reading it | [`docs/metrics.md`](./docs/metrics.md) |

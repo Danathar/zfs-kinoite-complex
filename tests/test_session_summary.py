@@ -19,9 +19,10 @@ that believes it.
 
 Three deliberate omissions, named so they do not read as oversights.
 
-"`main` is not branch-protected" is a fact about repository settings, not about the tree. A test
-can only settle it through the GitHub API, which needs a token and a network the unit suite does
-not have, so it stays a review claim. The same goes for `:latest` being published and current,
+Whether the ruleset on `main` is live is a fact about repository settings, not about the tree.
+A test can only settle it through the GitHub API, which needs a token and a network the unit suite
+does not have, so it stays a review claim; tests/test_branch_protection.py checks the committed
+ruleset, and docs/branch-protection.md carries the commands that show the live one. The same goes for `:latest` being published and current,
 and for the "about ten seconds" and "tens of minutes" timings: those are observations about runs,
 and the tree holds no record to recompute them from. What *is* checked about the current-state
 paragraph is the part the tree can settle -- that the ZFS series and the Fedora major it names
@@ -360,15 +361,15 @@ class StandingConstraints(unittest.TestCase):
                 f"AGENTS.md section {section} rule {rule} does not say {verb.strip()!r}",
             )
 
-    def test_the_check_that_blocks_nothing_is_a_real_job_name(self):
-        """"A green `Python Unit Tests` check blocks nothing".
+    def test_the_check_a_merge_waits_for_is_a_real_job_name(self):
+        """"A pull request cannot merge until a green `Python Unit Tests` check reports".
 
-        Whether `main` is branch-protected is a repository setting and is not checked here --
-        see this module's header. That the named check exists at all is checkable, and a
-        renamed job would leave a session watching for a check GitHub never reports.
+        Whether the ruleset is live is a repository setting and is not checked here -- see this
+        module's header. That the named check exists at all is checkable, and a renamed job
+        would leave a session watching for a check GitHub never reports.
         """
-        claim = bullet(self.text, "branch-protected.")
-        check = re.search(r"A green `([^`]+)` check", claim).group(1)
+        claim = bullet(self.text, "only changes through a pull request.")
+        check = re.search(r"a green `([^`]+)`\s+check", claim).group(1)
         self.assertIn(check, self.jobs, f"no workflow defines a job named {check!r}")
 
     def test_the_slow_builds_bullet_names_the_right_trigger_for_each_job(self):

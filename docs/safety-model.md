@@ -17,7 +17,7 @@ the production boundary.
 The workflow is deliberately candidate-first:
 
 1. resolve and record the Fedora Kinoite base, kernel set, OpenZFS release,
-   akmods commit, and cache digest
+   akmods commit, Homebrew payload image, and cache digest
 2. reuse or rebuild a signed akmods cache containing the supported primary
    kernel's `kmod-zfs` package
 3. build and sign a candidate image
@@ -27,9 +27,11 @@ The workflow is deliberately candidate-first:
 If a candidate fails, the previous `latest` digest remains in place.
 
 CI does not boot the image or import a real pool before promotion. The
-`bootc container lint` check, package/module checks, signature verification,
-and unit tests are useful gates, but they are not a substitute for testing the
-image on disposable hardware and test pools.
+`bootc container lint` check, package/module checks, and signature verification
+run inside `build.yml` and stop promotion when they fail, but they are not a
+substitute for testing the image on disposable hardware and test pools. The
+unit tests are not among those gates: they run in `test.yml`, a separate
+workflow that promotion does not wait on (see [`quality.md`](./quality.md)).
 
 ## ZFS userspace and kernel-module versions
 

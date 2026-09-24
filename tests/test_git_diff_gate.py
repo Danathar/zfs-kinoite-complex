@@ -2500,6 +2500,38 @@ class CorpusTests(GateRunner, unittest.TestCase):
                     f"The note that is now stale reads: {why}",
                 )
 
+    def test_no_allow_rule_reaches_a_redirection_written_after_a_group(self) -> None:
+        # `(git diff HEAD) >cosign.pub` and `{ git log --stdin; } <cosign.key`
+        # write and read the same files as the refused `git diff HEAD
+        # >cosign.pub` and `git log --stdin <cosign.key`, but the redirection
+        # stands outside the git command, and the gate does not charge it to
+        # git (issue #246). It does not need to while nothing here reaches
+        # those strings: Claude Code asks before it runs any command that
+        # contains a subshell or a brace group, whatever the allow rows say
+        # about the command inside ("Contains subshell", "Contains
+        # compound_statement"). Checked on 2.1.273 and 2.1.280 with
+        # `Bash(git diff:*)` and `Bash(git log:*)` allowed, in the default and
+        # acceptEdits modes. The one way such a string ran with no prompt was a
+        # row that names the grouped string itself (`Bash({ git diff HEAD; }
+        # >out3.txt)` ran exactly that string), or a bare `Bash` row that allows
+        # everything. This fails if a row like that is added.
+        allow = json.loads(SETTINGS.read_text(encoding="utf-8"))["permissions"]["allow"]
+        patterns = {rule: rule[len("Bash(") : -1] for rule in allow if rule.startswith("Bash(")}
+        self.assertTrue(patterns)
+        reaching = [rule for rule in allow if rule == "Bash"] + [
+            rule
+            for rule, pattern in patterns.items()
+            if any(character in pattern for character in "(){}")
+            or pattern.removesuffix(":*").strip() in ("", "*")
+        ]
+        self.assertEqual(
+            reaching,
+            [],
+            f"{reaching} can let a command that contains a subshell or a brace group run "
+            "with no prompt, and the gate does not charge a redirection written after the "
+            "group to the command inside it. Teach the gate that before adding the row.",
+        )
+
     @staticmethod
     def committed_repository(tmp: str) -> Path:
         """A throwaway repository with one commit and one uncommitted change."""

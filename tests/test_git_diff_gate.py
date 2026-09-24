@@ -2254,6 +2254,18 @@ UNREACHABLE_SHAPES: tuple[tuple[str, str, str], ...] = (
         ),
     ),
     (
+        "bash -n options that print what bash reads, and the file it opens",
+        "bash",
+        (
+            "-n stops bash running a script, not printing it: `bash -n -v ./cosign.key` prints "
+            "the key, -o history and -i copy every line into ~/.bash_history, and a syntax "
+            "error prints its line, so `bash -n .env` can print a value -- the shape "
+            "aurora-zfs-simple#233 and arch-bootc#345 fixed in hooks whose settings allow "
+            "`bash -n`. No allow rule here runs bash, so each of those prompts on its own, and "
+            "this hook has none of the bash -n rules; port them before adding such a row."
+        ),
+    ),
+    (
         "pytest's -p, -W, --pdbcls and --doctest-modules",
         "python3 -m pytest",
         (

@@ -15,8 +15,8 @@ number is stale; that is expected, and it is why each one carries a date.
 
 Dated readings of every section below are kept in
 [`docs/metrics/`](./metrics/2026-09-24.md), one file per reading, named for the
-day it was taken. Each carries the exact commands that produced it, pinned to a
-fixed range so they reproduce, and is left as it was read.
+day it was taken. Each carries the exact commands that produced it, scoped to a
+fixed range of pull requests and runs, and is left as it was read.
 
 [`docs/quality.md`](./quality.md) is the companion: this page is how to get
 numbers, that one is what the gates and signals mean.

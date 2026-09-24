@@ -360,6 +360,7 @@ class GhInvocationTests(unittest.TestCase):
             "author": {"login": "Danathar"},
             "createdAt": "2026-09-04T06:00:00Z",
             "conclusion": "failure",
+            "event": "push",
             "databaseId": 4242,
         }
         for page, text in pages():
@@ -986,8 +987,8 @@ class SnapshotTests(unittest.TestCase):
     """
     docs/metrics/YYYY-MM-DD.md is one reading of this page's numbers, and it
     makes three promises in its first paragraph: it was read on the day in its
-    name, every command names this repository, and every command is pinned so
-    rerunning it later prints the numbers in the table. Each promise is a
+    name, every command names this repository, and every command is scoped to a
+    fixed range so rerunning it later reads the same pull requests and runs. Each promise is a
     string an edit can quietly break -- a `--repo` dropped when a command is
     copied from the page, or a `--created` bound left at an older date -- and
     the command still runs, printing numbers that no longer match the table.

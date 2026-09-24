@@ -7,7 +7,7 @@
 [![OpenZFS/kernel status](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FDanathar%2Fzfs-kinoite-complex%2Fstatus%2Fakmods-badge.json)](https://github.com/Danathar/zfs-kinoite-complex/issues?q=is%3Aissue+is%3Aopen+label%3Aakmods-failure)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Danathar/zfs-kinoite-complex)
 [![Maintenance assisted by Hivecommons Hive](https://img.shields.io/badge/maintenance%20assisted%20by-Hivecommons%20Hive-1f6feb)](https://github.com/hivecommons/hive)
-[![ACMM L4 Security-Aware](https://img.shields.io/badge/ACMM-L4%20Security--Aware-2da44e)](https://github.com/hivecommons/hive#acmm-levels)
+[![ACMM L5 Semi-Autonomous](https://img.shields.io/badge/ACMM-L5%20Semi--Autonomous-2da44e)](https://github.com/hivecommons/hive#acmm-levels)
 [![AI assisted](https://img.shields.io/badge/AI-assisted-d29922)](#about-this-project)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
 
@@ -162,16 +162,19 @@ before redistributing this image or basing a downstream image on it.
 
 > [!NOTE]
 > **Maintenance on this repository is assisted by
-> [Hivecommons Hive](https://github.com/hivecommons/hive) at ACMM level 4.**
+> [Hivecommons Hive](https://github.com/hivecommons/hive) at ACMM level 5.**
 >
 > The repository is maintained by [@Danathar](https://github.com/Danathar). Hive orchestrates a
-> fleet of AI agents that continuously review this codebase and report what they find as issues
-> here.
+> fleet of AI agents that continuously review this codebase and report what they find here as
+> issues and pull requests.
 >
-> At **L4 (Security-Aware)** all agents may file issues, and the quality, sec-check and CI
-> agents may additionally open pull requests that carry a `hold` label. The rest stay advisory:
-> they report, they do not act. Every change is still reviewed and merged by a human
-> maintainer.
+> At **L5 (Semi-Autonomous)** all agents may file issues and open pull requests. Hive puts a
+> `hold` label on every agent pull request automatically, and nothing merges on its own: a human
+> maintainer reviews them in batches and merges the ones that should land. L5 also adds three
+> agents. The reviewer works through the open pull requests and backs each finding with a file
+> and line; it never merges, approves or closes one. The architect writes RFCs and opens pull
+> requests for structural changes. The strategist coordinates work across the other agents. The
+> telemetry and operations agents are part of L5 but start paused.
 >
 > Labels in this repository carry approval authority, and automation here must never apply one.
 > [`docs/SECURITY-AI.md`](./docs/SECURITY-AI.md) records which labels those are and why.

@@ -2254,6 +2254,18 @@ UNREACHABLE_SHAPES: tuple[tuple[str, str, str], ...] = (
         ),
     ),
     (
+        "bash -n options that print what bash reads, and the file it opens",
+        "bash",
+        (
+            "-n stops bash running a script, not printing it: `bash -n -v ./cosign.key` prints "
+            "the key, -o history and -i copy every line into ~/.bash_history, and a syntax "
+            "error prints its line, so `bash -n .env` can print a value -- the shape "
+            "aurora-zfs-simple#233 and arch-bootc#345 fixed in hooks whose settings allow "
+            "`bash -n`. No allow rule here runs bash, so each of those prompts on its own, and "
+            "this hook has none of the bash -n rules; port them before adding such a row."
+        ),
+    ),
+    (
         "pytest's -p, -W, --pdbcls and --doctest-modules",
         "python3 -m pytest",
         (
@@ -2462,10 +2474,16 @@ class CorpusTests(GateRunner, unittest.TestCase):
 
     def test_the_shapes_recorded_as_not_reachable_are_still_not_reachable(self) -> None:
         allow = json.loads(SETTINGS.read_text(encoding="utf-8"))["permissions"]["allow"]
+        # A rule that names its program by path (`Bash(/usr/bin/bash -n:*)`)
+        # runs the same program, so the first word is compared by its last
+        # path component (review on #245).
         patterns = [
-            rule[len("Bash(") : -1].removesuffix(":*")
-            for rule in allow
-            if rule.startswith("Bash(")
+            " ".join([first.rsplit("/", 1)[-1], *rest])
+            for first, *rest in (
+                rule[len("Bash(") : -1].removesuffix(":*").split(" ")
+                for rule in allow
+                if rule.startswith("Bash(")
+            )
         ]
         self.assertTrue(patterns)
         for shape, command, why in UNREACHABLE_SHAPES:

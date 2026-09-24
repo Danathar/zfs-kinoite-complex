@@ -92,9 +92,34 @@
 # refused outright, whatever it targets, on the same ground as `--output`:
 # these commands print to stdout, and that is what to read. `>&N`, `N>&M`
 # and `>&-` name a descriptor rather than a path and are not refused; nor is
-# any input redirection (`<`, `<<`, `<<<`, `<&`); nor is a redirection on
-# some other command of the same string that no allow rule covers
-# (`echo x >out; git diff HEAD` is echo's own).
+# a redirection on some other command of the same string that no allow rule
+# covers (`echo x >out; git diff HEAD` is echo's own). An input redirection
+# opens nothing for writing and is decided with the reads below.
+#
+# The read primitive has a second door that needs no operand at all:
+# `git blame` takes a file from its options. `--contents FILE` annotates
+# FILE's lines in place of the working copy's, so `git blame --contents
+# ./cosign.key README.md` prints every line of the key; `-S FILE` reads a
+# graft file and reports each line it cannot parse as `error: bad graft
+# data: LINE`, which is every line of a key or a .env; and
+# `--ignore-revs-file FILE` stops at the first line with `fatal: invalid
+# object name: LINE`. blame parses its options with git's parse-options,
+# which takes any unambiguous prefix of a long option, so `--con`,
+# `--content=` and `--ignore-revs` are those same options; and a short
+# option that takes a value takes the rest of its word, so `-wS.env` is
+# `-w -S .env`. They are refused in a blame or annotate invocation in each
+# of those spellings. `-S` is refused there only: in diff, log and show it
+# is the pickaxe, and its value is a search string rather than a path.
+#
+# The shell spells that read too. `<FILE` puts a file on git's stdin, and
+# three allow-listed forms print what they read there: `git blame
+# --contents - README.md <.env` prints every line, and `git log --stdin
+# <.env` and `git show --stdin <.env` print the first as a bad revision. So
+# an input redirection from a path inside a git invocation is refused,
+# wherever in the command it is written, except `</dev/null`, which has
+# nothing to print. A here-document or here-string (`<<`, `<<<`) carries
+# text typed into the command itself and `<&N` duplicates a descriptor;
+# neither opens a path, and neither is refused.
 #
 # The write primitive is not git's alone, and the rest of the allow list
 # reaches it two ways. The shell spelling works on every one of them, because
@@ -171,7 +196,13 @@ DIFF_MSG='blocked: this git diff would compare paths as plain files (git'"'"'s -
 OUT_MSG='blocked: git --output=FILE (and the space form) writes this diff or log to the path it names instead of stdout, overwriting any file this uid can reach -- cosign.pub, ci/inputs.lock.json, .claude/settings.json, this hook, ~/.ssh/authorized_keys -- with no Read(...) or Write(...) deny rule in its way. git diff, git log and git show print to stdout; read that instead. --output-indicator-* is a different flag and is unaffected.'
 
 # shellcheck disable=SC2016 # the backticks quote command spellings for the reader
-REDIRECT_MSG='blocked: an output redirection (>, >>, >|, &>, &>>, N>, >&FILE, <>) inside a git invocation makes the shell open its target for writing before git runs -- `git diff HEAD >cosign.pub` truncates the trust anchor, and `>> .claude/settings.json` or `2> .claude/hooks/gate-git-diff.sh` reach any file this uid can write -- and the allow rule for git diff, git log and git show sees none of it. These commands print to stdout; read that instead. Descriptor forms (2>&1, >&2, >&-) and input redirections (<, <<, <<<, <&) are not affected, and a redirection on another command of the same string is that command'"'"'s own.'
+REDIRECT_MSG='blocked: an output redirection (>, >>, >|, &>, &>>, N>, >&FILE, <>) inside a git invocation makes the shell open its target for writing before git runs -- `git diff HEAD >cosign.pub` truncates the trust anchor, and `>> .claude/settings.json` or `2> .claude/hooks/gate-git-diff.sh` reach any file this uid can write -- and the allow rule for git diff, git log and git show sees none of it. These commands print to stdout; read that instead. Descriptor forms (2>&1, >&2, >&-) are not affected, and a redirection on another command of the same string is that command'"'"'s own.'
+
+# shellcheck disable=SC2016 # the backticks quote command spellings for the reader
+STDIN_MSG='blocked: an input redirection from a file (<FILE) inside a git invocation hands that file to git on stdin, and allow-listed git commands print what they read there -- `git blame --contents - README.md <.env` prints every line of it, and `git log --stdin <cosign.key` and `git show --stdin <cosign.key` print its first line as a bad revision -- past the Read(...) deny rules in .claude/settings.json, which gate the Read tool and not the shell. Name revisions and paths as arguments instead. </dev/null, a here-document or here-string (<<, <<<) and a descriptor form (<&0) open no file and are not affected.'
+
+# shellcheck disable=SC2016 # the backticks quote command spellings for the reader
+BLAME_MSG='blocked: git blame (and annotate) reads a file named by a blame option and prints it -- `--contents FILE` annotates every line of FILE, `-S FILE` reports every line of FILE as bad graft data, and `--ignore-revs-file FILE` reports its first line as an invalid object name -- so `git blame --contents ./cosign.key README.md` prints the signing key past the Read(...) deny rules in .claude/settings.json. blame takes any unambiguous prefix of a long option (--con, --content=, --ignore-revs) and the rest of a short option'"'"'s word as its value (-wS.env), so those spellings are refused too. Blame the working copy of a tracked file, or name revisions to skip with --ignore-rev REV.'
 
 # shellcheck disable=SC2016 # the literal $HOME is what the reader has to see
 TILDE_MSG='blocked: an unquoted leading ~ is $HOME to bash and a literal directory inside this checkout to this gate, so the path checked here is not the path git would open: `git diff -- ~/.aws/credentials ~/.bashrc` resolved both operands inside the working tree and printed both files out of the home directory as a plain-file diff, past the Read(...) deny rules in .claude/settings.json. A word of a git invocation that begins with an unquoted ~ (~/..., ~user/..., or ~ alone) is refused rather than expanded. Spell the path out in full, relative to the checkout. A tilde inside a word (HEAD~1) and a quoted or escaped one are literals to bash and are not refused by this rule.'
@@ -687,6 +718,15 @@ for ((idx = 0; idx < ${#words[@]}; idx++)); do
   ((after_wrapper)) || command_word_pending=0
 done
 
+# Whether the shell hands git a file on stdin: `<FILE`, the one input form
+# that opens a path. `<<` and `<<<` carry text typed into the command, `<&N`
+# duplicates a descriptor, and `<>` is refused as a write already. /dev/null
+# has nothing to print.
+redirection_reads_a_path() {
+  local op="$1" target="$2"
+  [[ "${op}" == '<' && "${target}" != /dev/null ]]
+}
+
 # Whether the shell opens a redirection's target for writing. Every operator
 # with a `>` in it does -- `>`, `>>`, `>|`, `&>`, `&>>`, and `<>`, which
 # opens read-write and creates the file -- and so does `>&` when its target
@@ -744,6 +784,8 @@ redirection_writes_a_path() {
 raw_in_git=0
 writing_redirect=0
 prefix_writing_redirect=0 # a writing target seen before this command's git word
+reading_redirect=0
+prefix_reading_redirect=0 # the same, for a file put on stdin (`<.env git log --stdin`)
 scope_stack=()            # the outer command's state, while a `$(...)` is being read
 for ((idx = 0; idx < ${#raw_words[@]}; idx++)); do
   if [[ "${kinds[idx]}" == sep ]]; then
@@ -752,14 +794,15 @@ for ((idx = 0; idx < ${#raw_words[@]}; idx++)); do
     # saved at the `$(` and restored at its `)` rather than reset.
     # shellcheck disable=SC2016 # the literal `$(` is the separator's name
     if [[ "${words[idx]}" == '$(' ]]; then
-      scope_stack+=("${raw_in_git} ${prefix_writing_redirect}")
+      scope_stack+=("${raw_in_git} ${prefix_writing_redirect} ${prefix_reading_redirect}")
     elif [[ "${words[idx]}" == '$)' ]] && ((${#scope_stack[@]})); then
-      read -r raw_in_git prefix_writing_redirect <<<"${scope_stack[-1]}"
+      read -r raw_in_git prefix_writing_redirect prefix_reading_redirect <<<"${scope_stack[-1]}"
       unset 'scope_stack[-1]'
       continue
     fi
     raw_in_git=0
     prefix_writing_redirect=0
+    prefix_reading_redirect=0
     continue
   fi
   raw_word="${raw_words[idx]}"
@@ -778,13 +821,18 @@ for ((idx = 0; idx < ${#raw_words[@]}; idx++)); do
       redirection_writes_a_path "${redirects[idx]}" "${words[idx]}"; then
       writing_redirect=1
     fi
-  elif [[ "${kinds[idx]}" == target ]] &&
-    redirection_writes_a_path "${redirects[idx]}" "${words[idx]}"; then
-    prefix_writing_redirect=1
+    if [[ "${kinds[idx]}" == target ]] &&
+      redirection_reads_a_path "${redirects[idx]}" "${words[idx]}"; then
+      reading_redirect=1
+    fi
+  elif [[ "${kinds[idx]}" == target ]]; then
+    redirection_writes_a_path "${redirects[idx]}" "${words[idx]}" && prefix_writing_redirect=1
+    redirection_reads_a_path "${redirects[idx]}" "${words[idx]}" && prefix_reading_redirect=1
   fi
   if [[ "${kinds[idx]}" == word && "${words[idx]}" == "git" ]]; then
     raw_in_git=1
     ((prefix_writing_redirect)) && ((${command_names[idx]:-0})) && writing_redirect=1
+    ((prefix_reading_redirect)) && ((${command_names[idx]:-0})) && reading_redirect=1
   fi
 done
 ((writing_redirect)) && refuse "${REDIRECT_MSG}"
@@ -1143,9 +1191,42 @@ for word in "${words[@]+"${words[@]}"}"; do
   [[ "${word}" == "git" ]] && expand_in_git=1
 done
 
+# The input redirection found by the scope scan above, refused only here so
+# that a more specific refusal of the same string -- `xargs git diff
+# <list.txt` is xargs's -- is the message the caller reads.
+((reading_redirect)) && refuse "${STDIN_MSG}"
+
+# Whether a word of a blame invocation names a file for blame to read (see
+# the header). A long option counts in any spelling parse-options accepts:
+# `--con` is the shortest unambiguous prefix of --contents (`--co` is also
+# --color-lines), and `--ignore-revs` the shortest of --ignore-revs-file
+# that is not --ignore-rev, which takes a revision. A short cluster is read
+# a letter at a time until the first letter that takes a value: `-S` names
+# a file, and the rest of a `-L` word is a line range.
+blame_option_reads_a_file() {
+  local word="$1" name letters letter
+  if [[ "${word}" == --* ]]; then
+    name="${word#--}"
+    name="${name%%=*}"
+    ((${#name} >= 3)) && [[ "contents" == "${name}"* ]] && return 0
+    ((${#name} >= 11)) && [[ "ignore-revs-file" == "${name}"* ]] && return 0
+    return 1
+  fi
+  letters="${word#-}"
+  while [[ -n "${letters}" ]]; do
+    letter="${letters:0:1}"
+    letters="${letters:1}"
+    [[ "${letter}" == S ]] && return 0
+    [[ "${letter}" == L ]] && return 1
+  done
+  return 1
+}
+
 seen_git=0
 in_git=0
 in_diff=0
+in_blame=0
+blame_after_dashdash=0
 operands=0
 unresolved=0
 after_dashdash=0
@@ -1164,6 +1245,8 @@ for ((idx = 0; idx < ${#words[@]}; idx++)); do
     # is a bypass spelled with one pipe.
     seen_git=0
     in_diff=0
+    in_blame=0
+    blame_after_dashdash=0
     skip_git_option_value=0
     continue
   fi
@@ -1224,6 +1307,17 @@ for ((idx = 0; idx < ${#words[@]}; idx++)); do
     case "${word}" in
     --output | --output=*) refuse "${OUT_MSG}" ;;
     esac
+  fi
+
+  # A blame invocation's words up to `--`: after it every word is a path.
+  if ((in_blame)); then
+    ((blame_after_dashdash)) && continue
+    if [[ "${word}" == "--" ]]; then
+      blame_after_dashdash=1
+    elif [[ "${word}" == -?* ]] && blame_option_reads_a_file "${word}"; then
+      refuse "${BLAME_MSG}"
+    fi
+    continue
   fi
 
   if ((in_diff)); then
@@ -1300,6 +1394,12 @@ for ((idx = 0; idx < ${#words[@]}; idx++)); do
       operands=0
       unresolved=0
       after_dashdash=0
+      continue
+    fi
+    if [[ "${word}" == "blame" || "${word}" == "annotate" ]]; then
+      in_blame=1
+      blame_after_dashdash=0
+      seen_git=0
       continue
     fi
     seen_git=0

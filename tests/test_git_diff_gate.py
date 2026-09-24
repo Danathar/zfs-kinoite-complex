@@ -18,9 +18,18 @@ claims it makes are each a separate way for it to silently stop working:
   * an output redirection on the git command is the shell's spelling of the
     same write -- `git diff HEAD >cosign.pub` truncates the file before git
     starts -- and is refused whatever it targets and wherever it is written
-    (`>cosign.pub git diff HEAD` is the same command), while `2>&1`, an
-    input redirection, and a redirection on some other command in the
-    string stay allowed;
+    (`>cosign.pub git diff HEAD` is the same command), while `2>&1` and a
+    redirection on some other command in the string stay allowed;
+  * `git blame` reads a file named by an option -- `--contents FILE` prints
+    every line of it, `-S FILE` every line as bad graft data,
+    `--ignore-revs-file FILE` the first as an invalid object name -- in any
+    prefix parse-options accepts (`--con`) and inside a short cluster
+    (`-wS.env`), so those are refused in a blame invocation while `-S` in
+    log and diff, which is the pickaxe, is not;
+  * `<FILE` hands git a file on stdin, and `git log --stdin`, `git show
+    --stdin` and `git blame --contents -` print what they read there, so an
+    input redirection from a path is refused in a git invocation, while
+    `</dev/null`, a here-string and `<&0` open no file and stay allowed;
   * an unquoted leading `~` is `$HOME` to bash and a literal directory
     inside the checkout to a scan of the typed words, so `git diff --
     ~/.aws/credentials ~/.bashrc` resolved both operands inside the tree and
@@ -850,8 +859,9 @@ class GateBehaviourTests(GateRunner, unittest.TestCase):
         # whatever the target: `>`, `>>`, `>|`, `&>`, `&>>`, `N>`, `>&FILE`
         # (bash's older spelling of `&>FILE`) and `<>` (read-write, creates
         # the file). Descriptor forms name no path and stay allowed, so do
-        # input redirections, and so does a redirection on another command
-        # of the same string, which is that command's own.
+        # the input forms that open no file (</dev/null, <&0, <<<), and so
+        # does a redirection on another command of the same string, which is
+        # that command's own.
         for command in (
             "git diff HEAD >cosign.pub",
             "git diff HEAD > cosign.pub",
@@ -1321,7 +1331,9 @@ class GateBehaviourTests(GateRunner, unittest.TestCase):
     def test_reading_the_output_of_a_gated_command_still_works(self) -> None:
         # The refusal is the operator that opens a path for writing. A pipe, a
         # descriptor form and an input redirection open none, and docs/metrics.md
-        # tells a session to run the second of these.
+        # tells a session to run the second of these. The input redirection
+        # stays allowed here because the runner prints nothing it reads on
+        # stdin; the git commands that do are refused one by one.
         for command in (
             "python3 tests/run_tests.py 2>&1 | tail -5",
             "gh run view 123 --log-failed 2>&1 | sed 's/x/y/'",
@@ -1740,8 +1752,7 @@ CORPUS: tuple[Row, ...] = (
         "redirection",
         "git diff HEAD </dev/null",
         "allowed",
-        "an input redirection opens nothing for writing, and git diff prints no stdin back: "
-        "its one stdin operand is `-`, which counts toward the two-operand form the scan refuses",
+        "/dev/null has nothing to print, so it is the one input file a git invocation may name",
     ),
     Row(
         "redirection",
@@ -1751,11 +1762,39 @@ CORPUS: tuple[Row, ...] = (
     ),
     Row(
         "redirection",
+        "git log --stdin <.env",
+        "refused",
+        "git log reads revisions from stdin and prints the first line it cannot resolve as "
+        "`fatal: bad revision`, so the file's first line is printed past Read(./.env)",
+        "an input redirection from a file",
+    ),
+    Row(
+        "redirection",
+        "<./cosign.key git show --stdin",
+        "refused",
+        "the same read through git show, with the redirection written before the name",
+        "an input redirection from a file",
+    ),
+    Row(
+        "redirection",
+        "git blame --contents - README.md <./cosign.key",
+        "refused",
+        "--contents - annotates stdin line by line, so every line of the key is printed",
+        "an input redirection from a file",
+    ),
+    Row(
+        "redirection",
+        "git log -1 <<<HEAD",
+        "allowed",
+        "a here-string carries text typed into the command itself and opens no file",
+    ),
+    Row(
+        "redirection",
         "python3 tests/run_tests.py <tests/run_tests.py",
         "allowed",
-        "no allow-listed command here echoes what it reads from stdin -- the shape that made an "
-        "input redirection worth refusing in the sibling repositories is shellcheck, which is not "
-        "on this allow list at all (see UNREACHABLE_SHAPES)",
+        "the runner echoes nothing it reads from stdin, and the refusal is scoped to a git "
+        "invocation, whose --stdin and --contents - forms do; shellcheck, the other command "
+        "that echoes its input, is not on this allow list at all (see UNREACHABLE_SHAPES)",
     ),
     Row(
         "redirection",
@@ -2141,6 +2180,55 @@ CORPUS: tuple[Row, ...] = (
     ),
     Row(
         "options",
+        "git blame --contents ./cosign.key README.md",
+        "refused",
+        "annotates the named file in place of the working copy, printing every line of it",
+        "a file named by a blame option",
+    ),
+    Row(
+        "options",
+        "git blame --con ./cosign.key README.md",
+        "refused",
+        "parse-options takes any unambiguous prefix, and --con is the shortest one of --contents",
+        "a file named by a blame option",
+    ),
+    Row(
+        "options",
+        "git blame -wS ./.env README.md",
+        "refused",
+        "-S reads a graft file and prints each line it cannot parse, which is every line of a "
+        ".env; a short option clustered after another is still that option",
+        "a file named by a blame option",
+    ),
+    Row(
+        "options",
+        "git blame --ignore-revs=./.env README.md",
+        "refused",
+        "the unambiguous prefix of --ignore-revs-file; it prints the file's first line as an "
+        "invalid object name",
+        "a file named by a blame option",
+    ),
+    Row(
+        "options",
+        "git annotate --contents ./cosign.key README.md",
+        "refused",
+        "annotate is blame with another output format and takes the same options",
+        "a file named by a blame option",
+    ),
+    Row(
+        "options",
+        "git log -S needle -1",
+        "allowed",
+        "-S in log, show and diff is the pickaxe, and its value is a search string",
+    ),
+    Row(
+        "options",
+        "git blame --ignore-rev HEAD -L 1,5 README.md",
+        "allowed",
+        "--ignore-rev takes a revision rather than a file, and -L a line range",
+    ),
+    Row(
+        "options",
         "python3 tests/run_tests.py -k gate",
         "allowed",
         "the runner refuses the pytest options that relocate collection or write a path "
@@ -2289,6 +2377,48 @@ MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
         "after_wrapper=0 # the words after xargs's command are that command's arguments",
         "after_wrapper=1",
         "git ls-files | xargs grep -l git",
+    ),
+    (
+        "the refusal of an input redirection from a file",
+        '((reading_redirect)) && refuse "${STDIN_MSG}"',
+        "((reading_redirect)) && true",
+        "git log --stdin <.env",
+    ),
+    (
+        "an input redirection written before the git word",
+        "((prefix_reading_redirect)) && ((${command_names[idx]:-0})) && reading_redirect=1",
+        "true",
+        "<./cosign.key git show --stdin",
+    ),
+    (
+        "/dev/null left out of the input refusal",
+        '[[ "${op}" == \'<\' && "${target}" != /dev/null ]]',
+        '[[ "${op}" == \'<\' ]]',
+        "git diff HEAD </dev/null",
+    ),
+    (
+        "the blame option refusal",
+        'blame_option_reads_a_file "${word}"; then',
+        "false; then",
+        "git blame --contents ./cosign.key README.md",
+    ),
+    (
+        "a prefix of --contents read as --contents",
+        '((${#name} >= 3)) && [[ "contents" == "${name}"* ]] && return 0',
+        '[[ "contents" == "${name}" ]] && return 0',
+        "git blame --con ./cosign.key README.md",
+    ),
+    (
+        "-S found inside a short cluster",
+        '[[ "${letter}" == S ]] && return 0',
+        ":",
+        "git blame -wS ./.env README.md",
+    ),
+    (
+        "annotate read as blame",
+        '[[ "${word}" == "blame" || "${word}" == "annotate" ]]',
+        '[[ "${word}" == "blame" ]]',
+        "git annotate --contents ./cosign.key README.md",
     ),
 )
 
@@ -2470,6 +2600,41 @@ class CorpusTests(GateRunner, unittest.TestCase):
             "more than is needed",
         )
         self.assertRefused(command, "xargs adds the words it reads")
+
+    def test_git_really_prints_a_file_named_to_blame_or_put_on_stdin(self) -> None:
+        # The reach the blame and stdin rules exist for, run rather than
+        # reasoned about. None of these names the file as an operand, so the
+        # operand scan never counts it: blame takes it from an option, and
+        # log reads it from stdin.
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = self.committed_repository(tmp)
+            (repo / "stand-in").write_text("STAND-IN-LINE-ONE\nSTAND-IN-LINE-TWO\n")
+            for command, printed in (
+                ("git blame --contents stand-in tracked", "STAND-IN-LINE-TWO"),
+                ("git blame --con stand-in tracked", "STAND-IN-LINE-TWO"),
+                ("git blame -S stand-in tracked", "STAND-IN-LINE-TWO"),
+                ("git blame --ignore-revs-file stand-in tracked", "STAND-IN-LINE-ONE"),
+                ("git blame --contents - tracked <stand-in", "STAND-IN-LINE-TWO"),
+                ("git log --stdin <stand-in", "STAND-IN-LINE-ONE"),
+            ):
+                with self.subTest(command=command):
+                    shown = subprocess.run(
+                        [BASH, "--norc", "--noprofile", "-c", command],
+                        cwd=str(repo),
+                        capture_output=True,
+                        text=True,
+                        timeout=60,
+                        env={"PATH": os.environ.get("PATH", "")},
+                        check=False,
+                    )
+                    self.assertIn(
+                        printed,
+                        shown.stdout + shown.stderr,
+                        "git no longer prints this file; the blame or stdin rule may be more "
+                        "than is needed",
+                    )
+        self.assertRefused("git blame --contents ./cosign.key README.md", "a file named by a blame option")
+        self.assertRefused("git log --stdin <.env", "an input redirection from a file")
 
     def test_disabling_any_new_rule_fails_a_row_of_the_corpus(self) -> None:
         # The issue asks for this directly: a rule nothing notices the absence

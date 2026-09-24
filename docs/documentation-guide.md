@@ -18,6 +18,9 @@ fills in the rest.
 ```text
 README.md
 CONTRIBUTING.md              <- how to submit a change, run tests, and read coverage
+AGENTS.md                    <- rules for coding agents; section 0 is the orientation every pointer file sends you to
+CLAUDE.md                    <- its own copy of section 0, and general rules worded for Claude
+GEMINI.md                    <- its own copy of section 0, and general rules worded for Gemini
 docs/
   documentation-guide.md      <- this file (doc map + reading paths)
   glossary.md                 <- shared term and command definitions
@@ -44,6 +47,7 @@ docs/reflections/
   YYYY-MM-DD-*.md             <- one durable lesson each, append-only
 .github/scripts/
   README.md                   <- workflow step -> command-line interface (CLI) command -> Python module map
+.github/pull_request_template.md <- the checklist every pull request opens with, drawn from CONTRIBUTING.md
 .github/copilot-instructions.md <- short-form orientation for GitHub Copilot
 .cursor/rules/
   zfs-kinoite-complex.mdc     <- the same short form, for Cursor
@@ -55,6 +59,7 @@ docs/reflections/
   session-summary.md          <- state carried between agent sessions; not a changelog
 .claude/commands/
   README.md                   <- slash commands; thin pointers at .github/prompts/
+  *.md                        <- one per slash command, each pointing at one prompt file
 .claude/memory/
   README.md                   <- what belongs in corrections.md and what does not
   corrections.md              <- things believed here that turned out to be wrong, with what settles each one
@@ -68,10 +73,11 @@ do not restate it: a second copy of that content is exactly the kind of thing
 that drifts out of date here. If one of them contradicts `AGENTS.md`,
 `AGENTS.md` is right and the pointer is the bug.
 
-The prompt files are **procedures, not descriptions**. They link to `AGENTS.md`
-and `docs/` for what the code is and does, rather than restating it, so there
-stays one copy to keep current. New long-form explanation belongs in `docs/`;
-only steps and the decision at the end belong in a prompt.
+The prompt files are **procedures, not descriptions**. They cite `AGENTS.md`
+section 0 by rule number rather than restating it, and link a page under
+`docs/` where a step rests on one, so there stays one copy to keep current.
+New long-form explanation belongs in `docs/`; only steps and the decision at
+the end belong in a prompt.
 
 `docs/reflections/` and `.claude/memory/corrections.md` both record mistakes
 rather than design, and they are not the same thing. A correction is short and

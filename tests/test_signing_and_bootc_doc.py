@@ -57,6 +57,7 @@ DEFAULTS = REPO_ROOT / "ci" / "defaults.json"
 SIGN_IMAGE = REPO_ROOT / "ci_tools" / "sign_image.py"
 PROMOTE_STABLE = REPO_ROOT / "ci_tools" / "promote_stable.py"
 COMMON = REPO_ROOT / "ci_tools" / "common.py"
+COMMAND_ARGS = REPO_ROOT / "shared" / "command_args.py"
 POLICY_SCRIPT = REPO_ROOT / "files" / "scripts" / "configure_signing_policy.py"
 BUILD_IMAGE_SH = REPO_ROOT / "build_files" / "build-image.sh"
 PUBLISH_ACTION = REPO_ROOT / ".github" / "actions" / "publish-native-image" / "action.yml"
@@ -918,8 +919,11 @@ class CredentialMechanismTests(unittest.TestCase):
         the rule. It has to exist for that sentence to mean anything.
         """
 
-        self.assertIn("def redact_command_args(", COMMON.read_text(encoding="utf-8"))
-        self.assertIn("`redact_command_args` in the same module is a backstop", re.sub(r"\s+", " ", DOC_TEXT))
+        self.assertIn("def redact_command_args(", COMMAND_ARGS.read_text(encoding="utf-8"))
+        self.assertIn(
+            "`redact_command_args` in `shared/command_args.py` is a backstop",
+            re.sub(r"\s+", " ", DOC_TEXT),
+        )
 
 
 class ParserTests(unittest.TestCase):

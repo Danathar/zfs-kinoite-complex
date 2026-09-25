@@ -20,6 +20,10 @@ import uuid
 from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
 
+# `redact_command_args` and its flag list live in `shared/` because the
+# image-build ZFS helper redacts its failed commands too, and can import only
+# from there. Every `ci_tools` caller keeps importing it from this module.
+from shared.command_args import redact_command_args
 from shared.kernel_release import kernel_release_sort_key
 
 
@@ -30,21 +34,6 @@ class CiToolError(RuntimeError):
 FEDORA_FROM_KERNEL_RE = re.compile(r".*fc([0-9]+).*")
 REPO_ROOT = Path(__file__).resolve().parent.parent
 REPO_DEFAULTS_FILE = REPO_ROOT / "ci" / "defaults.json"
-# Flags whose *value* is a registry credential. No helper in this module builds
-# one any more -- `registry_auth_dir` below hands the credential to `skopeo` and
-# `cosign` through a `0600` file instead, so it never enters argv at all. The
-# set stays because redaction is the last line of defence, not the first: it
-# still covers any command a future caller assembles by hand, and
-# `containerfiles/zfs-akmods/install_zfs_from_akmods_cache.py` duplicates this
-# list for the same reason. Keep the two in step.
-SECRET_ARG_FLAGS = {
-    "--creds",
-    "--src-creds",
-    "--dest-creds",
-    "--registry-username",
-    "--registry-password",
-}
-
 # Wall-clock ceilings for external commands, in seconds.
 #
 # These exist to turn a hung child process into a fast, readable failure --
@@ -115,27 +104,6 @@ def load_repo_defaults() -> dict[str, str]:
     for key, value in data.items():
         defaults[str(key)] = str(value)
     return defaults
-
-
-def redact_command_args(args: Sequence[str]) -> list[str]:
-    """Return command args with known secret values replaced for error messages."""
-    redacted: list[str] = []
-    redact_next = False
-    for arg in args:
-        if redact_next:
-            redacted.append("***REDACTED***")
-            redact_next = False
-            continue
-        flag, separator, _value = arg.partition("=")
-        if flag in SECRET_ARG_FLAGS:
-            if separator:
-                redacted.append(f"{flag}=***REDACTED***")
-            else:
-                redacted.append(arg)
-                redact_next = True
-            continue
-        redacted.append(arg)
-    return redacted
 
 
 def require_env_or_default(name: str) -> str:

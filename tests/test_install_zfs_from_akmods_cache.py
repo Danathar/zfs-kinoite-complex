@@ -354,6 +354,13 @@ class InstallZfsFromAkmodsCacheTests(unittest.TestCase):
 
         self.assertIsNone(subprocess_run.call_args.kwargs["timeout"])
 
+    def test_run_cmd_redacts_with_the_ci_tools_redactor(self) -> None:
+        # Both sides import one redactor from shared/, so a credential flag
+        # added for a CI helper is redacted in this script's failures too.
+        from ci_tools.common import redact_command_args
+
+        self.assertIs(helper.redact_command_args, redact_command_args)
+
     def test_registry_transfer_timeout_matches_ci_tools(self) -> None:
         # This script cannot import ci_tools (it runs inside the image build
         # with only shared/ on sys.path), so the ceiling is duplicated the way

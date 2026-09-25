@@ -20,16 +20,11 @@ The page answers that in two ways, and this file uses both:
     file a label's globs match in `.github/labeler.yml` is in that label's tier.
 
 A tracked file that neither reaches is in no tier. When this file was written
-there were ten, and four of them are not paperwork: everything under `files/`
-except `configure_signing_policy.py` is installed into the image by
-`build_files/build-image.sh` and runs on a booted machine --
-`modules-load.d/zfs.conf` loads the ZFS module at boot, and
-`brew-setup.service.d/10-private-tmp.conf` is the `PrivateTmp=yes` drop-in a
-security fix added so brew's first-boot unit cannot be steered through a
-symlink in `/tmp`. Reverting that drop-in arrives with no `area/*` label and in
-no tier.
+there were ten. Four of them -- everything under `files/` except
+`configure_signing_policy.py`, installed into the image by
+`build_files/build-image.sh` -- have since been put in Tier 3 (#261).
 
-Which tier those files belong in is a maintainer's decision, not a test's. So
+Which tier the rest belong in is a maintainer's decision, not a test's. So
 they sit in UNCLASSIFIED below, and the comparison is set EQUALITY: a new file
 in no tier fails until it is tiered or recorded, and a recorded file that has
 since been tiered (or deleted) fails until its entry is removed. The ledger can
@@ -81,14 +76,6 @@ UNCLASSIFIED = {
     ".github/ISSUE_TEMPLATE/config.yml": "issue chooser config",
     ".github/ISSUE_TEMPLATE/coverage-gap.yml": "issue form; no label covers ISSUE_TEMPLATE",
     "ruff.toml": "lint configuration the CI unit job runs under",
-    # Installed into the image by build_files/build-image.sh -- these run on a
-    # booted machine.
-    "files/etc/profile.d/brew-path.sh": "login-shell PATH fragment shipped in the image",
-    "files/usr/lib/modules-load.d/zfs.conf": "loads the zfs module at boot",
-    "files/usr/lib/systemd/system/brew-setup.service.d/10-private-tmp.conf": (
-        "PrivateTmp=yes hardening drop-in for brew's first-boot unit"
-    ),
-    "files/usr/lib/tmpfiles.d/zfs-kinoite-complex.conf": "tmpfiles.d entries shipped in the image",
 }
 
 
@@ -249,16 +236,6 @@ class EveryTrackedFileHasATier(unittest.TestCase):
             "UNCLASSIFIED entries that now have a tier or are no longer tracked; delete them",
         )
 
-    def test_the_ledger_records_every_image_payload_file_it_holds(self) -> None:
-        # The ledger's files/ entries are the ones that matter most: each is
-        # installed by build-image.sh. Keep that claim true.
-        script = (REPO_ROOT / "build_files" / "build-image.sh").read_text(encoding="utf-8")
-        payload = sorted(f for f in UNCLASSIFIED if f.startswith("files/"))
-        self.assertEqual(len(payload), 4)
-        for rel in payload:
-            with self.subTest(file=rel):
-                self.assertIn(f"/ctx/{rel}", script)
-
     def test_known_files_land_in_the_tier_the_page_says(self) -> None:
         # Spot checks through both routes: a named path and a label.
         expected = {
@@ -271,6 +248,10 @@ class EveryTrackedFileHasATier(unittest.TestCase):
             ".claude/settings.json": 1,
             ".editorconfig": 0,
             "LICENSE": 0,
+            # The image payload: build-image.sh installs these onto every
+            # booted machine, so reverting one is a Tier 3 change.
+            "files/usr/lib/modules-load.d/zfs.conf": 3,
+            "files/usr/lib/systemd/system/brew-setup.service.d/10-private-tmp.conf": 3,
         }
         for file, tier in expected.items():
             with self.subTest(file=file):

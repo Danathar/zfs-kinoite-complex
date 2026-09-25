@@ -345,8 +345,8 @@ the trust policy is supposed to enforce.
    job-level login leaves the credential in `~/.docker/config.json` until the
    job ends.
 
-   `redact_command_args` in the same module is a backstop for *error text*
-   only. It cannot satisfy this rule, because it does nothing about the argv of
+   `redact_command_args` in `shared/command_args.py` is a backstop for
+   *error text* only. It cannot satisfy this rule, because it does nothing about the argv of
    a running process.
 7. Keep `cosign.key` out of git. Only `cosign.pub` belongs in the repository.
 

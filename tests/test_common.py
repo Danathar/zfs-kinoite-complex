@@ -25,7 +25,6 @@ from ci_tools.common import (
     REGISTRY_RETRY_ATTEMPTS,
     REGISTRY_RETRY_DELAY_SECONDS,
     REGISTRY_TRANSFER_TIMEOUT,
-    SECRET_ARG_FLAGS,
     CiToolError,
     cosign_verify,
     git_ls_remote_resolve,
@@ -43,6 +42,7 @@ from ci_tools.common import (
     write_github_env,
     write_github_outputs,
 )
+from shared.command_args import SECRET_ARG_FLAGS
 
 
 def parse_github_file(path: Path) -> dict[str, str]:

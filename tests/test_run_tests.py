@@ -19,6 +19,11 @@ test suite unattended" row, in the order they matter:
     writes;
   * an untracked `.py` anywhere under a selection is refused, so a module
     dropped into `tests/` cannot be collected until it is committed;
+  * so is any other untracked file Python or pytest would load without being
+    named: a module anywhere in the checkout (the root is first on
+    `sys.path`, so a root `pytest.py` replaces pytest), any file under
+    `tests/` (a `test*.txt` doctest, a `tests/pytest.ini`), and a pytest or
+    coverage config file at the root;
   * a tracked selection *is* run, with the arguments passed through unchanged.
     A runner that refused everything would pass the three assertions above and
     be useless, so this one is asserted too.
@@ -129,11 +134,67 @@ class RunnerRefusalTests(unittest.TestCase):
         git(self.repo, "add", "tests/test_dropped_in.py")
         self.assertEqual(run_tests.main(["tests"]), 0)
 
-    def test_an_untracked_module_beside_a_named_file_is_not_reached(self) -> None:
-        # Naming one file collects one file, so an untracked sibling is not
-        # something that selection imports and is not a reason to refuse it.
-        (self.repo / "tests" / "test_dropped_in.py").write_text("import os\n")
-        self.assertEqual(run_tests.main(["tests/test_ok.py"]), 0)
+    def test_an_untracked_module_beside_a_named_file_is_refused(self) -> None:
+        # Naming one file still puts its directory first on sys.path -- tests/
+        # has no __init__.py, so pytest's prepend import mode inserts it -- and
+        # an untracked `tests/ci_tools.py` then shadows the real package for
+        # every `from ci_tools... import` in the named file. So a sibling is
+        # refused even though it is never collected.
+        (self.repo / "tests" / "ci_tools.py").write_text("import os\n")
+        self.assertEqual(run_tests.main(["tests/test_ok.py"]), 2)
+        self.run_pytest.assert_not_called()
+
+    def test_an_untracked_module_outside_the_tests_directory_is_refused(self) -> None:
+        # `python3 -m pytest` puts the working directory -- the repository root
+        # -- first on sys.path, so a root `pytest.py` is imported in place of
+        # pytest itself, and any other untracked module is importable by name.
+        # A .gitignore entry does not make one safe to run.
+        (self.repo / ".gitignore").write_text("ignored/\n")
+        for dropped in ("pytest.py", "shared/helper.py", "ignored/module.py", "fast.so"):
+            with self.subTest(dropped=dropped):
+                path = self.repo / dropped
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("import os\n")
+                self.assertEqual(run_tests.main(["tests/test_ok.py"]), 2)
+                self.run_pytest.assert_not_called()
+                path.unlink()
+
+    def test_an_untracked_file_under_tests_is_refused_whatever_its_suffix(self) -> None:
+        # pytest collects `test*.txt` as a doctest by default, and reads a
+        # `pytest.ini` under tests/ before the root -- one whose `addopts`
+        # carries `-p` does what the refused `-o addopts=-p` would.
+        for dropped in ("test_notes.txt", "pytest.ini", "data/fixture.json"):
+            with self.subTest(dropped=dropped):
+                path = self.repo / "tests" / dropped
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(">>> import os\n")
+                self.assertEqual(run_tests.main(["tests"]), 2)
+                self.run_pytest.assert_not_called()
+                path.unlink()
+
+    def test_an_untracked_config_file_at_the_root_is_refused(self) -> None:
+        for name in run_tests.ROOT_CONFIG_NAMES:
+            with self.subTest(name=name):
+                (self.repo / name).write_text("[pytest]\naddopts = -p os\n")
+                self.assertEqual(run_tests.main(["tests"]), 2)
+                self.run_pytest.assert_not_called()
+                (self.repo / name).unlink()
+
+    def test_the_caches_a_run_leaves_behind_are_not_refused(self) -> None:
+        # Python reads a __pycache__ entry only for a source beside it, so the
+        # byte-code a previous run wrote imports nothing new. Refusing it would
+        # refuse every second run.
+        for cache in ("tests/__pycache__/test_ok.cpython-313.pyc", "tests/.pytest_cache/v/x"):
+            path = self.repo / cache
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("")
+        self.assertEqual(run_tests.main(["tests"]), 0)
+
+    def test_an_untracked_file_is_runnable_once_staged(self) -> None:
+        (self.repo / "tests" / "test_notes.txt").write_text(">>> 1\n1\n")
+        self.assertEqual(run_tests.main(["tests"]), 2)
+        git(self.repo, "add", "tests/test_notes.txt")
+        self.assertEqual(run_tests.main(["tests"]), 0)
 
     def test_an_untracked_repository_root_conftest_is_refused(self) -> None:
         # Never named on the command line, imported before any test: with no
@@ -186,11 +247,11 @@ class RunnerRefusalTests(unittest.TestCase):
 
     def test_a_cluster_of_flags_or_an_attached_value_of_another_option_passes(self) -> None:
         # The cluster walk must stop at the first value-taking option, or a
-        # `-k`, `-W` or `-r` value that happens to contain a refused letter
+        # `-k`, `-m` or `-r` value that happens to contain a refused letter
         # would be refused for spelling an option it does not: `-rp` reports
-        # passed tests, `-Werror` is a warnings filter, and `-vv` is two
-        # flags and no option at all.
-        for arguments in (["-vv", "tests"], ["-rp", "tests"], ["-Werror", "tests"], ["-kfoo", "tests"]):
+        # passed tests, `-mslow` selects a marker, and `-vv` is two flags and
+        # no option at all. (`-W` is refused itself: its category imports.)
+        for arguments in (["-vv", "tests"], ["-rp", "tests"], ["-mslow", "tests"], ["-kfoo", "tests"]):
             with self.subTest(arguments=arguments):
                 self.run_pytest.reset_mock()
                 self.assertEqual(run_tests.main(arguments), 0)
@@ -228,7 +289,8 @@ class RunnerRefusalTests(unittest.TestCase):
         # quietly shorter tuple. `--pyargs` turns positionals into module
         # names, `-p` loads a plugin, `-o` can set `addopts` to either, and
         # the other three move what pytest treats as the project, and with
-        # it conftest collection.
+        # it conftest collection. `-W` and `--pdbcls` import the module they
+        # name, and a `--cov-config` rc file can name plugins to import.
         self.assertEqual(
             set(run_tests.REFUSED_IMPORT_OPTIONS),
             {
@@ -241,6 +303,10 @@ class RunnerRefusalTests(unittest.TestCase):
                 "--import-mode",
                 "-o",
                 "--override-ini",
+                "-W",
+                "--pythonwarnings",
+                "--pdbcls",
+                "--cov-config",
             },
         )
 

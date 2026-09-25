@@ -24,9 +24,11 @@ The two stale claims this file was written against:
     and docs/building-locally.md had each dropped it before.
   * "The `bootc container lint` check, package/module checks, signature verification, and unit
     tests are useful gates" -- the unit tests run in `test.yml`, which `build.yml` neither calls
-    nor waits on, and `main` has no ruleset or branch protection that requires them.
-    docs/quality.md already said a red `Python Unit Tests` "blocks nothing automatically".
-    A push to `main` runs both workflows side by side and `latest` moves whatever the tests say.
+    nor waits on. When this file was written `main` also had no ruleset, and docs/quality.md
+    said a red `Python Unit Tests` "blocks nothing automatically". The ruleset added since
+    (docs/branch-protection.md) makes that check required for MERGING a pull request; it
+    still gates nothing in `build.yml`. A push to `main` runs both workflows side by side and
+    `latest` moves whatever the tests say.
 
 docs/code-reading-guide.md carried a third copy of the scheduled-build rule that named only the
 Kinoite base and not the OpenZFS patch; it is checked here as well, because it cites this page

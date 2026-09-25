@@ -1,7 +1,7 @@
 """
 Script: tests/run_tests.py
 What: Runs this repository's test suite, refusing any selection that would import Python from outside tests/.
-Doing: Rejects the pytest options that move collection off this tree or write to a path they name, resolves every positional selection inside tests/, requires every .py file it will import to be tracked by git, then execs pytest.
+Doing: Rejects the pytest options that move collection off this tree, import a module by name or write to a path they name, resolves every positional selection inside tests/, requires every file Python or pytest could load from the checkout to be tracked by git, then execs pytest.
 Why: `.claude/settings.json` has to allow *some* test command unattended, and an unrestricted one is unbounded local code execution -- pytest imports every module it collects, and an import is not a tool call, so nothing in the deny list is consulted.
 Goal: Make the one command an agent may run without a prompt able to import only code that is already in the diff.
 
@@ -35,10 +35,26 @@ point:
     no prefix rule able to see a flag in the middle of an ordinary command.
     That is the write half of the primitive `.claude/hooks/gate-git-diff.sh`
     refuses for `git`; see `REFUSED_WRITE_OPTIONS`.
-  * **Closed:** a file dropped into `tests/` and not committed. Every `*.py`
-    under a selection must be tracked by git, so an untracked module cannot be
-    collected. Committing it is a separate step that shows up in
-    `git status` and in the pull request.
+  * **Closed:** a file dropped into the checkout and not committed. Checking
+    only the `*.py` under a selection was not enough, because pytest and
+    Python load code from further afield: `python3 -m pytest` puts the
+    repository root first on `sys.path`, so an untracked root `pytest.py` *is*
+    pytest; pytest puts `tests/` first too, so an untracked `tests/ci_tools.py`
+    shadows the real package for a test that names one file; `test*.txt` under
+    `tests/` is collected as a doctest; and a `tests/pytest.ini` sets `addopts`
+    exactly as the refused `-o` would. So every untracked `*.py`, `*.pyc` and
+    `*.so` anywhere in the checkout, every untracked file under `tests/`, and
+    every untracked pytest or coverage config file at the root is refused --
+    see `untracked_loadable_files`. Staging it is a separate step that shows
+    up in `git status` and in the pull request.
+  * **Closed:** the options that import a module by name. `-W ignore::mod.W`
+    imports `mod` to resolve the warning category, `--pdbcls=mod:Cls` imports
+    `mod`, and `--cov-config` names an rc file whose `plugins =` imports and
+    whose `data_file =` writes. Each is refused with the import options.
+  * **Not closed:** a hand-built `__pycache__/*.pyc` whose header matches a
+    tracked source's size and mtime. Python prefers it over the source, but
+    making one takes a binary write timed to the source, and a byte-code cache
+    is not something this script can tell from the one the last run left.
   * **Not closed:** a *tracked* file under `tests/`. Agents are invited to add
     tests here -- `docs/SECURITY-AI.md` lists editing tests as something an
     agent may do unattended -- so a committed test module runs by design. The
@@ -90,6 +106,10 @@ TESTS_DIR = REPO_ROOT / "tests"
 # splices into the command line before it parses options -- so
 # `-o addopts=--pyargs x` is `--pyargs x` with an allowed option wrapped
 # around it. Refused whole: there is no ini key worth telling apart.
+# `-W`/`--pythonwarnings` imports the module of a dotted warning category
+# (`-W ignore::mod.W` runs `mod`), and `--pdbcls=mod:Cls` imports `mod` for the
+# debugger. `--cov-config` names a coverage rc file, whose `plugins =` imports
+# modules by name and whose `data_file =` writes wherever it says.
 REFUSED_IMPORT_OPTIONS = (
     "-p",
     "--pyargs",
@@ -100,6 +120,10 @@ REFUSED_IMPORT_OPTIONS = (
     "--import-mode",
     "-o",
     "--override-ini",
+    "-W",
+    "--pythonwarnings",
+    "--pdbcls",
+    "--cov-config",
 )
 
 # Options whose job is to write a file at a path the caller names. These have
@@ -273,19 +297,66 @@ def check_selection(argument: str, tracked: set[Path]) -> str | None:
     return None
 
 
-def check_repo_root_conftest(tracked: set[Path]) -> str | None:
-    """Refuse an untracked `conftest.py` at the repository root.
+# Config files pytest or pytest-cov read from the directory they start in and
+# its ancestors. Under `tests/` every untracked file is refused anyway, so only
+# the repository root needs naming.
+ROOT_CONFIG_NAMES = (
+    "pytest.ini",
+    ".pytest.ini",
+    "pyproject.toml",
+    "tox.ini",
+    "setup.cfg",
+    ".coveragerc",
+)
 
-    With no ini file, pytest's rootdir is the common ancestor of the
-    arguments, and it collects `conftest.py` from there down. A repository-root
-    conftest is therefore imported by a `tests/` selection without ever being
-    named on the command line.
+# Caches the runs themselves write. Python reads a `__pycache__` entry only for
+# a source file beside it, so an untracked one there imports nothing new.
+CACHE_DIRECTORIES = frozenset({"__pycache__", ".pytest_cache"})
+
+
+def untracked_loadable_files() -> list[str]:
+    """Every untracked file in the checkout that Python or pytest could load.
+
+    Ignored files are included on purpose -- a `.gitignore` entry says a file
+    is not reviewed, which is the opposite of permission to run it. Three
+    shapes, each a way code outside the diff reached the allowed command:
+
+      * `*.py`, `*.pyc` and `*.so` anywhere. The repository root is first on
+        `sys.path` under `python3 -m pytest`, so a root `pytest.py` replaces
+        pytest itself, and every directory is importable as a package.
+      * anything under `tests/`. pytest puts that directory first on
+        `sys.path` too, collects `test*.txt` there as doctests, and reads a
+        `pytest.ini` there before the root.
+      * a pytest or coverage config file at the root, which can set `addopts`
+        or load a plugin without a flag on the command line.
     """
-    conftest = REPO_ROOT / "conftest.py"
-    if conftest.exists() and conftest.resolve() not in tracked:
+    pathspecs = [
+        ":(glob)**/*.py",
+        ":(glob)**/*.pyc",
+        ":(glob)**/*.so",
+        ":(top)tests",
+        *(f":(top){name}" for name in ROOT_CONFIG_NAMES),
+    ]
+    result = subprocess.run(
+        ["git", "-C", str(REPO_ROOT), "ls-files", "-z", "--others", "--", *pathspecs],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return sorted(
+        name
+        for name in result.stdout.split("\0")
+        if name and not CACHE_DIRECTORIES.intersection(Path(name).parts[:-1])
+    )
+
+
+def check_untracked_loadables() -> str | None:
+    """Refuse the run while any file `untracked_loadable_files` names exists."""
+    untracked = untracked_loadable_files()
+    if untracked:
         return (
-            f"{conftest} is untracked and pytest imports it before any test. "
-            "Commit it first."
+            f"untracked files Python or pytest could load: {', '.join(untracked)}. "
+            "Commit them first -- code that runs unattended belongs in the diff."
         )
     return None
 
@@ -334,7 +405,10 @@ def run_unittest(arguments: list[str], selections: list[str]) -> int:
 def pytest_is_available() -> bool:
     return (
         subprocess.run(
-            [sys.executable, "-c", "import pytest"], capture_output=True, check=False
+            [sys.executable, "-c", "import pytest"],
+            capture_output=True,
+            cwd=REPO_ROOT,
+            check=False,
         ).returncode
         == 0
     )
@@ -365,7 +439,7 @@ def main(argv: list[str] | None = None) -> int:
         arguments = ["tests", *arguments]
 
     tracked = tracked_python_files()
-    problems = [check_repo_root_conftest(tracked)]
+    problems = [check_untracked_loadables()]
     problems.extend(check_selection(s, tracked) for s in selections)
     refusals = [p for p in problems if p is not None]
     if refusals:

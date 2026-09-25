@@ -18,8 +18,9 @@ how much of it to do.
 ### Tier 3 — can reach a booted machine
 
 **Anything touching the seven files in `AGENTS.md` section 0 rule 2**, plus the
-ZFS line, anything pool-facing, the policy file that says what each
-workflow's token may do, and the ruleset that keeps `main` behind a pull request.
+ZFS line, anything pool-facing, the files the image installs onto every booted
+machine, the policy file that says what each workflow's token may do, and the
+ruleset that keeps `main` behind a pull request.
 Labelled `area/safety-critical`.
 
 - `.github/workflows/build.yml`
@@ -29,6 +30,9 @@ Labelled `area/safety-critical`.
 - `ci_tools/check_akmods_cache.py`
 - `containerfiles/zfs-akmods/install_zfs_from_akmods_cache.py`
 - `files/scripts/configure_signing_policy.py`
+- `files/`, because the image build copies what is under it onto every booted
+  machine: the ZFS module autoload, the PrivateTmp=yes drop-in that hardens
+  brew's first-boot unit, a login-shell PATH fragment and tmpfiles.d entries
 - `cosign.pub`, `ci/defaults.json`'s ZFS and base-image values
 - `.github/policies/workflow-permissions.json`, because a token that gains
   `packages: write` can push an image to the registry these machines pull from

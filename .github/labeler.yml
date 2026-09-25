@@ -23,11 +23,12 @@
 # Schema is actions/labeler v5+; `dot: true` is the default, so paths beginning
 # with a dot need no special handling.
 
-# The seven files AGENTS.md section 0 rule 2 names. This label is the reason the
-# file is worth having: CONTRIBUTING requires a statement of what could reach a
-# booted machine when any of them changes, and docs/review-rubric.md section 2
-# treats a missing statement as blocking. A reviewer should not have to notice
-# that by reading the diff.
+# The seven files AGENTS.md section 0 rule 2 names, plus the other Tier 3 paths
+# docs/risk-tiers.md adds. This label is the reason the file is worth having:
+# CONTRIBUTING requires a statement of what could reach a booted machine when
+# any of them changes, and docs/review-rubric.md section 2 treats a missing
+# statement as blocking. A reviewer should not have to notice that by reading
+# the diff.
 'area/safety-critical':
   - changed-files:
       - any-glob-to-any-file:
@@ -38,6 +39,12 @@
           - 'ci_tools/check_akmods_cache.py'
           - 'containerfiles/zfs-akmods/install_zfs_from_akmods_cache.py'
           - 'files/scripts/configure_signing_policy.py'
+          # Everything else under files/ is copied into the image by
+          # build_files/build-image.sh and runs on every booted machine: the
+          # ZFS module autoload, brew's PrivateTmp=yes hardening drop-in, a
+          # login-shell PATH fragment and tmpfiles.d entries. docs/risk-tiers.md
+          # puts files/ in Tier 3.
+          - 'files/**'
           - 'cosign.pub'
           # docs/risk-tiers.md classes this file's ZFS line and base-image
           # values as Tier 3, and a path-based matcher cannot see which key

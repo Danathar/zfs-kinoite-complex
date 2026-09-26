@@ -85,6 +85,24 @@ def optional_env(name: str, default: str = "") -> str:
     return os.environ.get(name, default)
 
 
+def registry_creds_from_env(*, required: bool = False) -> str | None:
+    """
+    Return the `REGISTRY_ACTOR:REGISTRY_TOKEN` pair every registry helper takes.
+
+    With `required=True` a missing half raises exactly as `require_env` does, for
+    tools that must never fall back to an anonymous pull. Otherwise the pair is
+    `None` unless both halves are set, which the helpers below read as
+    anonymous: half a credential is treated the same as none.
+    """
+    if required:
+        return f"{require_env('REGISTRY_ACTOR')}:{require_env('REGISTRY_TOKEN')}"
+    registry_actor = optional_env("REGISTRY_ACTOR")
+    registry_token = optional_env("REGISTRY_TOKEN")
+    if registry_actor and registry_token:
+        return f"{registry_actor}:{registry_token}"
+    return None
+
+
 def load_repo_defaults() -> dict[str, str]:
     """
     Load checked-in repository defaults from `ci/defaults.json`.
@@ -553,8 +571,7 @@ def cosign_verify(
     image_ref: str,
     *,
     key_path: str,
-    registry_username: str = "",
-    registry_password: str = "",
+    creds: str | None = None,
 ) -> None:
     """
     Verify a cosign signature on one image reference against a public key file.
@@ -576,19 +593,14 @@ def cosign_verify(
     with no format flag, and both correctly fail (nonzero exit, "no signatures
     found") against an actually-unsigned image.
 
-    When a caller supplies registry credentials they are written to a `0600`
-    auth file and pointed at with `DOCKER_CONFIG`, not passed as
-    `--registry-username`/`--registry-password`; see `registry_auth_dir` for
-    why, and for the versions this was verified against. The env override is
-    scoped to this one command, so a job that authenticated with
-    `docker/login-action` and calls this without credentials still resolves
-    them from its own Docker config exactly as before.
+    `creds` is the same `actor:token` pair the skopeo helpers take. When a
+    caller supplies it, it is written to a `0600` auth file and pointed at with
+    `DOCKER_CONFIG`, not passed as `--registry-username`/`--registry-password`;
+    see `registry_auth_dir` for why, and for the versions this was verified
+    against. The env override is scoped to this one command, so a job that
+    authenticated with `docker/login-action` and calls this without credentials
+    still resolves them from its own Docker config exactly as before.
     """
-    creds = (
-        f"{registry_username}:{registry_password}"
-        if registry_username and registry_password
-        else None
-    )
     with registry_auth_dir(creds, image_ref) as auth_dir:
         command = ["cosign", "verify", "--key", key_path, image_ref]
         run_cmd(

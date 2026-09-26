@@ -97,7 +97,7 @@ class CheckAkmodsCacheTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
 
-            def fake_copy(_source: str, destination: str) -> None:
+            def fake_copy(_source: str, destination: str, *, creds: str | None = None) -> None:
                 image_dir = Path(destination.removeprefix("dir:"))
                 image_dir.mkdir(parents=True, exist_ok=True)
                 (image_dir / "manifest.json").write_text(
@@ -147,15 +147,18 @@ class CheckAkmodsCacheTests(unittest.TestCase):
         )
         self.assertEqual(status.inspection_method, "unpacked-image")
         inspect_json_optional.assert_called_once_with(
-            "docker://ghcr.io/danathar/zfs-kinoite-complex-akmods:main-43"
+            "docker://ghcr.io/danathar/zfs-kinoite-complex-akmods:main-43",
+            creds=None,
         )
         skopeo_copy.assert_called_once_with(
             "docker://ghcr.io/danathar/zfs-kinoite-complex-akmods@sha256:abc123",
             ANY,
+            creds=None,
         )
         cosign_verify.assert_called_once_with(
             "ghcr.io/danathar/zfs-kinoite-complex-akmods@sha256:abc123",
             key_path=ANY,
+            creds=None,
         )
 
     def test_inspect_akmods_cache_rejects_reuse_when_signature_verification_fails(self) -> None:
@@ -166,7 +169,7 @@ class CheckAkmodsCacheTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
 
-            def fake_copy(_source: str, destination: str) -> None:
+            def fake_copy(_source: str, destination: str, *, creds: str | None = None) -> None:
                 image_dir = Path(destination.removeprefix("dir:"))
                 image_dir.mkdir(parents=True, exist_ok=True)
                 (image_dir / "manifest.json").write_text(
@@ -220,7 +223,7 @@ class CheckAkmodsCacheTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
 
-            def fake_copy(_source: str, destination: str) -> None:
+            def fake_copy(_source: str, destination: str, *, creds: str | None = None) -> None:
                 image_dir = Path(destination.removeprefix("dir:"))
                 image_dir.mkdir(parents=True, exist_ok=True)
                 (image_dir / "manifest.json").write_text(
@@ -393,16 +396,15 @@ class RegistryCredentialsTests(unittest.TestCase):
 
     The first `check-akmods-cache` step in
     `.github/actions/prepare-main-akmods/action.yml` passes `REGISTRY_ACTOR`
-    and `REGISTRY_TOKEN`, so every scheduled build reaches the credentialed
-    branch of the pull and of the signature check. The rest of this file runs
-    with those variables unset and therefore only exercises the anonymous
-    fallback, which is the branch production never takes.
+    and `REGISTRY_TOKEN`, so every scheduled build hands a real credential to
+    the pull and to the signature check. The rest of this file runs with those
+    variables unset and therefore only ever sees `creds=None`, which production
+    never passes.
 
     Both halves of the credential contract matter. Dropping `creds=` from the
     copy makes the pull anonymous, which fails outright against a private
-    cache. Dropping `registry_username`/`registry_password` from
-    `cosign_verify` makes the verification fail instead of the pull, and that
-    failure is swallowed into `signature_verified=False` -- the run then
+    cache. Dropping `creds=` from `cosign_verify` makes the verification fail
+    instead of the pull, and that failure is swallowed into `signature_verified=False` -- the run then
     reports "its cosign signature could not be verified" and rebuilds, so a
     broken credential path looks like an unsigned cache rather than an error.
     """
@@ -484,8 +486,7 @@ class RegistryCredentialsTests(unittest.TestCase):
         cosign_verify.assert_called_once_with(
             "ghcr.io/danathar/zfs-kinoite-complex-akmods@sha256:abc123",
             key_path=ANY,
-            registry_username="Danathar",
-            registry_password="registry-token-value",
+            creds="Danathar:registry-token-value",
         )
         for positional in cosign_verify.call_args.args:
             self.assertNotIn("registry-token-value", str(positional))

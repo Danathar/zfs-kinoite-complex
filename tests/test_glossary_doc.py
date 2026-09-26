@@ -105,7 +105,16 @@ TMPFILES_DIR = REPO_ROOT / "files" / "usr" / "lib" / "tmpfiles.d"
 BULLET_RE = re.compile(r"^- ((?:`[^`]+`)(?: / `[^`]+`)*): (.*)$")
 BACKTICKED_RE = re.compile(r"`([^`]+)`")
 UPPER_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
-UPPER_WORD_RE = re.compile(r"\b[A-Z][A-Z0-9_]*\b")
+# How a workflow or composite action actually reaches a variable: an expression
+# (`${{ secrets.NAME }}`, `${{ env.NAME }}`, `${{ vars.NAME }}`), a mapping key
+# (`env:`/`with:`/`secrets:` entries, `NAME: value`), or a shell reference in a
+# run block (`$NAME`, `${NAME}`). An upper-case word in an `echo` message or a
+# `::error::` line is none of these (review on #275).
+WORKFLOW_VARIABLE_RES = (
+    re.compile(r"\$\{\{[^}]*?\b(?:secrets|env|vars)\.([A-Z][A-Z0-9_]*)\b"),
+    re.compile(r"^\s*([A-Z][A-Z0-9_]*)\s*:", re.MULTILINE),
+    re.compile(r"\$\{?([A-Z][A-Z0-9_]*)\b"),
+)
 
 # The three helpers in `ci_tools/common.py` that read one named environment variable.
 ENV_READERS = frozenset({"require_env", "optional_env", "require_env_or_default"})
@@ -352,15 +361,17 @@ def exported_variables() -> set[str]:
 
 def workflow_variables() -> set[str]:
     """
-    Every upper-case name in the comment-stripped workflows and composite actions: an
-    `env:` key, a `${{ secrets.NAME }}` or `env.NAME` expression, or a `$NAME` in a run
-    block. Over-matching is harmless here -- the set is only ever asked whether a name the
-    page defines is in it.
+    Every variable the comment-stripped workflows and composite actions reach: an
+    `env:`-style key, a `${{ secrets.NAME }}`, `env.NAME` or `vars.NAME` expression, or a
+    `$NAME` in a run block. Upper-case words in messages do not count, so a glossary
+    entry whose wiring is removed goes stale here even if an `echo` still names it.
     """
 
     found = set()
     for path in sorted([*WORKFLOW_DIR.glob("*.yml"), *ACTION_DIR.glob("*/action.yml")]):
-        found.update(UPPER_WORD_RE.findall(strip_yaml_comments(path.read_text(encoding="utf-8"))))
+        text = strip_yaml_comments(path.read_text(encoding="utf-8"))
+        for pattern in WORKFLOW_VARIABLE_RES:
+            found.update(pattern.findall(text))
     return found
 
 

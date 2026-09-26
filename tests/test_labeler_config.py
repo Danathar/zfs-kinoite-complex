@@ -1,7 +1,7 @@
 """
 Script: tests/test_labeler_config.py
 What: Joins `.github/labeler.yml` to the safety-critical file list the agent docs and docs/risk-tiers.md name.
-Doing: Resolves every glob against the tracked tree, and checks that every Tier 3 path really does earn `area/safety-critical`.
+Doing: Resolves every glob against the tracked tree, and checks both ways that the Tier 3 list and `area/safety-critical` cover the same files.
 Why: The label is the input to a blocking review gate, and a path that stops matching fails open -- silently, with a green build.
 Goal: Make a rename, a moved file, or a re-namespaced label fail here instead of on a pull request nobody reviewed properly.
 
@@ -150,7 +150,13 @@ def tier_3_paths() -> list[str]:
         if line.lstrip().startswith("- "):
             block.append(line)
     found = BACKTICKED_RE.findall("\n".join(block))
-    return [token for token in found if "/" in token or token.endswith((".py", ".yml"))]
+    # `cosign.pub` has no slash and no .py/.yml suffix, so the shape filter
+    # alone drops it; a token naming a committed top-level file counts too.
+    return [
+        token
+        for token in found
+        if "/" in token or token.endswith((".py", ".yml")) or (REPO_ROOT / token).is_file()
+    ]
 
 
 def resolve(name: str, tracked: list[str]) -> str:
@@ -273,6 +279,27 @@ class LabelerConfigTests(unittest.TestCase):
             unlabelled,
             [],
             f"Tier 3 paths no area/safety-critical glob matches: {unlabelled}",
+        )
+
+    def test_every_safety_critical_file_is_named_in_tier_3(self) -> None:
+        # The other direction of the join above. docs/risk-tiers.md is where a
+        # reviewer learns why a pull request carries area/safety-critical, and
+        # the labeler's own comments say "docs/risk-tiers.md puts it in Tier 3".
+        # tests/test_risk_tiers_doc.py cannot see a bullet dropped from the
+        # page, because it counts a labelled file as tiered through the label.
+        # So every file a safety-critical glob matches has to sit under a path
+        # the Tier 3 list names.
+        named = set()
+        for token in tier_3_paths():
+            named.update(files_under(resolve(token, self.tracked), self.tracked))
+        regexes = [glob_to_regex(p) for p in self.globs[SAFETY_LABEL]]
+        labelled = {f for f in self.tracked if any(r.match(f) for r in regexes)}
+        self.assertGreater(len(labelled), 5)
+        self.assertIn("cosign.pub", named)
+        self.assertEqual(
+            sorted(labelled - named),
+            [],
+            "area/safety-critical files docs/risk-tiers.md Tier 3 does not name",
         )
 
 

@@ -116,6 +116,8 @@ This page defines terms used across this repository's docs and workflow comments
 
 - `SIGNING_SECRET`: repository secret containing the cosign private key.
 - `COSIGN_PRIVATE_KEY`: environment variable used by the signing helper to pass the private key to cosign.
+- `COSIGN_PASSWORD`: password for an encrypted cosign private key; empty (the default) means the key is unencrypted.
+- `COSIGN_PUBLIC_KEY_PATH`: overrides the public key file used for signature verification; empty (the default) uses the committed `cosign.pub`.
 - `REGISTRY_ACTOR`: GitHub actor used as the registry username.
 - `REGISTRY_TOKEN`: token used for GHCR authentication in helper commands.
 - `REGISTRY_USER`: workflow-local registry username used by the Docker login step.

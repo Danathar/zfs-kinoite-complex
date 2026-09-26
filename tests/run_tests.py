@@ -51,6 +51,14 @@ point:
     imports `mod` to resolve the warning category, `--pdbcls=mod:Cls` imports
     `mod`, and `--cov-config` names an rc file whose `plugins =` imports and
     whose `data_file =` writes. Each is refused with the import options.
+  * **Closed:** an argument file. pytest's parser is built with
+    `fromfile_prefix_chars="@"`, so `@PATH` anywhere in argv is replaced by
+    the lines of PATH *inside pytest*, after this script has looked at the
+    one word it was given. A file holding `--junitxml=cosign.pub` or
+    `/tmp/elsewhere_test.py` carried every refusal above past the checks
+    below, and `@.env` printed the file's first line in pytest's
+    "file or directory not found" error without writing anything. Any
+    argument starting with `@` is refused; see `ARGUMENT_FILE_PREFIX`.
   * **Not closed:** a hand-built `__pycache__/*.pyc` whose header matches a
     tracked source's size and mtime. Python prefers it over the source, but
     making one takes a binary write timed to the source, and a byte-code cache
@@ -163,6 +171,16 @@ REFUSED_WRITE_OPTIONS = (
 )
 
 REFUSED_OPTIONS = REFUSED_IMPORT_OPTIONS + REFUSED_WRITE_OPTIONS
+
+# pytest builds its argparse parser with `fromfile_prefix_chars="@"`, so an
+# argument starting with this character is not an argument at all: argparse
+# replaces it with the lines of the file it names before any option is parsed,
+# and in a value position as well as a bare one (`-k @x` expands too). The
+# checks below see only the `@PATH` word and never the lines that replace it,
+# so the whole argument is refused rather than read -- reading it here would be
+# a second parser for pytest's argument-file format, and the file could change
+# between that read and pytest's.
+ARGUMENT_FILE_PREFIX = "@"
 
 # pytest's short options that take no value, from `pytest -h` (9.1.1). In a
 # single-dash argument these may precede the option that matters: `-vo
@@ -428,6 +446,15 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     for argument in arguments:
+        if argument.startswith(ARGUMENT_FILE_PREFIX):
+            print(
+                f"{argument!r} is refused here: pytest reads an argument starting "
+                f"with {ARGUMENT_FILE_PREFIX!r} as a file of further arguments, "
+                "which this runner never sees, so every refusal it makes would "
+                "stop at that one word. Put the arguments on the command line.",
+                file=sys.stderr,
+            )
+            return 2
         option = refused_option(argument)
         if option is not None:
             print(refusal_message(option), file=sys.stderr)

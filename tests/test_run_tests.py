@@ -17,6 +17,9 @@ test suite unattended" row, in the order they matter:
     `--log-file`, `--debug`, `--basetemp` and the plugin reports -- because the
     command carrying them runs unattended and nothing else gates what it
     writes;
+  * an argument starting with `@` is refused, because pytest replaces it with
+    the lines of the file it names after this runner has looked, which would
+    carry every refusal above past it inside a file;
   * an untracked `.py` anywhere under a selection is refused, so a module
     dropped into `tests/` cannot be collected until it is committed;
   * so is any other untracked file Python or pytest would load without being
@@ -271,6 +274,25 @@ class RunnerRefusalTests(unittest.TestCase):
             ["--debug", "tests"],
             ["--basetemp=.claude", "tests"],
             ["--cov-report=xml:cosign.pub", "tests"],
+        ):
+            with self.subTest(arguments=arguments):
+                self.run_pytest.reset_mock()
+                self.assertEqual(run_tests.main(arguments), 2)
+                self.run_pytest.assert_not_called()
+
+    def test_an_argument_file_is_refused(self) -> None:
+        # pytest's parser expands `@PATH` into the lines of PATH, in a value
+        # position as well as a bare one, after this runner has checked argv.
+        # The file here holds a write option and an outside test, and each
+        # reached pytest before this refusal existed; `@.env` needed no file
+        # at all -- pytest printed its first line as a path it could not find.
+        argument_file = self.outside / "arguments"
+        argument_file.write_text(f"--junitxml=cosign.pub\n{self.outside}\n")
+        for arguments in (
+            [f"@{argument_file}", "tests"],
+            ["tests", f"@{argument_file}"],
+            ["-k", f"@{argument_file}", "tests"],
+            ["@.env"],
         ):
             with self.subTest(arguments=arguments):
                 self.run_pytest.reset_mock()

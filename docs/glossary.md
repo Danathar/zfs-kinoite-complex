@@ -81,8 +81,12 @@ This page defines terms used across this repository's docs and workflow comments
 - `AKMODS_UPSTREAM_REF`: exact akmods source commit or ref override used for a run.
 - `AKMODS_UPSTREAM_TRACK`: floating akmods branch or tag resolved to a concrete SHA when no explicit upstream ref is pinned.
 - `DEFAULT_AKMODS_REF`: process-level environment override that can force one akmods source ref for a run; it is not wired as a formal workflow-dispatch input.
+- `AKMODS_BUILDDIR`: build directory handed to upstream akmods tooling; defaults to `build` under the `temporary checkout`.
+- `KCPATH`: override for the directory where upstream akmods tooling expects its kernel RPMs and `cache.json`; by default it is derived from `AKMODS_BUILDDIR`.
 - `ZFS_MINOR_VERSION`: OpenZFS minor line (for example `2.4`) passed into the akmods build.
 - `zfs_version`: the exact OpenZFS patch version (for example `2.4.3`) resolved on that line for one run, via [`ci_tools/zfs_release.py`](../ci_tools/zfs_release.py). The scheduled-build gate and the akmods cache-reuse check both compare on this exact value, not the minor line, so a new patch release forces a rebuild instead of being masked by a cache that only matches the line. The CI helpers read this value from the environment as `ZFS_VERSION`.
+- `GITHUB_TOKEN` / `GH_TOKEN`: optional token `ci_tools/zfs_release.py` sends to the GitHub API when resolving `zfs_version`; without one the call uses the low unauthenticated rate limit shared by every hosted runner on the same IP.
+- `DEFAULT_ZFS_MINOR_VERSION`: checked-in default for `ZFS_MINOR_VERSION`, read from `ci/defaults.json` unless the environment overrides it.
 - `AKMODS_KERNEL`: kernel flavor value passed to upstream akmods tooling; this repo uses `main`.
 - `AKMODS_TARGET`: akmods target name; this repo uses `zfs`.
 - `AKMODS_VERSION`: Fedora major version value passed to upstream akmods tooling.
@@ -94,6 +98,9 @@ This page defines terms used across this repository's docs and workflow comments
 - `BREW_IMAGE`: Homebrew payload OCI image ref passed to the root `Containerfile`. CI passes the digest-pinned `DEFAULT_BREW_IMAGE` from `ci/defaults.json`; the `Containerfile` default is a local-build convenience only.
 - `IMAGE_REPO`: final OS image repository path used when writing signing policy.
 - `SIGNING_KEY_FILENAME`: public-key filename installed into the image for future signature verification.
+- `DEFAULT_BASE_IMAGE`: checked-in default for the base image ref, read from `ci/defaults.json` unless the environment overrides it.
+- `DEFAULT_BREW_IMAGE`: checked-in default for the Homebrew payload image ref, read from `ci/defaults.json` unless the environment overrides it.
+- `STABLE_SIGNAL_IMAGE`: the image the scheduled-build gate watches as its `stable signal`; the checked-in value is the same ref as `DEFAULT_BASE_IMAGE`.
 
 ### Resolved Run Inputs
 
@@ -128,6 +135,7 @@ This page defines terms used across this repository's docs and workflow comments
 - `IMAGE_NAME`: final OS image repository name.
 - `IMAGE_TAG`: image tag being pushed, signed, or promoted.
 - `HAS_SIGNING_SECRET`: workflow-local boolean that records whether `SIGNING_SECRET` is configured.
+- `IMAGE_DIGEST`: digest the caller already pinned for the image being signed; when set, `sign-image` signs it directly instead of re-resolving `IMAGE_TAG`, which another workflow could have moved meanwhile.
 
 ### Workflow Control And Audit
 
@@ -137,3 +145,8 @@ This page defines terms used across this repository's docs and workflow comments
 - `BRANCH_TAG_PREFIX`: branch-safe tag prefix used by branch builds.
 - `AKMODS_FAILURE_LOG`: path to the captured akmods build log used for failure classification.
 - `AKMODS_FAILURE_PAYLOAD_PATH`: path where the failure classifier writes the sticky-issue payload.
+- `REQUIRE_MATCH`: when `true`, `check-akmods-cache` runs in strict mode after a rebuild, where a cache that does not carry the resolved `ZFS_VERSION` is a failure rather than a "rebuild needed" answer.
+- `WORKFLOW_CONCLUSION`: conclusion of the build workflow run (`success`, `failure`, ...) that the akmods badge writer reports on.
+- `BUILD_RAN`: whether that run actually built, so a successful gate-skipped schedule run leaves the akmods badge untouched.
+- `FAILURE_PAYLOAD_PATH`: path of the classifier payload the akmods badge writer reads; the file `AKMODS_FAILURE_PAYLOAD_PATH` named when it was written.
+- `BADGE_OUTPUT_PATH`: path where a badge writer puts its shields.io JSON payload; each writer has its own default under `artifacts/`.

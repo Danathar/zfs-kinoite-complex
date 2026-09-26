@@ -5,11 +5,14 @@ refs, tag formats, paths, step orders and tool invocations -- by recomputing eac
 the tree.
 Doing: Parses every bullet on the page into (terms, definition), then checks each claim
 against the thing that owns it: `ci/defaults.json` for the image refs and the ZFS minor
-line, `ci_tools/write_build_inputs_manifest.py` and `ci_tools/tagging_context.py` for the
-variable names a run actually carries, the real `build_candidate_tag` and
-`export_registry_context_values` for the two worked examples, module constants for the
-paths, `.github/workflows/build.yml` for the rechunk ordering, and the composite actions and
-shell scripts for the commands the page says this repository runs.
+line, every `require_env`/`optional_env`/`require_env_or_default`/`os.environ` read in
+`ci_tools/` and `shared/` for the variable names the helpers actually consume (and, in the
+other direction, those reads plus `write_github_env` exports, `Containerfile` `ARG`s and
+the workflows' own `env:` blocks for whether an entry still names anything), the real
+`build_candidate_tag` and `export_registry_context_values` for the two worked examples,
+module constants for the paths, `.github/workflows/build.yml` for the rechunk ordering,
+and the composite actions and shell scripts for the commands the page says this
+repository runs.
 Why: A glossary is the page a reader is sent to when a name in a log, a workflow input or a
 build-inputs manifest means nothing to them. Every line of it is a hand-copy of something
 that lives in the machine, and a hand-copy that nothing checks drifts by *omission* -- the
@@ -80,6 +83,7 @@ DEFAULTS = REPO_ROOT / "ci" / "defaults.json"
 CONTAINERFILE = REPO_ROOT / "Containerfile"
 BUILD_IMAGE_SH = REPO_ROOT / "build_files" / "build-image.sh"
 CI_TOOLS = REPO_ROOT / "ci_tools"
+SHARED = REPO_ROOT / "shared"
 GITHUB_DIR = REPO_ROOT / ".github"
 WORKFLOW_DIR = GITHUB_DIR / "workflows"
 ACTION_DIR = GITHUB_DIR / "actions"
@@ -101,6 +105,19 @@ TMPFILES_DIR = REPO_ROOT / "files" / "usr" / "lib" / "tmpfiles.d"
 BULLET_RE = re.compile(r"^- ((?:`[^`]+`)(?: / `[^`]+`)*): (.*)$")
 BACKTICKED_RE = re.compile(r"`([^`]+)`")
 UPPER_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
+# How a workflow or composite action actually reaches a variable: an expression
+# (`${{ secrets.NAME }}`, `${{ env.NAME }}`, `${{ vars.NAME }}`), a mapping key
+# (`env:`/`with:`/`secrets:` entries, `NAME: value`), or a shell reference in a
+# run block (`$NAME`, `${NAME}`). An upper-case word in an `echo` message or a
+# `::error::` line is none of these (review on #275).
+WORKFLOW_VARIABLE_RES = (
+    re.compile(r"\$\{\{[^}]*?\b(?:secrets|env|vars)\.([A-Z][A-Z0-9_]*)\b"),
+    re.compile(r"^\s*([A-Z][A-Z0-9_]*)\s*:", re.MULTILINE),
+    re.compile(r"\$\{?([A-Z][A-Z0-9_]*)\b"),
+)
+
+# The three helpers in `ci_tools/common.py` that read one named environment variable.
+ENV_READERS = frozenset({"require_env", "optional_env", "require_env_or_default"})
 
 ENV_SECTION = "Configuration And Environment Variables"
 COMMAND_SECTION = "Command Glossary"
@@ -291,6 +308,73 @@ def calls_named(path: Path, function: str) -> list[ast.Call]:
     ]
 
 
+def _is_environ(node: ast.expr) -> bool:
+    return isinstance(node, ast.Attribute) and node.attr == "environ"
+
+
+def env_reads(tree: ast.AST) -> set[str]:
+    """
+    Every literal variable name a module reads from the process environment: the first
+    argument of `require_env`, `optional_env` and `require_env_or_default`, of
+    `os.environ.get(...)`, and the key of an `os.environ[...]` read. A computed name is not
+    a read this join can see, and an `os.environ[...] = ...` store is not a read at all.
+    """
+
+    found = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            func = node.func
+            by_helper = isinstance(func, ast.Name) and func.id in ENV_READERS
+            by_get = (
+                isinstance(func, ast.Attribute) and func.attr == "get" and _is_environ(func.value)
+            )
+            if (by_helper or by_get) and node.args and isinstance(node.args[0], ast.Constant):
+                found.add(node.args[0].value)
+        elif isinstance(node, ast.Subscript) and isinstance(node.ctx, ast.Load):
+            if _is_environ(node.value) and isinstance(node.slice, ast.Constant):
+                found.add(node.slice.value)
+    return found
+
+
+def read_variables() -> set[str]:
+    """Every variable name `ci_tools/` and `shared/` read from the environment."""
+
+    found = set()
+    for package in (CI_TOOLS, SHARED):
+        for path in sorted(package.glob("*.py")):
+            found |= env_reads(ast.parse(path.read_text(encoding="utf-8")))
+    return found
+
+
+def exported_variables() -> set[str]:
+    """Every key `ci_tools/` writes to `GITHUB_ENV` through `write_github_env`."""
+
+    found = set()
+    for path in sorted(CI_TOOLS.glob("*.py")):
+        for call in calls_named(path, "write_github_env"):
+            if call.args and isinstance(call.args[0], ast.Dict):
+                found.update(
+                    key.value for key in call.args[0].keys if isinstance(key, ast.Constant)
+                )
+    return found
+
+
+def workflow_variables() -> set[str]:
+    """
+    Every variable the comment-stripped workflows and composite actions reach: an
+    `env:`-style key, a `${{ secrets.NAME }}`, `env.NAME` or `vars.NAME` expression, or a
+    `$NAME` in a run block. Upper-case words in messages do not count, so a glossary
+    entry whose wiring is removed goes stale here even if an `echo` still names it.
+    """
+
+    found = set()
+    for path in sorted([*WORKFLOW_DIR.glob("*.yml"), *ACTION_DIR.glob("*/action.yml")]):
+        text = strip_yaml_comments(path.read_text(encoding="utf-8"))
+        for pattern in WORKFLOW_VARIABLE_RES:
+            found.update(pattern.findall(text))
+    return found
+
+
 def argv_lists(path: Path) -> list[list[str]]:
     """Every literal argv list handed to `run_cmd` in a module."""
 
@@ -369,6 +453,19 @@ class ParserTests(unittest.TestCase):
     def test_step_names_reads_labels_in_file_order(self) -> None:
         self.assertEqual(step_names("  - name: One\n    env:\n  - name: Two\n"), ["One", "Two"])
 
+    def test_env_reads_sees_each_reader_shape_and_only_literal_names(self) -> None:
+        source = (
+            "a = require_env('A')\n"
+            "b = optional_env('B', '')\n"
+            "c = require_env_or_default('C')\n"
+            "d = os.environ.get('D', '')\n"
+            "e = os.environ['E']\n"
+            "os.environ['STORED'] = 'x'\n"
+            "f = require_env(name)\n"
+            "g = other.get('G')\n"
+        )
+        self.assertEqual(env_reads(ast.parse(source)), {"A", "B", "C", "D", "E"})
+
 
 class PageStructureTests(unittest.TestCase):
     def test_every_bullet_on_the_page_parses(self) -> None:
@@ -386,14 +483,41 @@ class PageStructureTests(unittest.TestCase):
 
 
 class EnvironmentVariableTests(unittest.TestCase):
-    def test_every_defined_variable_occurs_outside_docs_and_tests(self) -> None:
-        implementation = implementation_text()
-        undefined = sorted(
-            name
-            for name in defined_variables(doc_text())
-            if not re.search(rf"\b{re.escape(name)}\b", implementation)
+    def test_every_variable_ci_tools_and_shared_read_is_documented(self) -> None:
+        """
+        A helper that starts reading a new variable has to write it down on this page,
+        because the name shows up in a workflow `env:` block and in that helper's own
+        "Missing required environment variable" error, and the glossary is where a reader
+        is sent to look it up.
+        """
+
+        read = read_variables()
+        # One name per reader shape, so a read moved to a form the walk cannot see fails
+        # here instead of quietly narrowing the join.
+        self.assertIn("IMAGE_TAG", read)  # require_env
+        self.assertIn("KCPATH", read)  # optional_env
+        self.assertIn("AKMODS_UPSTREAM_REF", read)  # require_env_or_default
+        self.assertIn("COSIGN_PASSWORD", read)  # os.environ.get
+        missing = sorted(read - defined_variables(doc_text()) - GITHUB_PROVIDED)
+        self.assertEqual(missing, [], f"read from the environment, undefined on the page: {missing}")
+
+    def test_every_defined_variable_is_still_read_exported_declared_or_set(self) -> None:
+        """
+        An entry has to name something the machine still uses: a name `ci_tools/` or
+        `shared/` read, a value they export to `GITHUB_ENV`, an `ARG` of the root
+        `Containerfile`, or a name a workflow or composite action sets or tests. Prose
+        elsewhere in the tree does not count: a name that survives only in a README
+        sentence or a YAML comment is exactly the stale entry this join exists to catch.
+        """
+
+        live = (
+            read_variables()
+            | exported_variables()
+            | set(containerfile_args())
+            | workflow_variables()
         )
-        self.assertEqual(undefined, [], f"defined by the page, used nowhere: {undefined}")
+        stale = sorted(defined_variables(doc_text()) - live)
+        self.assertEqual(stale, [], f"defined by the page, used nowhere: {stale}")
 
     def test_the_build_inputs_manifest_names_only_documented_variables(self) -> None:
         """
@@ -424,13 +548,7 @@ class EnvironmentVariableTests(unittest.TestCase):
 
     def test_every_value_ci_tools_exports_to_github_env_is_documented(self) -> None:
         defined = defined_variables(doc_text())
-        exported: set[str] = set()
-        for path in sorted(CI_TOOLS.glob("*.py")):
-            for call in calls_named(path, "write_github_env"):
-                if call.args and isinstance(call.args[0], ast.Dict):
-                    exported.update(
-                        key.value for key in call.args[0].keys if isinstance(key, ast.Constant)
-                    )
+        exported = exported_variables()
         self.assertEqual(exported, {"IMAGE_ORG", "IMAGE_REGISTRY", "ACTOR_IS_BOT"})
         missing = sorted(exported - defined)
         self.assertEqual(missing, [], f"exported to GITHUB_ENV, undefined by the page: {missing}")

@@ -1081,7 +1081,7 @@ class CacheRowTests(unittest.TestCase):
             )
         self.assertEqual(status.source_image, pinned)
         self.assertTrue(pinned.endswith(":main-44"), pinned)
-        inspect.assert_called_once_with(f"docker://{pinned}")
+        inspect.assert_called_once_with(f"docker://{pinned}", creds=None)
 
     def test_the_tag_tracks_the_fedora_version_rather_than_being_a_literal(self) -> None:
         self.assertTrue(

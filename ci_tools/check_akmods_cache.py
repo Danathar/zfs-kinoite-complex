@@ -20,6 +20,7 @@ from ci_tools.common import (
     cosign_verify,
     normalize_owner,
     optional_env,
+    registry_creds_from_env,
     require_env,
     skopeo_copy,
     skopeo_inspect_json_optional,
@@ -111,15 +112,8 @@ def inspect_akmods_cache(
     """
 
     source_image = f"ghcr.io/{image_org}/{source_repo}:main-{fedora_version}"
-    registry_actor = optional_env("REGISTRY_ACTOR")
-    registry_token = optional_env("REGISTRY_TOKEN")
-    registry_creds = f"{registry_actor}:{registry_token}" if registry_actor and registry_token else None
-    if registry_creds:
-        inspect_json = skopeo_inspect_json_optional(
-            f"docker://{source_image}", creds=registry_creds
-        )
-    else:
-        inspect_json = skopeo_inspect_json_optional(f"docker://{source_image}")
+    registry_creds = registry_creds_from_env()
+    inspect_json = skopeo_inspect_json_optional(f"docker://{source_image}", creds=registry_creds)
     if inspect_json is None:
         return AkmodsCacheStatus(
             source_image=source_image,
@@ -137,14 +131,11 @@ def inspect_akmods_cache(
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         akmods_dir = root / "akmods"
-        if registry_creds:
-            skopeo_copy(
-                f"docker://{source_image_pinned}",
-                f"dir:{akmods_dir}",
-                creds=registry_creds,
-            )
-        else:
-            skopeo_copy(f"docker://{source_image_pinned}", f"dir:{akmods_dir}")
+        skopeo_copy(
+            f"docker://{source_image_pinned}",
+            f"dir:{akmods_dir}",
+            creds=registry_creds,
+        )
 
         try:
             layer_files = load_layer_files_from_oci_layout(akmods_dir)
@@ -178,15 +169,11 @@ def inspect_akmods_cache(
     if verify_signature:
         signature_verified = True
         try:
-            if registry_creds:
-                cosign_verify(
-                    source_image_pinned,
-                    key_path=str(REPO_ROOT / "cosign.pub"),
-                    registry_username=registry_actor,
-                    registry_password=registry_token,
-                )
-            else:
-                cosign_verify(source_image_pinned, key_path=str(REPO_ROOT / "cosign.pub"))
+            cosign_verify(
+                source_image_pinned,
+                key_path=str(REPO_ROOT / "cosign.pub"),
+                creds=registry_creds,
+            )
         except CiToolError:
             signature_verified = False
 

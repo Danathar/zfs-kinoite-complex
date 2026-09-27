@@ -10,6 +10,7 @@ Goal: Control rebuild decisions in main and validation workflows.
 
 from __future__ import annotations
 
+import re
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -95,6 +96,28 @@ def _has_kernel_matching_rpm(root_dir: Path, kernel_release: str, zfs_version: s
     return any(rpm_dir.glob(pattern))
 
 
+def _require_cache_digest_ref(pinned_image: str, *, image_org: str, source_repo: str) -> str:
+    """
+    Return `pinned_image` if it is a digest ref into this run's cache repository.
+
+    A caller that hands in a pinned ref is saying "check exactly this image".
+    Anything else -- a tag, a different repository, a truncated digest -- would
+    make the check vouch for an image other than the one the caller consumes,
+    so it is refused rather than resolved.
+    """
+
+    expected = re.compile(
+        rf"ghcr\.io/{re.escape(image_org)}/{re.escape(source_repo)}@sha256:[0-9a-f]{{64}}"
+    )
+    if not expected.fullmatch(pinned_image):
+        raise CiToolError(
+            f"Refusing to check akmods cache ref {pinned_image!r}: expected "
+            f"ghcr.io/{image_org}/{source_repo}@sha256:<64 hex digits>, the digest ref "
+            "pin-akmods-cache publishes for this repository."
+        )
+    return pinned_image
+
+
 def inspect_akmods_cache(
     *,
     image_org: str,
@@ -103,31 +126,48 @@ def inspect_akmods_cache(
     kernel_release: str,
     zfs_version: str,
     verify_signature: bool = True,
+    pinned_image: str = "",
 ) -> AkmodsCacheStatus:
     """
     Inspect one shared akmods cache image and report whether it is reusable.
 
     This helper is shared by the main workflow and the read-only validation
     workflows so they all make the same cache-reuse decision.
+
+    By default the shared tag is resolved to a digest here, and that digest is
+    both the one checked and the one reported as `source_image_pinned`.
+    `pinned_image` skips the tag lookup and checks a digest the caller already
+    pinned. The post-rebuild verification needs that: the run signs and builds
+    from the digest `pin-akmods-cache` published, and a second, independent
+    read of the mutable tag could land on a different image.
     """
 
     source_image = f"ghcr.io/{image_org}/{source_repo}:main-{fedora_version}"
     registry_creds = registry_creds_from_env()
-    inspect_json = skopeo_inspect_json_optional(f"docker://{source_image}", creds=registry_creds)
-    if inspect_json is None:
-        return AkmodsCacheStatus(
-            source_image=source_image,
-            image_exists=False,
-            missing_release=kernel_release,
-            required_zfs_version=zfs_version,
-            inspection_method="missing-image",
+    if pinned_image:
+        source_image_pinned = _require_cache_digest_ref(
+            pinned_image, image_org=image_org, source_repo=source_repo
         )
+    else:
+        inspect_json = skopeo_inspect_json_optional(
+            f"docker://{source_image}", creds=registry_creds
+        )
+        if inspect_json is None:
+            return AkmodsCacheStatus(
+                source_image=source_image,
+                image_exists=False,
+                missing_release=kernel_release,
+                required_zfs_version=zfs_version,
+                inspection_method="missing-image",
+            )
 
-    source_digest = str(inspect_json.get("Digest") or "")
-    if not source_digest:
-        raise CiToolError(f"Missing digest in skopeo inspect output for docker://{source_image}")
+        source_digest = str(inspect_json.get("Digest") or "")
+        if not source_digest:
+            raise CiToolError(
+                f"Missing digest in skopeo inspect output for docker://{source_image}"
+            )
 
-    source_image_pinned = f"ghcr.io/{image_org}/{source_repo}@{source_digest}"
+        source_image_pinned = f"ghcr.io/{image_org}/{source_repo}@{source_digest}"
     with tempfile.TemporaryDirectory() as temp_dir:
         root = Path(temp_dir)
         akmods_dir = root / "akmods"
@@ -200,6 +240,19 @@ def main() -> None:
     # the image with. See the "Verify the rebuilt cache" step in
     # .github/actions/prepare-main-akmods/action.yml.
     require_match = optional_env("REQUIRE_MATCH").lower() == "true"
+    # Strict mode checks the exact digest the "Resolve shared akmods cache
+    # digest" step published, because that digest is what this run signs and
+    # builds the candidate from. Re-reading the shared tag here would check
+    # whatever it points at by now, so a missing pin is an error, not a cue to
+    # fall back to the tag. Read with optional_env because only strict mode
+    # needs it; the reuse check that runs first has no pin yet.
+    pinned_image = optional_env("AKMODS_IMAGE_PINNED") if require_match else ""
+    if require_match and not pinned_image:
+        raise CiToolError(
+            "REQUIRE_MATCH=true needs AKMODS_IMAGE_PINNED, the digest ref pin-akmods-cache "
+            "published. Refusing to verify the shared tag instead: it can point at a different "
+            "image than the one this run signs and builds from."
+        )
 
     status = inspect_akmods_cache(
         image_org=image_org,
@@ -208,6 +261,7 @@ def main() -> None:
         kernel_release=kernel_release,
         zfs_version=zfs_version,
         verify_signature=not require_match,
+        pinned_image=pinned_image,
     )
 
     if require_match:

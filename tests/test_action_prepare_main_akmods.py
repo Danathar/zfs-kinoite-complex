@@ -127,10 +127,13 @@ RESOLVE_OUTPUTS = {
 
 STEP_OUTPUTS = {
     "resolve": RESOLVE_OUTPUTS,
+    # The cache probe and the pin step each resolve the shared tag on their own, so their pinned
+    # refs are given different digests here: a step wired to the wrong one then reads a value the
+    # test can tell apart.
     "cache": {
         "exists": "true",
         "akmods_image": "ghcr.io/danathar/akmods-zfs:42-6.16.4-200.fc42.x86_64",
-        "akmods_image_pinned": "ghcr.io/danathar/akmods-zfs@sha256:" + "e" * 64,
+        "akmods_image_pinned": "ghcr.io/danathar/akmods-zfs@sha256:" + "f" * 64,
     },
     "pin_akmods": {
         "akmods_image": "ghcr.io/danathar/akmods-zfs:42-6.16.4-200.fc42.x86_64",
@@ -689,6 +692,38 @@ class StepWiringTests(unittest.TestCase):
         self.assertEqual(env["REQUIRE_MATCH"], "true")
         self.assertEqual(env["ZFS_VERSION"], ZFS_PATCH_VERSION)
         self.assertEqual(env["AKMODS_REPO"], INPUTS["akmods_repo"])
+
+    def test_the_post_rebuild_verification_checks_the_digest_the_run_consumes(self) -> None:
+        """
+        The verification is handed the pin step's digest, and runs after that step.
+
+        The pin step's `akmods_image_pinned` is what the candidate build consumes and the signing
+        job signs. If the verification resolved the shared tag itself, or were handed the earlier
+        cache probe's pin, it could pass on one image while the run signs and builds another.
+        """
+
+        env = _run_step(VERIFY_STEP).only_call.env
+        self.assertEqual(
+            env["AKMODS_IMAGE_PINNED"], STEP_OUTPUTS["pin_akmods"]["akmods_image_pinned"]
+        )
+        self.assertNotEqual(
+            env["AKMODS_IMAGE_PINNED"], STEP_OUTPUTS["cache"]["akmods_image_pinned"]
+        )
+
+        names = [step.get("name") for step in _action()["runs"]["steps"]]
+        self.assertLess(
+            names.index("Resolve shared akmods cache digest"), names.index(VERIFY_STEP)
+        )
+        # The action's outputs must publish that same pin on the rebuild path, or the digest
+        # verified here and the digest the workflow builds from come from different steps.
+        outputs = _action()["outputs"]
+        for output in ("akmods_image_pinned", "akmods_image_digest"):
+            with self.subTest(output=output):
+                self.assertTrue(
+                    outputs[output]["value"].startswith(
+                        f"${{{{ steps.pin_akmods.outputs.{output}"
+                    )
+                )
 
     def test_the_input_resolution_step_is_given_a_token_for_the_release_lookup(self) -> None:
         """

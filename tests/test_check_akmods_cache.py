@@ -390,6 +390,76 @@ class CheckAkmodsCacheTests(unittest.TestCase):
             )
 
 
+class PinnedImageTests(unittest.TestCase):
+    """
+    Covers `inspect_akmods_cache(pinned_image=...)`, the post-rebuild path.
+
+    With a pin the helper must check exactly that digest: no tag lookup, and
+    no ref it cannot prove belongs to this run's cache repository.
+    """
+
+    _PINNED = "ghcr.io/danathar/zfs-kinoite-complex-akmods@sha256:" + "e" * 64
+
+    @staticmethod
+    def _fake_unpack(_layer_files: list[Path], destination: Path) -> None:
+        rpm_dir = destination / "rpms" / "kmods" / "zfs"
+        rpm_dir.mkdir(parents=True, exist_ok=True)
+        (rpm_dir / "kmod-zfs-6.18.16-200.fc43.x86_64-2.4.4-1.fc43.x86_64.rpm").touch()
+
+    def _inspect(self, pinned_image: str):
+        with patch(
+            "ci_tools.check_akmods_cache.skopeo_inspect_json_optional",
+            return_value={"Digest": "sha256:" + "0" * 64},
+        ) as inspect_json_optional, patch(
+            "ci_tools.check_akmods_cache.skopeo_copy"
+        ) as skopeo_copy, patch(
+            "ci_tools.check_akmods_cache.load_layer_files_from_oci_layout",
+            return_value=[],
+        ), patch(
+            "ci_tools.check_akmods_cache.unpack_layer_tarballs",
+            side_effect=self._fake_unpack,
+        ), patch("ci_tools.check_akmods_cache.cosign_verify") as cosign_verify:
+            try:
+                status = inspect_akmods_cache(
+                    image_org="danathar",
+                    source_repo="zfs-kinoite-complex-akmods",
+                    fedora_version="43",
+                    kernel_release="6.18.16-200.fc43.x86_64",
+                    zfs_version="2.4.4",
+                    verify_signature=False,
+                    pinned_image=pinned_image,
+                )
+            except CiToolError as exc:
+                status = exc
+        return status, inspect_json_optional, skopeo_copy, cosign_verify
+
+    def test_pinned_image_is_copied_and_checked_without_a_tag_lookup(self) -> None:
+        status, inspect_json_optional, skopeo_copy, cosign_verify = self._inspect(self._PINNED)
+
+        inspect_json_optional.assert_not_called()
+        skopeo_copy.assert_called_once_with(f"docker://{self._PINNED}", ANY, creds=None)
+        cosign_verify.assert_not_called()
+        self.assertTrue(status.content_matches)
+        self.assertEqual(status.source_image_pinned, self._PINNED)
+
+    def test_refs_that_are_not_a_digest_in_this_cache_repository_are_refused(self) -> None:
+        refused = {
+            "the mutable tag": "ghcr.io/danathar/zfs-kinoite-complex-akmods:main-43",
+            "another repository": "ghcr.io/danathar/other-akmods@sha256:" + "e" * 64,
+            "another owner": "ghcr.io/someone/zfs-kinoite-complex-akmods@sha256:" + "e" * 64,
+            "another registry": "quay.io/danathar/zfs-kinoite-complex-akmods@sha256:" + "e" * 64,
+            "a short digest": "ghcr.io/danathar/zfs-kinoite-complex-akmods@sha256:abc123",
+            "a trailing suffix": self._PINNED + ":main-43",
+        }
+        for label, ref in refused.items():
+            with self.subTest(ref=label):
+                status, inspect_json_optional, skopeo_copy, _ = self._inspect(ref)
+                self.assertIsInstance(status, CiToolError)
+                self.assertIn("Refusing to check akmods cache ref", str(status))
+                inspect_json_optional.assert_not_called()
+                skopeo_copy.assert_not_called()
+
+
 class RegistryCredentialsTests(unittest.TestCase):
     """
     Covers the authenticated registry path, which is the one production takes.
@@ -552,6 +622,7 @@ class RequireMatchModeTests(unittest.TestCase):
         "AKMODS_REPO": "zfs-kinoite-complex-akmods",
         "ZFS_VERSION": "2.4.4",
     }
+    _PINNED = "ghcr.io/danathar/zfs-kinoite-complex-akmods@sha256:" + "e" * 64
 
     def test_require_match_raises_when_the_rebuilt_cache_does_not_match(self) -> None:
         mismatched = AkmodsCacheStatus(
@@ -561,7 +632,7 @@ class RequireMatchModeTests(unittest.TestCase):
             missing_release="6.18.16-200.fc43.x86_64",
             required_zfs_version="2.4.4",
         )
-        env = {**self._ENV, "REQUIRE_MATCH": "true"}
+        env = {**self._ENV, "REQUIRE_MATCH": "true", "AKMODS_IMAGE_PINNED": self._PINNED}
         with patch.dict(os.environ, env, clear=False), patch(
             "ci_tools.check_akmods_cache.inspect_akmods_cache", return_value=mismatched
         ), self.assertRaises(CiToolError) as context:
@@ -580,7 +651,7 @@ class RequireMatchModeTests(unittest.TestCase):
                 missing_release="",
                 required_zfs_version="2.4.4",
             )
-            env = {**self._ENV, "REQUIRE_MATCH": "true", "GITHUB_OUTPUT": str(output_path)}
+            env = {**self._ENV, "REQUIRE_MATCH": "true", "AKMODS_IMAGE_PINNED": self._PINNED, "GITHUB_OUTPUT": str(output_path)}
             with patch.dict(os.environ, env, clear=False), patch(
                 "ci_tools.check_akmods_cache.inspect_akmods_cache", return_value=matched
             ):
@@ -606,7 +677,7 @@ class RequireMatchModeTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temp_dir:
             output_path = Path(temp_dir) / "github-output"
-            env = {**self._ENV, "REQUIRE_MATCH": "true", "GITHUB_OUTPUT": str(output_path)}
+            env = {**self._ENV, "REQUIRE_MATCH": "true", "AKMODS_IMAGE_PINNED": self._PINNED, "GITHUB_OUTPUT": str(output_path)}
             with patch.dict(os.environ, env, clear=False), patch(
                 "ci_tools.check_akmods_cache.inspect_akmods_cache",
                 return_value=unsigned_but_correct,
@@ -624,7 +695,7 @@ class RequireMatchModeTests(unittest.TestCase):
         # is required" and write exists=false -- seen for real in run 30318665416.
         with tempfile.TemporaryDirectory() as temp_dir:
             output_path = Path(temp_dir) / "github-output"
-            env = {**self._ENV, "REQUIRE_MATCH": "true", "GITHUB_OUTPUT": str(output_path)}
+            env = {**self._ENV, "REQUIRE_MATCH": "true", "AKMODS_IMAGE_PINNED": self._PINNED, "GITHUB_OUTPUT": str(output_path)}
             with patch.dict(os.environ, env, clear=False), patch(
                 "ci_tools.check_akmods_cache.inspect_akmods_cache",
                 return_value=AkmodsCacheStatus(
@@ -649,10 +720,46 @@ class RequireMatchModeTests(unittest.TestCase):
             # never even created.
             self.assertFalse(output_path.exists())
 
+    def test_require_match_checks_the_pinned_digest_not_the_tag(self) -> None:
+        # The rebuild path pins the freshly published tag in an earlier step,
+        # and the run signs and builds from that digest. Strict mode must check
+        # the same one, not resolve the mutable tag again.
+        matched = AkmodsCacheStatus(
+            source_image="ghcr.io/danathar/zfs-kinoite-complex-akmods:main-43",
+            image_exists=True,
+            source_image_pinned=self._PINNED,
+            missing_release="",
+            required_zfs_version="2.4.4",
+        )
+        env = {**self._ENV, "REQUIRE_MATCH": "true", "AKMODS_IMAGE_PINNED": self._PINNED}
+        with patch.dict(os.environ, env, clear=False), patch(
+            "ci_tools.check_akmods_cache.inspect_akmods_cache", return_value=matched
+        ) as inspect_cache, contextlib.redirect_stdout(io.StringIO()):
+            main()
+
+        self.assertEqual(inspect_cache.call_args.kwargs["pinned_image"], self._PINNED)
+
+    def test_require_match_refuses_to_run_without_a_pinned_digest(self) -> None:
+        # Falling back to the tag would reopen the gap the pin closes, so a
+        # missing pin stops the run before any registry call.
+        env = {**self._ENV, "REQUIRE_MATCH": "true"}
+        with patch.dict(os.environ, env, clear=False), patch(
+            "ci_tools.check_akmods_cache.inspect_akmods_cache"
+        ) as inspect_cache, self.assertRaises(CiToolError) as context:
+            os.environ.pop("AKMODS_IMAGE_PINNED", None)
+            main()
+
+        inspect_cache.assert_not_called()
+        self.assertIn("AKMODS_IMAGE_PINNED", str(context.exception))
+
     def test_reuse_path_still_verifies_the_signature(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             output_path = Path(temp_dir) / "github-output"
-            env = {**self._ENV, "GITHUB_OUTPUT": str(output_path)}
+            env = {
+                **self._ENV,
+                "GITHUB_OUTPUT": str(output_path),
+                "AKMODS_IMAGE_PINNED": self._PINNED,
+            }
             with patch.dict(os.environ, env, clear=False), patch(
                 "ci_tools.check_akmods_cache.inspect_akmods_cache",
                 return_value=AkmodsCacheStatus(
@@ -669,6 +776,9 @@ class RequireMatchModeTests(unittest.TestCase):
                 main()
 
             self.assertTrue(inspect_cache.call_args.kwargs["verify_signature"])
+            # The reuse decision resolves the tag itself: it runs before any
+            # pin exists, and a leftover AKMODS_IMAGE_PINNED must not steer it.
+            self.assertEqual(inspect_cache.call_args.kwargs["pinned_image"], "")
 
     def test_default_mode_still_reports_a_mismatch_without_raising(self) -> None:
         # The pre-rebuild check must keep treating "no usable cache" as a

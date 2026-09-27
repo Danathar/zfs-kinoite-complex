@@ -111,6 +111,13 @@ If the cache is missing, out of date, or a manual rebuild is requested, the work
 2. points its target output to `zfs-kinoite-complex-akmods`
 3. writes the upstream `cache.json` file for the supported primary kernel
 4. builds the shared cache image for that supported kernel
+5. pins the freshly published `main-<fedora>` tag to a digest and runs
+   `check-akmods-cache` in strict mode (`REQUIRE_MATCH=true`) against that
+   digest, passed as `AKMODS_IMAGE_PINNED`, so the check never re-reads the
+   mutable tag. The run fails unless that digest carries a `kmod-zfs` for the
+   primary kernel at the resolved ZFS version. The signature is not checked
+   here, because nothing has signed the new cache yet: the `sign-akmods-cache`
+   job signs that digest, and `promote-stable` waits for it
 
 Branch note:
 

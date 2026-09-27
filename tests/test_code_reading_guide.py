@@ -336,7 +336,7 @@ def tracked(*patterns: str) -> list[str]:
     return listing.stdout.split()
 
 
-def test_sources() -> list[Path]:
+def tracked_test_sources() -> list[Path]:
     return [REPO_ROOT / name for name in tracked("tests/*.py", "tests/e2e/*.py")]
 
 
@@ -658,7 +658,7 @@ class RunningTestsRecipeTests(unittest.TestCase):
         # line wrong for a fresh checkout -- and wrong for CI, whose install
         # step names the same three packages.
         foreign = []
-        for path in test_sources():
+        for path in tracked_test_sources():
             for name, guarded in imported_modules(path):
                 if guarded:
                     continue
@@ -675,7 +675,7 @@ class RunningTestsRecipeTests(unittest.TestCase):
         # runner CI actually provisions, which is the same broken recipe by a
         # slower route.
         unskipped = []
-        for path in test_sources():
+        for path in tracked_test_sources():
             optional = {
                 name.split(".")[0]
                 for name, guarded in imported_modules(path)
@@ -697,7 +697,7 @@ class RunningTestsRecipeTests(unittest.TestCase):
         # framework, and that is what makes the suite runnable by
         # `python3 -m unittest` as well.
         wrong = []
-        for path in test_sources():
+        for path in tracked_test_sources():
             tree = ast.parse(path.read_text(encoding="utf-8"))
             for node in ast.walk(tree):
                 if not isinstance(node, ast.ClassDef):
@@ -719,7 +719,7 @@ class EndToEndParagraphTests(unittest.TestCase):
             "`python3 -m ci_tools.cli <command>` as a real subprocess",
             guide_prose(),
         )
-        sources = [path for path in test_sources() if path.parent.name == "e2e"]
+        sources = [path for path in tracked_test_sources() if path.parent.name == "e2e"]
         self.assertTrue(sources, "no end-to-end sources found")
         body = "\n".join(path.read_text(encoding="utf-8") for path in sources)
         self.assertIn('"-m", "ci_tools.cli"', body)
@@ -728,7 +728,7 @@ class EndToEndParagraphTests(unittest.TestCase):
     def test_the_end_to_end_tier_really_mocks_nothing(self) -> None:
         # The distinguishing claim of the tier. A mock imported here would make
         # it a second unit suite that costs a subprocess.
-        for path in (path for path in test_sources() if path.parent.name == "e2e"):
+        for path in (path for path in tracked_test_sources() if path.parent.name == "e2e"):
             with self.subTest(path=path.name):
                 self.assertNotIn("unittest.mock", path.read_text(encoding="utf-8"))
 

@@ -139,15 +139,25 @@ def rule_2_paths(doc: str) -> list[str]:
 
 
 def tier_3_paths() -> list[str]:
-    """The backticked paths docs/risk-tiers.md lists under Tier 3."""
+    """The backticked paths docs/risk-tiers.md lists under Tier 3.
+
+    A bullet runs on through its indented continuation lines, which is how
+    tests/test_risk_tiers_doc.py reads it too: a path named only in a bullet's
+    prose is still in the tier (#288).
+    """
 
     lines = RISK_TIERS.read_text(encoding="utf-8").splitlines()
     start = next(i for i, line in enumerate(lines) if line.startswith("### Tier 3"))
     block = []
+    in_bullet = False
     for line in lines[start + 1 :]:
         if line.startswith("###"):
             break
         if line.lstrip().startswith("- "):
+            in_bullet = True
+        elif not (in_bullet and line.startswith(" ") and line.strip()):
+            in_bullet = False
+        if in_bullet:
             block.append(line)
     found = BACKTICKED_RE.findall("\n".join(block))
     # `cosign.pub` has no slash and no .py/.yml suffix, so the shape filter

@@ -147,6 +147,13 @@ Requires a human decision first — these mirror AGENTS.md section 0:
   workflow cannot gain a scope unless the same pull request also changes the
   policy file, which is Tier 3.
 - **Lowering a coverage floor**, which is a claim that a code path went away.
+- **Changing what an agent may run without a prompt**: `.claude/settings.json`,
+  the hook it registers under `.claude/hooks/`, a command file's frontmatter
+  under `.claude/commands/`, or the refusals in `tests/run_tests.py`. The last
+  one sits under `tests/`, and editing tests is on the free list above; this
+  file is the exception, because each refusal it drops is a denied operation
+  the next session reaches with no prompt. `docs/risk-tiers.md` puts all four
+  in Tier 3.
 - **Adding a runtime dependency.** Everything here is Python standard library;
   see [`.github/copilot-instructions.md`](../.github/copilot-instructions.md).
 

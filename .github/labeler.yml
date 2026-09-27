@@ -61,6 +61,16 @@
           # puts it in Tier 3: loosening it reopens a direct push to main, and a
           # push to main starts the build that signs and promotes.
           - '.github/rulesets/**'
+          # The agent permission boundary. docs/risk-tiers.md puts it in Tier 3:
+          # settings.json is the allow/deny table and registers the hook, the
+          # hook keeps the allow-listed commands inside that table, run_tests.py
+          # keeps the one allow-listed test command from importing code outside
+          # the diff, and a command file's frontmatter can grant tools. By path
+          # alone they were area/agent-config and area/tests, which is Tier 1.
+          - '.claude/settings.json'
+          - '.claude/hooks/**'
+          - '.claude/commands/**'
+          - 'tests/run_tests.py'
 
 'area/build':
   - changed-files:

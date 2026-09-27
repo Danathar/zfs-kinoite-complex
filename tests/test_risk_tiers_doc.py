@@ -243,9 +243,14 @@ class EveryTrackedFileHasATier(unittest.TestCase):
             ".github/rulesets/main.json": 3,
             "Containerfile": 2,
             ".github/actions/build-native-image/action.yml": 2,
-            "tests/run_tests.py": 1,
             "docs/risk-tiers.md": 1,
-            ".claude/settings.json": 1,
+            "tests/test_cli.py": 1,
+            # The agent permission boundary: Tier 1 by path, Tier 3 by what a
+            # change to it lets every later session do unprompted.
+            "tests/run_tests.py": 3,
+            ".claude/settings.json": 3,
+            ".claude/hooks/gate-git-diff.sh": 3,
+            ".claude/commands/review-safety-critical.md": 3,
             ".editorconfig": 0,
             "LICENSE": 0,
             # The image payload: build-image.sh installs these onto every

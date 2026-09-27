@@ -19,8 +19,9 @@ how much of it to do.
 
 **Anything touching the seven files in `AGENTS.md` section 0 rule 2**, plus the
 ZFS line, anything pool-facing, the files the image installs onto every booted
-machine, the policy file that says what each workflow's token may do, and the
-ruleset that keeps `main` behind a pull request.
+machine, the policy file that says what each workflow's token may do, the
+ruleset that keeps `main` behind a pull request, and the files that decide what
+an agent may run here without a prompt.
 Labelled `area/safety-critical`.
 
 - `.github/workflows/build.yml`
@@ -39,6 +40,19 @@ Labelled `area/safety-critical`.
 - `.github/rulesets/`, because the ruleset in it is what keeps `main`, and so
   the signing build, behind a pull request. Loosening it reopens the direct
   push; see [`branch-protection.md`](./branch-protection.md)
+- `.claude/settings.json`, `.claude/hooks/`, `.claude/commands/`, `tests/run_tests.py`:
+  together these are the agent permission boundary. The settings file is the permission table: its deny list keeps
+  signing, registry pushes, merges and workflow dispatch away from an agent,
+  its allow list is what runs with no prompt, and its hooks block is what
+  registers `.claude/hooks/gate-git-diff.sh` at all. The gate is what keeps the
+  allow-listed git, gh, skopeo and cosign commands from reading or writing
+  past those rules, and the runner is what keeps the one allow-listed test
+  command from importing code that is not in the diff. A command file looks
+  like documentation, but its frontmatter can grant tools for as long as the
+  command runs. By path alone each of these was Tier 1, which an agent may
+  change unattended, and a change that drops one refusal hands every later
+  session a denied operation with no prompt in front of it; see
+  [SECURITY-AI.md](./SECURITY-AI.md)
 
 **What it requires:** the full rubric. The safety-critical statement is
 mandatory and is the review, not a formality (`CONTRIBUTING.md` item 3). If the
@@ -108,7 +122,7 @@ Two cases the paths get wrong on their own:
 | Looks like | Actually |
 | --- | --- |
 | A test-only diff that deletes a test exercising a fail-closed guard | Tier 2. The guard stops being covered, and the floor in `.coverage-thresholds.json` is the only thing that notices. |
-| A docs-only diff that edits `AGENTS.md` or `.claude/settings.json` | Tier 2. It changes what future agent sessions are permitted to do. |
+| A docs-only diff that edits `AGENTS.md` | Tier 2. It changes what future agent sessions are told to do. What they are permitted to do is `.claude/settings.json` and the files Tier 3 lists beside it. |
 
 When two readings are defensible, take the higher one and say why in the pull
 request. The cost of over-reviewing a change here is minutes; the cost of

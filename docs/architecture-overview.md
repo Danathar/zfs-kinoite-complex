@@ -172,13 +172,14 @@ The `main` workflow now wraps that whole preparation path in one local action:
 
 - [`.github/actions/prepare-main-akmods/action.yml`](../.github/actions/prepare-main-akmods/action.yml)
 
-That action does five things in one place:
+That action does six things in one place:
 
 1. resolve and record build inputs
 2. upload the build-input manifest
 3. verify whether the shared akmods cache can be reused
 4. rebuild and republish the shared cache only when required
 5. resolve the checked or rebuilt cache tag to the digest-pinned ref passed to the final image build
+6. after a rebuild, verify that the cache at that pinned digest carries the resolved ZFS version
 
 ### 2. Shared Akmods Cache Reuse Or Rebuild
 
@@ -274,6 +275,13 @@ If no:
 1. clone the resolved `Danathar/akmods` fork commit
 2. point its target output to `ghcr.io/<owner>/zfs-kinoite-complex-akmods`
 3. build the shared cache image for the supported primary kernel
+4. pin the freshly published `main-<fedora>` tag to a digest, then run
+   `check-akmods-cache` in strict mode (`REQUIRE_MATCH=true`) against that
+   digest, passed as `AKMODS_IMAGE_PINNED`, so the check never re-reads the
+   mutable tag. It fails the run unless that digest carries a `kmod-zfs` for
+   the primary kernel at the resolved ZFS version. It does not check the
+   signature: nothing has signed the new cache yet. The `sign-akmods-cache`
+   job signs that digest, and `promote-stable` waits for it
 
 Important design change:
 

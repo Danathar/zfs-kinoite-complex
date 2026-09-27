@@ -484,8 +484,10 @@ class CacheRebuildTests(unittest.TestCase):
         cls.body = section(doc_text(), "### 3. Build Shared Akmods Cache When Required")
         cls.items = numbered_items(cls.body)
 
-    def test_the_rebuild_path_lists_four_steps(self) -> None:
-        self.assertEqual(len(self.items), 4)
+    def test_the_rebuild_path_lists_five_steps(self) -> None:
+        # The fifth is the post-rebuild verification; tests/test_akmods_rebuild_path_docs.py
+        # joins it to the action step that runs it.
+        self.assertEqual(len(self.items), 5)
 
     def test_the_rebuild_target_repository_is_the_configured_one(self) -> None:
         self.assertIn(f"`{defaults()['AKMODS_REPO']}`", self.items[1])

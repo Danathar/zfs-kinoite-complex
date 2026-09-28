@@ -51,6 +51,7 @@ DOC_PATH = REPO_ROOT / "docs" / "metrics.md"
 SNAPSHOT_DIR = REPO_ROOT / "docs" / "metrics"
 WORKFLOW_DIR = REPO_ROOT / ".github" / "workflows"
 THRESHOLDS_PATH = REPO_ROOT / ".coverage-thresholds.json"
+TUNING_PATH = REPO_ROOT / ".github" / "auto-qa-tuning.json"
 
 # The three workflows that run the coverage command the document quotes. The
 # document is a fourth copy of it; these are the copies that decide CI.
@@ -981,6 +982,138 @@ class DatedFigureTests(unittest.TestCase):
                     if re.match(r"\s*(-\s*)?(name|run):", line) and "metric" in line.lower()
                 ]
                 self.assertEqual(named, [], f"{path.name} now collects metrics: {named}")
+
+
+class JobDurationSectionTests(unittest.TestCase):
+    """
+    "CI job durations against their timeouts" is the command
+    .github/auto-qa-tuning.json points to for sampling each job's slowest run,
+    and tests/test_auto_qa_tuning.py already keeps that file's timeouts equal to
+    the workflows. What nothing read was the section itself: the policy values
+    it quotes beside their keys, the fields its jq program reads from the
+    tuning file, the API-call count it promises, the job key it says prints
+    under a different name, and the dated reading's "of N minutes" caps. Each
+    is copied by hand out of the tuning file or a workflow, and each goes stale
+    without a sound when one of those moves.
+
+    Written against a real defect: the section said the command makes "about
+    140" API calls. The tuning file names eight workflows and samples 20 runs of
+    each, so the command makes 160 job-list calls (#303); running it verbatim on
+    2026-09-28 confirmed 20 completed runs for every one of the eight. Fixed in
+    the same change.
+    """
+
+    HEADING = "## CI job durations against their timeouts"
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.tuning = json.loads(TUNING_PATH.read_text(encoding="utf-8"))
+        text = doc()
+        start = text.index(cls.HEADING)
+        end = text.find("\n## ", start + len(cls.HEADING))
+        cls.section = text[start : end if end != -1 else len(text)]
+        cls.prose = " ".join(cls.section.split())
+
+    def workflows(self) -> list[str]:
+        return sorted({entry["workflow"] for entry in self.tuning["jobs"]})
+
+    def job_name(self, workflow_file: str, job: str) -> str:
+        """The `name:` of `job` in `workflow_file`, read as text (no PyYAML)."""
+
+        inside = False
+        for line in workflow(workflow_file).splitlines():
+            if re.match(r"^  \S", line):
+                inside = re.match(rf"^  {re.escape(job)}:\s*$", line) is not None
+                continue
+            match = re.match(r"^    name:\s*(.+?)\s*$", line)
+            if inside and match:
+                return match.group(1).strip("\"'")
+        return job
+
+    def test_quoted_policy_values_are_the_tuning_file_s(self) -> None:
+        quoted = dict(re.findall(r"`(\w+)` \((\d+(?:\.\d+)?)\)", self.prose))
+        self.assertEqual(
+            set(quoted),
+            {"sample_size", "at_risk_ratio", "loose_ratio"},
+            "the section no longer quotes each policy value beside its key",
+        )
+        for key, value in quoted.items():
+            with self.subTest(key=key):
+                self.assertIn(key, self.tuning["policy"])
+                self.assertEqual(float(value), float(self.tuning["policy"][key]))
+
+    def test_every_named_tuning_key_exists(self) -> None:
+        policy = set(self.tuning["policy"])
+        job_keys = set().union(*(entry.keys() for entry in self.tuning["jobs"]))
+        for key in set(re.findall(r"`([a-z]+(?:_[a-z]+)+)`", self.prose)):
+            with self.subTest(key=key):
+                self.assertIn(
+                    key,
+                    policy | job_keys,
+                    f"the section names `{key}`, which the tuning file lacks",
+                )
+
+    def test_the_command_reads_fields_the_tuning_file_has(self) -> None:
+        blocks = fenced_blocks(self.section, "bash")
+        self.assertEqual(len(blocks), 1)
+        match = re.search(r"jq -r '([^']*)'\s*\\?\s*\.github/auto-qa-tuning\.json", blocks[0])
+        self.assertIsNotNone(
+            match, "the command no longer reads .github/auto-qa-tuning.json with jq -r"
+        )
+        program = match.group(1)
+        self.assertIn(".policy.sample_size", program)
+        self.assertIn(".jobs[].workflow", program)
+        self.assertIsInstance(self.tuning["policy"]["sample_size"], int)
+        for entry in self.tuning["jobs"]:
+            with self.subTest(entry=entry):
+                self.assertTrue((WORKFLOW_DIR / entry["workflow"]).is_file())
+
+    def test_the_call_count_is_workflows_times_sample_size(self) -> None:
+        match = re.search(r"one API call per run, (?:about )?(\d+) in all", self.prose)
+        self.assertIsNotNone(
+            match, "the section no longer states how many API calls the command makes"
+        )
+        self.assertEqual(
+            int(match.group(1)),
+            len(self.workflows()) * self.tuning["policy"]["sample_size"],
+            f"{len(self.workflows())} workflows x sample_size "
+            f"{self.tuning['policy']['sample_size']}",
+        )
+        for stated in re.findall(r"last (\d+) completed runs", self.prose):
+            with self.subTest(stated=stated):
+                self.assertEqual(int(stated), self.tuning["policy"]["sample_size"])
+
+    def test_the_renamed_job_example_is_the_workflow_s_name(self) -> None:
+        pairs = re.findall(r"`([a-z0-9-]+)` prints as `([^`]+)`", self.prose)
+        self.assertGreaterEqual(len(pairs), 1)
+        for key, printed in pairs:
+            with self.subTest(job=key):
+                owners = [e["workflow"] for e in self.tuning["jobs"] if e["job"] == key]
+                self.assertEqual(len(owners), 1, f"`{key}` is not exactly one declared job")
+                self.assertEqual(self.job_name(owners[0], key), printed)
+
+    def test_the_dated_reading_names_real_jobs_at_their_real_caps(self) -> None:
+        """
+        Every "`Name` (minutes of cap" names exactly one declared job by the
+        name the Jobs API prints, the cap is that job's timeout_minutes, and --
+        since the reading says none was near at_risk_ratio -- each maximum is
+        under that fraction of its cap.
+        """
+
+        readings = re.findall(r"`([^`]+)` \((\d+(?:\.\d+)?) of (\d+)", self.prose)
+        self.assertGreaterEqual(len(readings), 1)
+        self.assertIn("None was near `at_risk_ratio`", self.prose)
+        ratio = self.tuning["policy"]["at_risk_ratio"]
+        for name, minutes, cap in readings:
+            with self.subTest(job=name):
+                matches = [
+                    e for e in self.tuning["jobs"] if self.job_name(e["workflow"], e["job"]) == name
+                ]
+                self.assertEqual(
+                    len(matches), 1, f"`{name}` is not the name of exactly one declared job"
+                )
+                self.assertEqual(int(cap), matches[0]["timeout_minutes"])
+                self.assertLess(float(minutes), ratio * int(cap))
 
 
 class SnapshotTests(unittest.TestCase):

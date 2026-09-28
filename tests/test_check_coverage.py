@@ -9,6 +9,9 @@ Goal: Pin each way the gate is meant to fail, and the message it fails with.
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -265,6 +268,30 @@ class MainExitStatusTests(unittest.TestCase):
                 str(Path(temp_dir) / "also-absent.json"),
             ]
             self.assertEqual(main(argv), 2)
+
+    def test_an_untracked_module_beside_the_script_is_not_imported(self) -> None:
+        # .claude/settings.json runs this file without a prompt. Python puts the
+        # script's directory first on sys.path, so without the trim at the top of
+        # check_coverage.py an untracked tests/json.py -- or tests/__future__.py,
+        # which is why the file has no __future__ import -- runs as the stdlib.
+        source = Path(__file__).resolve().parent / "check_coverage.py"
+        with tempfile.TemporaryDirectory() as temp_dir:
+            directory = Path(temp_dir)
+            shutil.copy(source, directory / "check_coverage.py")
+            marker = directory / "ran"
+            for name in ("json", "argparse", "subprocess", "pathlib", "__future__"):
+                (directory / f"{name}.py").write_text(
+                    f"open({str(marker)!r}, 'a').write({name!r})\n", encoding="utf-8"
+                )
+            result = subprocess.run(
+                [sys.executable, str(directory / "check_coverage.py"), "--help"],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse(marker.exists(), marker.read_text() if marker.exists() else "")
 
 
 class RecordedManifestTests(unittest.TestCase):

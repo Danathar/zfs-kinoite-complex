@@ -627,6 +627,15 @@ class SecurityDocEnforcementTests(unittest.TestCase):
         self.assertIn(rule, self.permissions["allow"])
         self.assertTrue((REPO_ROOT / "tests" / "run_tests.py").is_file())
 
+    def test_no_allow_rule_runs_a_python_module_from_the_checkout(self) -> None:
+        # `python3 -m <module>` puts the working directory first on sys.path, so
+        # an untracked root `argparse.py` runs before the module's own first
+        # line, and nothing inside the module can check for it in time. That is
+        # how `python3 -m ci_tools.cli --help:*` ran untracked code unprompted.
+        for rule in self.permissions["allow"]:
+            with self.subTest(rule=rule):
+                self.assertNotRegex(rule, r"^Bash\(python3? -m ")
+
     def test_the_linter_cannot_write_a_file_it_names(self) -> None:
         # `ruff check -o PATH` writes the report to PATH instead of stdout and
         # creates the file even when the lint is clean, so `Bash(ruff check:*)`

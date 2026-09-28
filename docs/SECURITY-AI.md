@@ -212,6 +212,16 @@ design, and the control for it is that the file is in the pull request. Running
 `pytest` directly is not denied either; it is unlisted, so it prompts, and a
 human reads the command first.
 
+The same bound holds for every other Python command on the allow list, not
+only the test runner: Python imports from the script's own directory, or from
+the working directory under `python3 -m`, before the first line of the program
+runs. So an untracked `tests/json.py` would run under
+`python3 tests/check_coverage.py`, and an untracked root `argparse.py` under
+any `python3 -m` module. [`tests/check_coverage.py`](../tests/check_coverage.py)
+takes its own directory off `sys.path` before it imports anything, and no
+`python3 -m` command is allowed at all — nothing inside a module can run early
+enough to check.
+
 Treat that as the shape of the boundary generally: a `deny` row says an agent
 cannot take a step *as a command*, not that the step is unreachable.
 

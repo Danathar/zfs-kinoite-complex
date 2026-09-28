@@ -876,7 +876,6 @@ GATED_PREFIXES=(
   'gh pr view'
   'gh run list'
   'gh run view'
-  'python3 -m ci_tools.cli --help'
   'python3 tests/check_coverage.py'
   'python3 tests/run_tests.py'
   'skopeo inspect'

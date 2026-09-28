@@ -2278,8 +2278,8 @@ UNREACHABLE_SHAPES: tuple[tuple[str, str, str], ...] = (
         "python's -c and -m",
         "python3 -c",
         (
-            "the only python3 rows are the two scripts and `python3 -m ci_tools.cli --help`; a "
-            "`python3 -c` or another -m module matches none of them and prompts."
+            "the only python3 rows are tests/run_tests.py and tests/check_coverage.py; a "
+            "`python3 -c` or any -m module matches neither and prompts."
         ),
     ),
     (

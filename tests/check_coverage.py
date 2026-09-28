@@ -48,14 +48,30 @@ Run by .github/workflows/test.yml. Also runnable by hand:
       --cov=containerfiles/zfs-akmods --cov=files/scripts \\
       --cov-branch --cov-report=json
     python3 tests/check_coverage.py
+
+`.claude/settings.json` allows `python3 tests/check_coverage.py` without a
+prompt, so this file holds itself to the rule tests/run_tests.py enforces for
+the other allowed Python command: nothing git does not track gets imported.
+Python puts the script's own directory first on `sys.path`, so an untracked
+`tests/json.py` would *be* `json` here, and the stdlib imports below would run
+it. Everything this file imports is standard library, so the first thing it
+does is take `tests/` off the path. That is also why there is no
+`from __future__ import annotations`: `__future__` is an ordinary import at run
+time, it would have to come before this, and a `tests/__future__.py` shadows it.
 """
 
-from __future__ import annotations
+import sys
 
+# Only when run as a script. Imported by tests/test_check_coverage.py, the
+# entry at index 0 is not this file's directory, and under `python3 -P` (or
+# PYTHONSAFEPATH) nothing was prepended at all -- index 0 is then the stdlib.
+if __name__ == "__main__" and not sys.flags.safe_path:
+    del sys.path[0]
+
+# Every import below must stay after the trim, and stay standard library.
 import argparse
 import json
 import subprocess
-import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent

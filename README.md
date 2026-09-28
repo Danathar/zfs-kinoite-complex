@@ -124,6 +124,7 @@ Start here depending on what you want:
 | fix a broken build | [`docs/upstream-change-response.md`](./docs/upstream-change-response.md) |
 | read the deep design history and validation notes | [`docs/zfs-kinoite-testing.md`](./docs/zfs-kinoite-testing.md) |
 | change which akmods commit is built | [`docs/akmods-fork-maintenance.md`](./docs/akmods-fork-maintenance.md) |
+| know what could change under this image soon | [`docs/maintenance-watchlist.md`](./docs/maintenance-watchlist.md) |
 | contribute a change | [`CONTRIBUTING.md`](./CONTRIBUTING.md) |
 | review someone else's change | [`docs/review-rubric.md`](./docs/review-rubric.md) |
 | know how much scrutiny a change needs | [`docs/risk-tiers.md`](./docs/risk-tiers.md) |

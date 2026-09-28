@@ -124,6 +124,50 @@ the cheap gate and is expected to be green; a failure here is a real signal
 precisely because it is rare. Note that `cancelled` is common and benign —
 back-to-back merges cancel each other, see [`quality.md`](./quality.md).
 
+## CI job durations against their timeouts
+
+[`.github/auto-qa-tuning.json`](../.github/auto-qa-tuning.json) records every
+job's `timeout_minutes` and the policy for reading them: the slowest of the last
+`sample_size` (20) runs, reported when it passes `at_risk_ratio` (0.75) of the
+timeout, and noted when it stays under `loose_ratio` (0.2). Sampling is left to
+this command on purpose. Nothing runs it on a schedule, and nothing rewrites a
+timeout from its output.
+
+```bash
+jq -r '.policy.sample_size as $n | [.jobs[].workflow] | unique[] | "\(.) \($n)"' \
+  .github/auto-qa-tuning.json | while read -r wf n; do
+  gh api "repos/{owner}/{repo}/actions/workflows/$wf/runs?status=completed&per_page=$n" \
+    --jq '.workflow_runs[].id' | while read -r run; do
+    gh api "repos/{owner}/{repo}/actions/runs/$run/jobs" --jq '.jobs[]
+      | select(.conclusion != "skipped" and .started_at != null and .completed_at != null)
+      | "\(.name)\t\((.completed_at | fromdate) - (.started_at | fromdate))"'
+  done | awk -F '\t' -v wf="$wf" '$2 > max[$1] { max[$1] = $2 }
+    END { for (job in max) printf "%s\t%s\t%.1f min\n", wf, job, max[job] / 60 }'
+done | sort
+```
+
+It prints one line per workflow and job: the longest run of that job among the
+workflow's last 20 completed runs. It makes one API call per run, about 140 in
+all, and takes a minute or two.
+
+Read it against the tuning file by hand, and keep three things in mind:
+
+- **The Jobs API names a job by its `name:`, not its key.** `build-zfs-akmods`
+  prints as `Build Shared ZFS Akmods Cache`. Match the two through the job's
+  `name:` line in the workflow.
+- **A job with no line had no started run in the sample.** Skipped jobs are
+  dropped. `ai-fix.yml` is mostly runs whose jobs are skipped, so it can print
+  nothing at all. That tells you nothing about its timeouts.
+- **A run the cap killed shows up at the cap.** A maximum equal to
+  `timeout_minutes` is a job that ran out of time, not one that fit.
+
+As of 2026-09-28 the slowest jobs were `Build Shared ZFS Akmods Cache` (16.6 of
+90 minutes), `Build PR Image (No Push)` (16.4 of 60) and `Build Branch Image`
+(14.4 of 60). None was near `at_risk_ratio`. Every job except the three image
+builds was under `loose_ratio`. That is advisory only: a loose timeout means a
+hung job runs longer before the runner reclaims it. The snapshots under
+`docs/metrics/` predate this section, so none of them carries this reading.
+
 ## Coverage
 
 Not a percentage. The number CI enforces is a **per-module covered-statement

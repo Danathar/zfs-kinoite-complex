@@ -410,5 +410,35 @@ class TmpfilesTests(unittest.TestCase):
         )
 
 
+class RuntimeStateCleanupTests(unittest.TestCase):
+    """Build-only state under /run is removed after the install that leaves it."""
+
+    # Each path is one `bootc container lint` named under nonempty-run-tmp. `/run`
+    # is a tmpfs on a booted machine, so what the build leaves there ships as
+    # image weight and is never seen. The ZFS install is what creates both: dnf5
+    # itself, and the `%post` of `pcp-selinux-import`, which the zfs userspace
+    # packages pull in, runs varrun-convert.sh.
+    LEFT_BY_THE_ZFS_INSTALL = ("/run/dnf", "/run/selinux-policy")
+    ZFS_INSTALL = "/ctx/containerfiles/zfs-akmods/install_zfs_from_akmods_cache.py"
+
+    def test_each_path_is_removed_after_the_zfs_install(self) -> None:
+        commands = shell_commands(build_image_text())
+        installs = [index for index, argv in enumerate(commands) if self.ZFS_INSTALL in argv]
+        self.assertEqual(len(installs), 1, "expected build-image.sh to run the ZFS install once")
+        for path in self.LEFT_BY_THE_ZFS_INSTALL:
+            with self.subTest(path=path):
+                removals = [
+                    index
+                    for index, argv in enumerate(commands)
+                    if argv[:2] == ["rm", "-rf"] and path in argv[2:]
+                ]
+                self.assertTrue(removals, f"build-image.sh never runs rm -rf {path}")
+                self.assertGreater(
+                    max(removals),
+                    installs[0],
+                    f"{path} is removed before the ZFS install that creates it",
+                )
+
+
 if __name__ == "__main__":
     unittest.main()

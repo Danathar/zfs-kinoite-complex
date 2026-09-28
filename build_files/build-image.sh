@@ -194,6 +194,13 @@ rm -rf /var/lib/containers
 # lives in `/etc/dnf`; dnf recreates its own cache directories on demand.
 rm -rf /run/dnf /var/lib/dnf
 
+# `pcp-selinux-import`, one of the `pcp` packages the ZFS install pulls in,
+# runs `/usr/libexec/selinux/varrun-convert.sh` in its `%post`, and that leaves
+# its working files in `/run/selinux-policy`. That path trips
+# `nonempty-run-tmp` for the same reason `/run/dnf` does: `/run` is a tmpfs on
+# a booted system, so none of it would ever be seen there.
+rm -rf /run/selinux-policy
+
 # No explicit `ostree container commit` here: `bootc container lint` (run next,
 # in the Containerfile) already performs the equivalent validation/finalization.
 # bootc's current Fedora Atomic templates use the same lint/finalization model;

@@ -252,7 +252,10 @@ jobs:
               one of the seven files in AGENTS.md section 0 rule 2, change the
               ZFS line or anything pool-facing, widen any workflow's
               `permissions:` block, add a secret to a job that had none, lower a
-              floor in .coverage-thresholds.json, or add a runtime dependency.
+              floor in .coverage-thresholds.json, add a runtime dependency, or
+              change what an agent may run without a prompt:
+              `.claude/settings.json`, `.claude/hooks/`, `.claude/commands/` or
+              `tests/run_tests.py`.
               Those are Tier 3 in docs/risk-tiers.md and need a human first.
 
             Verify your work the way CI does:

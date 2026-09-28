@@ -118,11 +118,11 @@ SHIPPED_TREES = ("ci_tools", "shared", "files/scripts", "containerfiles/zfs-akmo
 # Imports that are neither stdlib nor a module of this repository.
 LOCAL_ROOTS = {"ci_tools", "shared", "tests", "check_coverage", "run_tests"}
 
-# `.github/scripts/README.md` does not name these two commands today. Frozen
-# rather than ignored: a new command that goes undocumented grows this set and
-# fails, and documenting either of these shrinks it and fails, which is the
-# only way a "documented" list stays honest without this test editing docs.
-UNDOCUMENTED_COMMANDS = {"write-akmods-badge", "write-last-good-build-badge"}
+# `ci_tools.cli` commands `.github/scripts/README.md` does not name. Empty now
+# that every command is documented. Frozen rather than ignored: a new command
+# that goes undocumented grows this set and fails, which is the only way a
+# "documented" list stays honest without this test editing docs.
+UNDOCUMENTED_COMMANDS: set[str] = set()
 
 
 def collapse(text: str) -> str:

@@ -71,18 +71,15 @@ STOP_LIST_PHRASES: dict[str, tuple[str, tuple[str, ...]]] = {
         "stop",
         ("add a runtime dependency",),
     ),
+    "Changing what an agent may run without a prompt": (
+        "stop",
+        (".claude/settings.json", ".claude/hooks/", ".claude/commands/", "tests/run_tests.py"),
+    ),
 }
 
 # Items the prompt's stop list does not carry yet, with the phrases it will need.
 # Adding them is a workflow change the bot that wrote this file cannot push; see #290.
-PENDING: dict[str, tuple[str, ...]] = {
-    "Changing what an agent may run without a prompt": (
-        ".claude/settings.json",
-        ".claude/hooks/",
-        ".claude/commands/",
-        "tests/run_tests.py",
-    ),
-}
+PENDING: dict[str, tuple[str, ...]] = {}
 
 
 def squash(text: str) -> str:

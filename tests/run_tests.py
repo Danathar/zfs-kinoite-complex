@@ -87,13 +87,28 @@ Run it the way the permission rule spells it, from the repository root:
 
     python3 tests/run_tests.py                 # the whole suite
     python3 tests/run_tests.py tests/test_cli.py -v
+
+Every check above runs after this file's own imports, so those imports have to
+be safe on their own. Python puts the script's directory first on `sys.path`,
+so an untracked `tests/argparse.py` would *be* `argparse` here and run before
+`untracked_loadable_files` looks. Everything this file imports is standard
+library, so the first thing it does is take `tests/` off the path, as
+tests/check_coverage.py does. That is also why there is no
+`from __future__ import annotations`: `__future__` is an ordinary import at run
+time, it would have to come before this, and a `tests/__future__.py` shadows it.
 """
 
-from __future__ import annotations
+import sys
 
+# Only when run as a script. Imported by tests/test_run_tests.py, the entry at
+# index 0 is not this file's directory, and under `python3 -P` (or
+# PYTHONSAFEPATH) nothing was prepended at all -- index 0 is then the stdlib.
+if __name__ == "__main__" and not sys.flags.safe_path:
+    del sys.path[0]
+
+# Every import below must stay after the trim, and stay standard library.
 import argparse
 import subprocess
-import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent

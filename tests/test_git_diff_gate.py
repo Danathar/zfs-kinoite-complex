@@ -1415,6 +1415,16 @@ class GateBehaviourTests(GateRunner, unittest.TestCase):
             "gh pr view 1 --json number --jq 2>/dev/null env",
             "timeout 5 gh pr view 1 --json number --jq env",
             "git status; gh run list --json name --jq env",
+            # Bash expands a $ inside double quotes even after a ' there,
+            # since the ' is literal text and opens no single-quoted span:
+            # with F=env, gh reads `.title+"'"|env`, which gojq evaluates.
+            'gh pr view 1 --json title --jq ".title+\\"\'\\"|$F"',
+            # Every extglob opener, not only @: each reaches gh as env once
+            # extglob is on.
+            "gh pr view 1 --json number --jq ?(env)",
+            "gh pr view 1 --json number --jq *(env)",
+            "gh pr view 1 --json number --jq +(env)",
+            "gh pr view 1 --json number --jq !(env)",
         ):
             with self.subTest(command=command):
                 self.assertRefused(command, "hands the filter the whole process environment")
@@ -1433,6 +1443,19 @@ class GateBehaviourTests(GateRunner, unittest.TestCase):
             "gh pr list --search env",
             "gh issue list --label env",
             "echo gh pr view 1 --jq env",
+            # A jq variable named $env, and env as the start of a longer word
+            # in a string: neither is the builtin.
+            "gh pr list --json number --jq '.[] as $env | $env.number'",
+            "gh run list --json name --jq '.[]|select(.name|startswith(\"environ\"))|.name'",
+            # A backslash-escaped $ inside double quotes is a literal $ that
+            # bash leaves alone.
+            'gh pr list --json number --jq ".[] as \\$x | \\$x.number"',
+            # The word after the filter is an ordinary argument again.
+            "gh pr list --json number --jq '.[].number' --search env",
+            # -q belongs to gh only: pytest's -q takes no value, so the word
+            # after it (here a pipe) is not a filter.
+            "python3 tests/run_tests.py -q | tail -3",
+            "python3 tests/run_tests.py -q; git status",
         ):
             with self.subTest(command=command):
                 self.assertAllowed(command)

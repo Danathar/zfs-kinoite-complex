@@ -1385,6 +1385,58 @@ class GateBehaviourTests(GateRunner, unittest.TestCase):
                     f"{command!r} was not refused; stderr={result.stderr!r}",
                 )
 
+    def test_a_gh_filter_that_reads_the_environment_is_refused(self) -> None:
+        # gh evaluates --jq with gojq, whose `env` builtin and `$ENV` are the
+        # process environment, so `gh pr view 1 --json number --jq env`
+        # printed GH_TOKEN and every other exported variable under the gh
+        # allow rows (checked against gh 2.101.0: a variable exported into gh's
+        # environment came back from `env|keys`). Every pflag spelling of the
+        # filter, behind a wrapper, and a filter bash rewrites into `env`
+        # before gh reads it.
+        for command in (
+            "gh pr view 1 --json number --jq env",
+            "gh pr view 1 --json number --jq=env",
+            "gh pr view 1 --json number -q env.GH_TOKEN",
+            "gh pr list --json number -qenv",
+            "gh pr list --json number -q=env",
+            "gh pr view 1 -wq env",
+            "gh issue view 1 --json body --jq '.body|env'",
+            "gh issue list --json title -q '[env]'",
+            "gh run view 1 --json jobs -q '$ENV.GH_TOKEN'",
+            "gh run list --json databaseId --jq 'env|to_entries[]|.key'",
+            "gh pr view 1 --json number --jq 'e'nv",
+            "gh pr view 1 --json number --jq {e,}nv",
+            "gh pr view 1 --json number --jq e?v",
+            "gh pr view 1 --json number --jq @(env)",
+            "gh pr view 1 --json number --jq $(printf env)",
+            "gh pr view 1 --json number --jq `printf env`",
+            'gh pr view 1 --json number --jq "$F"',
+            "gh pr view 1 --json number --jq $'\\x65nv'",
+            "gh pr view 1 --json number --jq 2>/dev/null env",
+            "timeout 5 gh pr view 1 --json number --jq env",
+            "git status; gh run list --json name --jq env",
+        ):
+            with self.subTest(command=command):
+                self.assertRefused(command, "hands the filter the whole process environment")
+
+    def test_a_gh_filter_that_names_fields_is_not_refused(self) -> None:
+        # A filter naming fields, `.env` as a field of the fetched JSON, a jq
+        # variable inside single quotes, and the word env outside a filter.
+        for command in (
+            "gh pr view 1 --json number --jq .number",
+            "gh pr view 1 --json title --jq .env",
+            "gh pr view 1 --json number -q .number",
+            "gh pr list --json title --jq '.[].title'",
+            "gh pr list --json number --jq '.[] as $x | $x.number'",
+            "gh run view 1 --json jobs --jq '.jobs[]|select(.conclusion==\"failure\")|.name'",
+            "gh run list --branch env --limit 5",
+            "gh pr list --search env",
+            "gh issue list --label env",
+            "echo gh pr view 1 --jq env",
+        ):
+            with self.subTest(command=command):
+                self.assertAllowed(command)
+
     def test_the_documented_verify_commands_are_not_refused(self) -> None:
         # docs/install-and-verify.md and docs/signing-and-bootc.md tell a
         # reader to run these. A refusal that caught them would be narrowing
@@ -2158,6 +2210,20 @@ CORPUS: tuple[Row, ...] = (
         "refused",
         "a persistent flag on cosign's root command; it truncates the path before verifying",
         "--output-file FILE",
+    ),
+    Row(
+        "options",
+        "gh pr view 1 --json number --jq env",
+        "refused",
+        "gojq's env builtin is the process environment, so the filter prints GH_TOKEN and every "
+        "other exported variable (verified with gh 2.101.0)",
+        "hands the filter the whole process environment",
+    ),
+    Row(
+        "options",
+        "gh pr view 1 --json number --jq .number",
+        "allowed",
+        "a filter that names fields of the fetched JSON reads nothing else",
     ),
     Row(
         "options",

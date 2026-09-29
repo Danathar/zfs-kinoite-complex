@@ -899,6 +899,9 @@ EXPORT_ENV_MSG='blocked: an assignment made by the export family (`export NAME=v
 # shellcheck disable=SC2016 # the message quotes shell spellings as literal text
 XARGS_MSG='blocked: xargs adds the words it reads from standard input (or from the file named by -a) to the command it runs, so the operands git or an allow-listed command receive are not in this string and nothing here can check them: `printf '"'"'%s\n'"'"' /dev/null ./cosign.key | xargs git diff` is the plain-file read of the key with no operand written anywhere, and `xargs cosign verify <args.txt` hands cosign an --output-file this gate never sees. The allow rule is no stop either: Claude Code matches Bash(git diff:*) against `xargs git diff` as readily as against `git diff`, so nothing prompts. So xargs is refused when the command it runs is git or one of the allow-listed prefixes, wherever it stands among the wrappers (`timeout 5 xargs git diff`, `xargs -a list.txt git diff`). Name the operands in the command itself instead. xargs in front of any other command (`git diff --name-only | xargs echo`) is not affected: it matches no allow row in .claude/settings.json, so it is left to the permission prompt.'
 
+# shellcheck disable=SC2016 # the backticks quote command spellings for the reader
+GH_JQ_ENV_MSG='blocked: gh evaluates its --jq (-q) filter with gojq, which hands the filter the whole process environment through the `env` builtin and `$ENV`, so `gh pr view 1 --json number --jq env` prints every variable this shell holds -- GH_TOKEN, GITHUB_TOKEN, ANTHROPIC_API_KEY and whatever else is exported -- under the Bash(gh pr view:*), Bash(gh pr list:*), Bash(gh issue view:*), Bash(gh issue list:*), Bash(gh run view:*) and Bash(gh run list:*) allow rows with no prompt. Those rows are there to read pull requests, issues and runs, not the environment, and no Read(...) deny rule stands in front of a variable. A filter naming `env` or `$ENV` is refused wherever it stands in the filter, a quoted string included, and so is a filter bash rewrites before gh sees it -- a $ or a backtick outside single quotes, a brace, an unquoted glob or extglob -- since `{e,}nv` and `$(echo env)` reach gh as env. Name the fields you want, in single quotes: --jq '"'"'.title'"'"', --jq '"'"'.jobs[].conclusion'"'"'.'
+
 command_is_gated() {
   local joined="$1" prefix
   for prefix in "${GATED_PREFIXES[@]}"; do
@@ -946,6 +949,59 @@ check_gated_command() {
   return 0
 }
 
+# Whether a jq filter names gojq's environment: the `env` builtin -- the word
+# `env` with no identifier character on either side and no `.` or `$` before
+# it, since `.env` is a field of the JSON gh fetched and `$env` a variable the
+# filter bound itself -- or the `$ENV` variable. A string literal is not told
+# apart from code (`select(.name == "env")` is refused too), because telling
+# them apart means parsing jq here.
+jq_filter_reads_env() {
+  [[ "$1" =~ (^|[^A-Za-z0-9_.$])env([^A-Za-z0-9_]|$) || "$1" =~ \$ENV([^A-Za-z0-9_]|$) ]]
+}
+
+# Whether bash would substitute into a word as typed: a `$` outside single
+# quotes that a backslash does not escape. Inside single quotes a `$` is jq's
+# own variable syntax (`.[] as $x | $x.name`), which bash leaves alone.
+word_substitutes() {
+  local raw="$1" quote='' ch i
+  for ((i = 0; i < ${#raw}; i++)); do
+    ch="${raw:i:1}"
+    if [[ "${quote}" == "'" ]]; then
+      [[ "${ch}" == "'" ]] && quote=''
+      continue
+    fi
+    if [[ "${ch}" == $'\\' ]]; then
+      i=$((i + 1))
+      continue
+    fi
+    case "${ch}" in
+    "'") if [[ -z "${quote}" ]]; then quote="'"; fi ;;
+    '"') if [[ -z "${quote}" ]]; then quote='"'; else quote=''; fi ;;
+    '$') return 0 ;;
+    *) ;;
+    esac
+  done
+  return 1
+}
+
+# The filter word of a gh command, read as gh reads it: after `--jq` or as its
+# `=` value, and after `-q` alone, attached (`-qenv`, `-q=env`) or last in a
+# cluster of one-letter flags (`-wq env`). It is refused when it names the
+# environment, when bash would rewrite it before gh reads it, and when it
+# opens an extglob -- `@(env)` is a word ending in `@` followed by a `(`, which
+# the split above reads as a separator.
+check_gh_filter() {
+  local at="$1" filter="$2"
+  jq_filter_reads_env "${filter}" && refuse "${GH_JQ_ENV_MSG}"
+  word_substitutes "${raw_words[at]}" && refuse "${GH_JQ_ENV_MSG}"
+  brace_would_expand "${raw_words[at]}" && refuse "${GH_JQ_ENV_MSG}"
+  ((${globs[at]:-0})) && refuse "${GH_JQ_ENV_MSG}"
+  if [[ "${raw_words[at]}" == *[@?*+!] && "${kinds[at + 1]:-}" == sep && "${words[at + 1]:-}" == '(' ]]; then
+    refuse "${GH_JQ_ENV_MSG}"
+  fi
+  return 0
+}
+
 reset_command() {
   cmd_prefix=''
   cmd_writes=0
@@ -956,6 +1012,7 @@ reset_command() {
   cmd_git=0
   cmd_export=0
   cmd_xargs=0
+  cmd_gh_jq=0
 }
 
 # The words of a command from its *name* onward: a leading assignment
@@ -972,6 +1029,7 @@ cmd_gated=0   # its leading words matched one of GATED_PREFIXES
 cmd_git=0     # its name is git, which the allow rows cover with their own `*`
 cmd_export=0  # its name is export/declare/typeset/readonly: its own words assign
 cmd_xargs=0   # an xargs in its wrapper chain appends words this gate never sees
+cmd_gh_jq=0   # the next word of this gh command is its --jq/-q filter
 cmd_stack=()  # the outer command's state, while a `$(...)` is being read
 export_idx=-1 # the first word that an export-family command assigns
 allexport=0   # `set -a`/`set -o allexport` ran: every later bare assignment exports
@@ -980,6 +1038,10 @@ reset_command
 for ((idx = 0; idx < ${#words[@]}; idx++)); do
   case "${kinds[idx]}" in
   sep)
+    # A gh `--jq`/`-q` whose filter word never came: the word that follows is
+    # a `$(...)`, a backtick or a process substitution, which hands gh a filter
+    # this gate never read (`--jq $(printf env)`), or the command ended there.
+    ((cmd_gh_jq)) && refuse "${GH_JQ_ENV_MSG}"
     # A `$(...)` or a backtick inside a cosign invocation builds a word this
     # gate never saw, the way one inside a git invocation does.
     # shellcheck disable=SC2016 # the literal `$(` is the separator's name
@@ -1083,6 +1145,34 @@ for ((idx = 0; idx < ${#words[@]}; idx++)); do
   if ((cmd_export)) && ((export_idx < 0)) &&
     [[ "${raw_words[idx]}" =~ ^[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?\+?= ]]; then
     export_idx=${idx}
+  fi
+  # gh's --jq filter runs in gojq, whose `env` builtin and `$ENV` are the
+  # process environment: `gh pr view 1 --json number --jq env` prints GH_TOKEN
+  # and every other exported variable under the gh allow rows. gh parses its
+  # flags with pflag: `--jq V`, `--jq=V`, `-q V`, `-qV`, `-q=V`, and `-q` last
+  # in a cluster of other one-letter flags (`-wq V`). A value-taking letter
+  # earlier in the cluster (`-Rq`) is read as a filter flag too, which can
+  # only over-refuse.
+  if ((cmd_gated)) && [[ "${cmd_prefix}" == gh\ * ]]; then
+    if ((cmd_gh_jq)); then
+      cmd_gh_jq=0
+      check_gh_filter "${idx}" "${words[idx]}"
+    else
+      case "${words[idx]}" in
+      --jq) cmd_gh_jq=1 ;;
+      --jq=*) check_gh_filter "${idx}" "${words[idx]#--jq=}" ;;
+      -q* | -[!-]*q*)
+        gh_filter="${words[idx]#*q}"
+        gh_filter="${gh_filter#=}"
+        if [[ -n "${gh_filter}" ]]; then
+          check_gh_filter "${idx}" "${gh_filter}"
+        else
+          cmd_gh_jq=1
+        fi
+        ;;
+      *) ;;
+      esac
+    fi
   fi
   ((cmd_cosign)) || continue
   case "${words[idx]}" in

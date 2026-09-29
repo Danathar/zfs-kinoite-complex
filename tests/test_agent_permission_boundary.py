@@ -510,6 +510,17 @@ class SecurityDocEnforcementTests(unittest.TestCase):
                 "cosign verify --output-file cosign.pub --key cosign.pub ghcr.io/x:latest",
             ),
         ),
+        # The same shape for a read: the gh view and list rows allow a --jq
+        # filter, and gojq's `env` builtin is the process environment. The
+        # rows allow the string and the hook refuses it; the refusals are
+        # exercised in tests/test_git_diff_gate.py.
+        "read the environment": (
+            "allow",
+            (
+                "gh pr view 1 --json number --jq env",
+                "gh run list --json name -q '$ENV.GH_TOKEN'",
+            ),
+        ),
         # Not a denial at all, which is why it carries its own branch in
         # `test_the_denied_rows_really_say_denied`. The claim is that the one
         # test command an agent may run unattended is the wrapper, because a
@@ -570,7 +581,7 @@ class SecurityDocEnforcementTests(unittest.TestCase):
                     self.assertIn("gated by a hook, not by a rule", enforcement)
                 elif key == "allow-listed linter":
                     self.assertIn("narrowed to exact commands", enforcement)
-                elif key == "allow-listed command that is not git":
+                elif key in ("allow-listed command that is not git", "read the environment"):
                     self.assertIn("gated by the same hook", enforcement)
                 elif expected == "deny":
                     self.assertIn("denied", enforcement)

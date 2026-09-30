@@ -430,7 +430,8 @@ def registry_auth_dir(creds: str | None, *image_refs: str) -> Iterator[str]:
     `--authfile` / `--src-authfile` / `--dest-authfile`, and `cosign` reads
     `config.json` out of the directory named by `DOCKER_CONFIG`. Verified
     against real binaries -- skopeo 1.22.2, cosign v3.1.3 (one patch ahead of
-    the v3.1.2 `install-signing-tools` pins, same release line) and the cosign
+    v3.1.2, the `install-signing-tools` pin when this was checked, same
+    release line) and the cosign
     v2.4.1 preinstalled in the akmods build container -- run against this
     repo's own signed akmods image, including the negative case:
     a deliberately wrong credential in the file produces a registry denial

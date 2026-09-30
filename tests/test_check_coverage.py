@@ -344,6 +344,49 @@ class RecordedManifestTests(unittest.TestCase):
         # check_coverage.py on why.
         self.assertFalse({path for path in shipped if path.endswith((".yml", ".yaml"))})
 
+    def test_repo_root_does_not_run_the_targets_fsmonitor_program(self) -> None:
+        # check_coverage.py is allow-listed to run unattended, and its
+        # --repo-root feeds `git ls-files`, which runs the program a repo names
+        # in core.fsmonitor. A tree whose config sets core.fsmonitor to a script
+        # must not make shipped_executables run that script -- that would be
+        # code execution under the allow rule with no prompt.
+        with tempfile.TemporaryDirectory() as raw:
+            repo = Path(raw)
+
+            def git(*args: str) -> None:
+                subprocess.run(
+                    ["git", "-C", str(repo), *args],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+
+            git("init", "-q")
+            git("config", "user.email", "t@example.com")
+            git("config", "user.name", "t")
+            (repo / "ship.sh").write_text("echo hi\n", encoding="utf-8")
+            git("add", "ship.sh")
+            git("commit", "-qm", "seed")
+
+            marker = repo / "FSMONITOR_RAN"
+            helper = repo / "fsmonitor.sh"
+            # A valid fsmonitor v2 reply (a NUL-terminated empty token) so git
+            # is satisfied; the touch is the observable side effect.
+            helper.write_text(
+                f'#!/bin/sh\ntouch "{marker}"\nprintf "%s\\0" ""\n',
+                encoding="utf-8",
+            )
+            helper.chmod(0o755)
+            git("config", "core.fsmonitor", str(helper))
+
+            shipped = shipped_executables(repo)
+
+            self.assertIn("ship.sh", shipped)
+            self.assertFalse(
+                marker.exists(),
+                "git ls-files ran the target repo's core.fsmonitor program",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

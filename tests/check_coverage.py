@@ -158,7 +158,15 @@ def shipped_executables(repo_root: Path) -> set[str]:
 
     try:
         listing = subprocess.run(
-            ["git", "-C", str(repo_root), "ls-files"],
+            # `-c core.fsmonitor=false`: git runs the program a repo names in
+            # core.fsmonitor to enumerate files, and `git ls-files` invokes it,
+            # so `--repo-root` pointed at a tree whose .git/config sets
+            # core.fsmonitor to a script would run that script. This command is
+            # allow-listed (Bash(python3 tests/check_coverage.py:*)), so that is
+            # code execution under the allow rule with no prompt. A command-line
+            # -c overrides the target repo's config and disables the exec; git
+            # still lists the tracked files.
+            ["git", "-c", "core.fsmonitor=false", "-C", str(repo_root), "ls-files"],
             capture_output=True,
             text=True,
             timeout=30,

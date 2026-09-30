@@ -93,6 +93,10 @@ EXPECTED_MANAGERS = {
     "ghcr.io/ublue-os/devcontainer": {"ci/defaults.json"},
     "ghcr.io/ublue-os/brew": {"ci/defaults.json"},
     "ruff": RUFF_LIVE_PIN_FILES,
+    "sigstore/cosign": {
+        ".github/actions/install-signing-tools/action.yml",
+        "docs/architecture-overview.md",
+    },
 }
 
 
@@ -371,16 +375,18 @@ class PackageRuleTests(unittest.TestCase):
         self.assertEqual(len(matching), 1, "no single rule covers both pin and pinDigest")
         self.assertIs(matching[0]["automerge"], False)
 
-    def test_the_openzfs_rule_names_a_dependency_a_manager_actually_produces(self) -> None:
+    def test_every_matchpackagenames_rule_names_a_dependency_a_manager_actually_produces(self) -> None:
         """`matchPackageNames` is matched exactly; a near-miss name silences the rule."""
         matching = [rule for rule in self.rules if "matchPackageNames" in rule]
-        self.assertEqual(len(matching), 1)
-        names = matching[0]["matchPackageNames"]
-        self.assertEqual(names, ["openzfs/zfs"])
-        for name in names:
-            with self.subTest(name=name):
-                self.assertIn(name, self.managers)
-        self.assertIs(matching[0]["automerge"], False)
+        expected = {"openzfs/zfs", "sigstore/cosign"}
+        seen = {tuple(rule["matchPackageNames"]) for rule in matching}
+        self.assertEqual(seen, {(name,) for name in expected})
+        for rule in matching:
+            names = rule["matchPackageNames"]
+            self.assertEqual(len(names), 1)
+            with self.subTest(rule=rule["description"][:60]):
+                self.assertIn(names[0], self.managers)
+                self.assertIs(rule["automerge"], False)
 
     def test_the_dockerfile_manager_is_disabled_outright(self) -> None:
         """`enabled` must be present and false -- an absent key is not a disabled manager."""

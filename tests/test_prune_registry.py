@@ -213,7 +213,8 @@ class Main(unittest.TestCase):
     def test_old_untagged_akmods_versions_go_but_an_index_child_stays(self) -> None:
         pages = {
             IMAGE: [[api_item(1, "latest")]],
-            AKMODS: [[api_item(10, "main-44"), api_item(11), api_item(12)]],
+            # 13 is the signature of the kept index 10, so it stays too.
+            AKMODS: [[api_item(10, "main-44"), api_item(11), api_item(12), api_item(13, f"sha256-{10:064x}.sig")]],
         }
         child = f"sha256:{11:064x}"
         api = FakeApi(pages)

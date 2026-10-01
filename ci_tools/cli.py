@@ -32,6 +32,7 @@ def command_map() -> dict[str, Callable[[], None]]:
     from ci_tools.pin_akmods_cache import main as pin_akmods_cache
     from ci_tools.prepare_validation_build import main as prepare_validation_build
     from ci_tools.promote_stable import main as promote_stable
+    from ci_tools.prune_registry import main as prune_registry
     from ci_tools.resolve_build_inputs import main as resolve_build_inputs
     from ci_tools.sign_image import main as sign_image
     from ci_tools.tagging_context import (
@@ -57,6 +58,7 @@ def command_map() -> dict[str, Callable[[], None]]:
         "pin-akmods-cache": pin_akmods_cache,
         "compute-branch-metadata": main_compute_branch_metadata,
         "promote-stable": promote_stable,
+        "prune-registry": prune_registry,
         "sign-image": sign_image,
         "akmods-clone-pinned": akmods_clone_pinned,
         "akmods-configure-zfs-target": akmods_configure_zfs_target,

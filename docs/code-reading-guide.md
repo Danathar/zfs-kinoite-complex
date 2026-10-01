@@ -109,13 +109,14 @@ Docs-only changes do not trigger image builds.
 13. [`tests/test_pin_akmods_cache.py`](../tests/test_pin_akmods_cache.py)
 14. [`tests/test_prepare_validation_build.py`](../tests/test_prepare_validation_build.py)
 15. [`tests/test_promote_stable.py`](../tests/test_promote_stable.py)
-16. [`tests/test_resolve_build_inputs.py`](../tests/test_resolve_build_inputs.py)
-17. [`tests/test_sign_image.py`](../tests/test_sign_image.py)
-18. [`tests/test_tagging_context.py`](../tests/test_tagging_context.py)
-19. [`tests/test_write_akmods_badge.py`](../tests/test_write_akmods_badge.py)
-20. [`tests/test_write_build_inputs_manifest.py`](../tests/test_write_build_inputs_manifest.py)
-21. [`tests/test_write_last_good_build_badge.py`](../tests/test_write_last_good_build_badge.py)
-22. [`tests/test_zfs_release.py`](../tests/test_zfs_release.py)
+16. [`tests/test_prune_registry.py`](../tests/test_prune_registry.py)
+17. [`tests/test_resolve_build_inputs.py`](../tests/test_resolve_build_inputs.py)
+18. [`tests/test_sign_image.py`](../tests/test_sign_image.py)
+19. [`tests/test_tagging_context.py`](../tests/test_tagging_context.py)
+20. [`tests/test_write_akmods_badge.py`](../tests/test_write_akmods_badge.py)
+21. [`tests/test_write_build_inputs_manifest.py`](../tests/test_write_build_inputs_manifest.py)
+22. [`tests/test_write_last_good_build_badge.py`](../tests/test_write_last_good_build_badge.py)
+23. [`tests/test_zfs_release.py`](../tests/test_zfs_release.py)
 
 #### Running Tests
 

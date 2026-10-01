@@ -1,0 +1,85 @@
+"""The registry retention rule (#308): what is kept, what goes, and why."""
+
+from __future__ import annotations
+
+import unittest
+from datetime import datetime, timedelta, timezone
+
+from ci_tools.prune_registry import KEEP_STABLE, Version, plan_versions
+
+NOW = datetime(2026, 10, 1, tzinfo=timezone.utc)
+OLD = NOW - timedelta(days=30)
+
+
+def v(vid: int, *tags: str, age_days: float = 30, digest: str | None = None) -> Version:
+    return Version(
+        id=vid,
+        digest=digest or f"sha256:{vid:064x}",
+        created=NOW - timedelta(days=age_days),
+        tags=tuple(tags),
+    )
+
+
+def sig_for(vid: int, subject: Version, age_days: float = 30) -> Version:
+    return v(vid, f"sha256-{subject.digest.split(':', 1)[1]}.sig", age_days=age_days)
+
+
+class RetentionRule(unittest.TestCase):
+    def test_latest_is_never_deleted_however_old(self) -> None:
+        plan = plan_versions([v(1, "latest", "candidate-abc123-44", age_days=400)], NOW)
+        self.assertIn(1, plan.keep)
+
+    def test_old_throwaway_tags_are_deleted(self) -> None:
+        versions = [
+            v(1, "candidate-4f4264c-44", "candidate-4f4264c-44-unsigned-33270846007"),
+            v(2, "br-my-branch"),
+            v(3, "latest-unsigned-123"),
+        ]
+        plan = plan_versions(versions, NOW)
+        self.assertEqual(set(plan.delete), {1, 2, 3})
+
+    def test_anything_younger_than_two_weeks_is_kept(self) -> None:
+        plan = plan_versions([v(1, "br-x", age_days=13.9), v(2, "br-y", age_days=14.1)], NOW)
+        self.assertIn(1, plan.keep)
+        self.assertIn(2, plan.delete)
+
+    def test_only_the_newest_stable_tags_survive(self) -> None:
+        stables = [v(i, f"stable-{100 + i}-abc{i:04x}", age_days=200 - i) for i in range(KEEP_STABLE + 3)]
+        plan = plan_versions(stables, NOW)
+        kept = {s.id for s in stables if s.id in plan.keep}
+        # The newest are the ones with the highest i (smallest age).
+        self.assertEqual(kept, set(range(3, KEEP_STABLE + 3)))
+        self.assertEqual(set(plan.delete), {0, 1, 2})
+
+    def test_an_unknown_tag_keeps_a_version(self) -> None:
+        plan = plan_versions([v(1, "candidate-abc-44", "something-new")], NOW)
+        self.assertIn(1, plan.keep)
+
+    def test_untagged_versions_are_kept(self) -> None:
+        plan = plan_versions([v(1)], NOW)
+        self.assertIn(1, plan.keep)
+
+
+class Signatures(unittest.TestCase):
+    def test_a_signature_follows_its_image(self) -> None:
+        kept = v(1, "latest")
+        gone = v(2, "br-old")
+        plan = plan_versions([kept, gone, sig_for(3, kept), sig_for(4, gone)], NOW)
+        self.assertIn(3, plan.keep)
+        self.assertIn(4, plan.delete)
+
+    def test_an_old_orphan_signature_goes_and_a_young_one_stays(self) -> None:
+        missing = v(99, "latest")  # not passed in: its image is gone
+        plan = plan_versions([sig_for(1, missing), sig_for(2, missing, age_days=1), v(3, "latest")], NOW)
+        self.assertIn(1, plan.delete)
+        self.assertIn(2, plan.keep)
+
+    def test_a_signature_is_never_treated_as_an_image_tag(self) -> None:
+        # A version carrying only a .sig tag must not reach the throwaway check.
+        kept = v(1, "stable-1-abc")
+        plan = plan_versions([kept, sig_for(2, kept, age_days=500)], NOW)
+        self.assertIn(2, plan.keep)
+
+
+if __name__ == "__main__":
+    unittest.main()

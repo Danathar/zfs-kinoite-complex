@@ -48,6 +48,12 @@
       "workflow": {"contents": "read"},
       "jobs": {}
     },
+    "prune-registry.yml": {
+      "workflow": {"contents": "read"},
+      "jobs": {
+        "prune": {"contents": "read", "packages": "write"}
+      }
+    },
     "test.yml": {
       "workflow": null,
       "jobs": {

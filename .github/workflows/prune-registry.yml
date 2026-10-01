@@ -1,0 +1,56 @@
+name: Prune registry
+
+# Registry retention (#308). Nothing else ever removes an image, so without this
+# the registry grows by about 11 tags a day.
+#
+# The rule lives in ci_tools/prune_registry.py and is tested in
+# tests/test_prune_registry.py. In short: keep `latest`, the newest 10 `stable-*`
+# rollback targets, anything younger than 14 days, untagged versions, anything
+# with a tag the tool does not recognise, and the signature of every kept image.
+# Delete only versions whose tags are all throwaway (`candidate-*`,
+# `*-unsigned-<run>`, `br-*`, older `stable-*`).
+#
+# Scheduled runs are dry runs: they print what would go and delete nothing. A
+# person deletes by dispatching this workflow with `delete: true`, after reading
+# a dry run's list.
+
+on:
+  schedule:
+    # Weekly, Mondays 04:00 UTC, clear of nightly-compliance (05:00) and build (06:00).
+    - cron: "00 04 * * 1"
+  workflow_dispatch:
+    inputs:
+      delete:
+        description: "Actually delete (default: dry run that only prints the plan)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  prune:
+    name: Prune old package versions
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Plan, and delete only if asked
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PACKAGE_OWNER: ${{ github.repository_owner }}
+          # Only a manual dispatch with delete=true deletes. A schedule run has
+          # no inputs, so this is "false" for it.
+          PRUNE_DELETE: ${{ github.event_name == 'workflow_dispatch' && inputs.delete && 'true' || 'false' }}
+        run: python3 -m ci_tools.cli prune-registry

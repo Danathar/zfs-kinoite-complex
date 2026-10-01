@@ -565,6 +565,9 @@ The publish action:
 3. signs and verifies that digest
 4. copies the signed digest to the requested candidate tag
 
+The `*-unsigned-<run_id>` tag stays on the signed digest afterwards;
+`prune-registry.yml` removes it, and other throwaway tags, after two weeks.
+
 Promotion is a separate job.
 
 It:

@@ -4,11 +4,14 @@ name: Prune registry
 # the registry grows by about 11 tags a day.
 #
 # The rule lives in ci_tools/prune_registry.py and is tested in
-# tests/test_prune_registry.py. In short: keep `latest`, the newest 10 `stable-*`
-# rollback targets, anything younger than 14 days, untagged versions, anything
-# with a tag the tool does not recognise, and the signature of every kept image.
-# Delete only versions whose tags are all throwaway (`candidate-*`,
-# `*-unsigned-<run>`, `br-*`, older `stable-*`).
+# tests/test_prune_registry.py. In short: keep `latest`, the newest 20 `stable-*`
+# rollback targets, anything younger than 14 days, anything with a tag the tool
+# does not recognise, and the signature of every kept image. Delete versions
+# whose tags are all throwaway (`candidate-*`, `*-unsigned-<run>`, `br-*`, older
+# `stable-*`). Untagged versions are kept in the image package (they can be parts
+# of a multi-arch image); in the akmods cache, where a rebuild leaves the old
+# version untagged, untagged versions older than 14 days go too, unless a tagged
+# index still points at them.
 #
 # Scheduled runs are dry runs: they print what would go and delete nothing. A
 # person deletes by dispatching this workflow with `delete: true`, after reading

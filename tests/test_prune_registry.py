@@ -88,6 +88,27 @@ class Signatures(unittest.TestCase):
 
 
 
+
+class UntaggedPruning(unittest.TestCase):
+    def test_untagged_versions_are_kept_unless_the_package_allows_pruning(self) -> None:
+        self.assertIn(1, plan_versions([v(1)], NOW).keep)
+        self.assertIn(1, plan_versions([v(1)], NOW, prune_untagged=True).delete)
+
+    def test_a_young_untagged_version_is_kept(self) -> None:
+        self.assertIn(1, plan_versions([v(1, age_days=3)], NOW, prune_untagged=True).keep)
+
+    def test_an_untagged_child_of_a_tagged_index_is_kept(self) -> None:
+        child = v(2)
+        plan = plan_versions([v(1, "main-44"), child], NOW, True, frozenset({child.digest}))
+        self.assertIn(2, plan.keep)
+        self.assertIn(1, plan.keep)  # an unknown tag keeps the index itself
+
+    def test_a_pruned_untagged_versions_signature_goes_with_it(self) -> None:
+        old = v(1)
+        plan = plan_versions([old, sig_for(2, old)], NOW, prune_untagged=True)
+        self.assertEqual(set(plan.delete), {1, 2})
+
+
 def api_item(vid: int, *tags: str, age_days: float = 30) -> dict:
     created = (datetime.now(timezone.utc) - timedelta(days=age_days)).strftime("%Y-%m-%dT%H:%M:%SZ")
     return {"id": vid, "name": f"sha256:{vid:064x}", "created_at": created, "metadata": {"container": {"tags": list(tags)}}}
@@ -121,10 +142,32 @@ IMAGE = "zfs-kinoite-complex"
 AKMODS = "zfs-kinoite-complex-akmods"
 
 
-def run_main(api: FakeApi, delete: bool) -> str:
+class FakeRegistry:
+    """Stands in for _registry_get: a pull token, then manifests by digest."""
+
+    def __init__(self, children: dict[str, list[str]] | None = None, fail: bool = False) -> None:
+        self.children = children or {}
+        self.fail = fail
+
+    def __call__(self, url: str, accept: str = "", bearer: str = ""):
+        if self.fail:
+            raise OSError("registry unreachable")
+        if "/token?" in url:
+            return {"token": "anon"}
+        digest = url.rsplit("/manifests/", 1)[1]
+        kids = self.children.get(digest)
+        return {"manifests": [{"digest": d} for d in kids]} if kids else {"layers": []}
+
+
+def run_main(api: FakeApi, delete: bool, registry: FakeRegistry | None = None) -> str:
     env = {"GITHUB_TOKEN": "t", "PACKAGE_OWNER": "o", "PRUNE_DELETE": "true" if delete else "false", "PACKAGES": f"{IMAGE} {AKMODS}"}
     out = io.StringIO()
-    with mock.patch.dict(os.environ, env, clear=False), mock.patch.object(prune_registry, "_request", api), redirect_stdout(out):
+    with (
+        mock.patch.dict(os.environ, env, clear=False),
+        mock.patch.object(prune_registry, "_request", api),
+        mock.patch.object(prune_registry, "_registry_get", registry or FakeRegistry()),
+        redirect_stdout(out),
+    ):
         prune_registry.main()
     return out.getvalue()
 
@@ -164,6 +207,23 @@ class Main(unittest.TestCase):
         api = FakeApi(pages)
         with self.assertRaises(CiToolError):
             run_main(api, delete=True)
+        self.assertEqual(api.deletes(), [])
+
+
+    def test_old_untagged_akmods_versions_go_but_an_index_child_stays(self) -> None:
+        pages = {
+            IMAGE: [[api_item(1, "latest")]],
+            AKMODS: [[api_item(10, "main-44"), api_item(11), api_item(12)]],
+        }
+        child = f"sha256:{11:064x}"
+        api = FakeApi(pages)
+        run_main(api, delete=True, registry=FakeRegistry({f"sha256:{10:064x}": [child]}))
+        self.assertEqual(api.deletes(), [f"/users/o/packages/container/{AKMODS}/versions/12"])
+
+    def test_an_unreadable_registry_stops_the_run_before_any_delete(self) -> None:
+        api = FakeApi(self.pages())
+        with self.assertRaises(OSError):
+            run_main(api, delete=True, registry=FakeRegistry(fail=True))
         self.assertEqual(api.deletes(), [])
 
 

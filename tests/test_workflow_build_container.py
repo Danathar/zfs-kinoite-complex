@@ -41,8 +41,9 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW_DIR = REPO_ROOT / ".github" / "workflows"
 
-# The two workflows whose jobs run the privileged akmods build container.
-PRIVILEGED_CONTAINER_WORKFLOWS = ("build.yml", "build-branch.yml")
+# The workflow whose jobs run the privileged akmods build container. Branch runs
+# used to as well; they now verify the shared cache read-only (#321).
+PRIVILEGED_CONTAINER_WORKFLOWS = ("build.yml",)
 
 # Captures the rest of the line, not just non-whitespace: a GitHub expression
 # like `${{ inputs.x || 'y' }}` contains spaces, and a pattern anchored on \S+
@@ -167,14 +168,22 @@ class BranchIsolationTests(unittest.TestCase):
 
     def test_branch_cache_refresh_is_denied_for_everyone(self) -> None:
         text = self._branch_workflow()
-        self.assertIn(
-            'allow_cache_rebuild: "false"',
-            text,
-            "build-branch.yml must deny shared akmods cache republishing to ALL branch "
-            "runs; without a signing key a branch rebuild publishes an unsigned cache "
-            "that every later run rejects, and a compromised write credential could "
-            "replace the signed cache at will.",
+        job = text[text.index("\n  build-branch-akmods:\n") : text.index("\n  build-branch-image:\n")]
+        why = (
+            "build-branch.yml must not be able to republish the shared akmods cache "
+            "from ANY branch run; without a signing key a branch rebuild publishes an "
+            "unsigned cache that every later run rejects, and a write credential could "
+            "replace the signed cache at will."
         )
+        # The read-only command pull requests use, which has no rebuild path at all.
+        self.assertIn("python3 -m ci_tools.cli prepare-validation-build", job, why)
+        # No write credential, no privileged container, no rebuild knob to flip.
+        self.assertIn("packages: read", job, why)
+        self.assertNotIn("packages: write", job, why)
+        self.assertNotIn("container:", job, why)
+        self.assertNotIn("--privileged", job, why)
+        self.assertNotIn("prepare-main-akmods", job, why)
+        self.assertNotIn("allow_cache_rebuild", job, why)
 
     def test_branch_workflow_has_no_cache_signing_job(self) -> None:
         # The job cannot work without the key; leaving it in place would fail

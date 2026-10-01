@@ -316,8 +316,10 @@ class BranchArtifactTests(unittest.TestCase):
         item = normalized(self.items[2])
         self.assertIn("never publish branch-specific cache tags", item)
         self.assertIn("never refresh the shared one", item)
-        self.assertIn('rebuild_akmods: "false"', self.branch_yaml)
-        self.assertNotIn('rebuild_akmods: "true"', self.branch_yaml)
+        # The branch job runs the read-only verifier and has no rebuild knob at all.
+        self.assertIn("prepare-validation-build", self.branch_yaml)
+        self.assertNotIn("rebuild_akmods", self.branch_yaml)
+        self.assertNotIn("allow_cache_rebuild", self.branch_yaml)
 
 
 class BuildInputResolutionTests(unittest.TestCase):
@@ -395,27 +397,27 @@ class AkmodsSourceTests(unittest.TestCase):
         self.assertIn("/tmp/akmods", clone)
 
     def test_every_workflow_path_really_does_clone_that_commit(self) -> None:
-        # "every workflow path also clones the resolved commit once" -- the main and branch
-        # workflows through the prepare-main-akmods action, and pull-request validation
+        # "every workflow path also clones the resolved commit once" -- the main workflow
+        # through the prepare-main-akmods action, and branch and pull-request validation
         # through `ci_tools/prepare_validation_build.py`, which calls the same helper.
         self.assertIn("Separate from cache reuse, every workflow path also clones", self.body)
         action = strip_yaml_comments(
             (ACTION_DIR / "prepare-main-akmods" / "action.yml").read_text(encoding="utf-8")
         )
         self.assertIn("ci_tools.cli akmods-clone-pinned", action)
-        for workflow in (BUILD_MAIN, BUILD_BRANCH):
-            with self.subTest(workflow=workflow.name):
-                self.assertIn(
-                    "./.github/actions/prepare-main-akmods",
-                    strip_yaml_comments(workflow.read_text(encoding="utf-8")),
-                )
+        self.assertIn(
+            "./.github/actions/prepare-main-akmods",
+            strip_yaml_comments(BUILD_MAIN.read_text(encoding="utf-8")),
+        )
         validation = (REPO_ROOT / "ci_tools" / "prepare_validation_build.py").read_text(encoding="utf-8")
         self.assertIn("from ci_tools.akmods_clone_pinned import clone_pinned", validation)
         self.assertIn("clone_pinned(", validation)
-        self.assertIn(
-            "ci_tools.cli prepare-validation-build",
-            strip_yaml_comments(BUILD_PR.read_text(encoding="utf-8")),
-        )
+        for workflow in (BUILD_BRANCH, BUILD_PR):
+            with self.subTest(workflow=workflow.name):
+                self.assertIn(
+                    "ci_tools.cli prepare-validation-build",
+                    strip_yaml_comments(workflow.read_text(encoding="utf-8")),
+                )
 
 
 class CacheInspectionTests(unittest.TestCase):

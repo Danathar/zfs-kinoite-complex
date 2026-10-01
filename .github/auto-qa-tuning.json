@@ -73,7 +73,7 @@
     { "workflow": "build-pr.yml", "job": "build-pr-image", "timeout_minutes": 60 },
 
     { "workflow": "build-branch.yml", "job": "prepare-branch-metadata", "timeout_minutes": 20 },
-    { "workflow": "build-branch.yml", "job": "build-branch-akmods", "timeout_minutes": 90 },
+    { "workflow": "build-branch.yml", "job": "build-branch-akmods", "timeout_minutes": 20 },
     { "workflow": "build-branch.yml", "job": "build-branch-image", "timeout_minutes": 60 },
 
     { "workflow": "akmods-failure-triage.yml", "job": "triage", "timeout_minutes": 15 },

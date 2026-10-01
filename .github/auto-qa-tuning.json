@@ -84,6 +84,8 @@
     { "workflow": "ai-fix.yml", "job": "fix", "timeout_minutes": 30 },
 
     { "workflow": "nightly-compliance.yml", "job": "suite", "timeout_minutes": 15 },
-    { "workflow": "nightly-compliance.yml", "job": "published-image", "timeout_minutes": 15 }
+    { "workflow": "nightly-compliance.yml", "job": "published-image", "timeout_minutes": 15 },
+
+    { "workflow": "prune-registry.yml", "job": "prune", "timeout_minutes": 10 }
   ]
 }

@@ -26,6 +26,7 @@ If a term is unfamiliar, check the shared glossary first:
 | Compose final branch image tag                                             | `compose-branch-image-tag`    | `ci_tools.tagging_context`             |
 | Compute candidate image tag                                                | `compute-candidate-tag`       | `ci_tools.tagging_context`             |
 | Promote candidate digest to latest and audit tags                          | `promote-stable`              | `ci_tools.promote_stable`              |
+| Plan registry retention, deleting only when asked                          | `prune-registry`              | `ci_tools.prune_registry`              |
 | Sign one published image tag by digest                                     | `sign-image`                  | `ci_tools.sign_image`                  |
 | Clone resolved upstream akmods tooling and verify the exact commit SHA     | `akmods-clone-pinned`         | `ci_tools.akmods_clone_pinned`         |
 | Configure target image path for the akmods build wrapper                   | `akmods-configure-zfs-target` | `ci_tools.akmods_configure_zfs_target` |

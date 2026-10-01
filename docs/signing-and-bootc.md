@@ -71,6 +71,11 @@ does this:
 5. verifies that digest signature
 6. copies the same digest to the requested candidate tag
 
+The `-unsigned-<run_id>` tag is not removed afterwards, so despite the name it
+names a signed digest. It is transient only because
+[`prune-registry.yml`](../.github/workflows/prune-registry.yml) deletes it once
+it is two weeks old, along with old `candidate-*` and `br-*` tags (#308).
+
 Then the promote job copies the same digest to:
 
 1. `stable-<run>-<sha>`

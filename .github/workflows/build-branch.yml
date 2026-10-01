@@ -59,8 +59,7 @@ jobs:
 
   build-branch-akmods:
     name: Verify Shared ZFS Akmods Cache
-    # Read-only: resolves inputs and checks the shared cache, never rebuilds
-    # it. Observed under 3m.
+    # Read-only: resolves inputs and checks the shared cache, never rebuilds it.
     timeout-minutes: 20
     runs-on: ubuntu-24.04
     outputs:
@@ -90,6 +89,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+
+      # Same order as build-pr.yml. prepare-validation-build pulls the base image
+      # with `podman pull --retry`, which the stock ubuntu-24.04 podman does not
+      # have; this action installs the newer podman/skopeo it needs (first branch
+      # run without it failed: "unknown flag: --retry", run 36879388503).
+      - name: Prepare runner (podman version and disk layout)
+        uses: ./.github/actions/prepare-rechunk-host
 
       - id: defaults
         name: Load repository defaults

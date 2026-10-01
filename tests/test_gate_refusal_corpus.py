@@ -25,7 +25,9 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -76,15 +78,42 @@ def hook_command(settings: dict) -> str:
     raise AssertionError(".claude/settings.json registers no PreToolUse hook for Bash")
 
 
-def decide(command: str, hook: str) -> tuple[str, subprocess.CompletedProcess]:
+def scratch_project(directory: Path) -> Path:
+    """Copy .claude/ into a fresh repository with two commits.
+
+    CI checks this repository out at depth 1, where `HEAD~1` names no commit,
+    so the gate reads `git diff HEAD~1 HEAD` as two plain-file operands and
+    refuses it -- correctly for that checkout, but it fails the
+    allow-diff-range row, whose verdict assumes the history an agent's working
+    clone has. The rows run here instead.
+    """
+    shutil.copytree(ROOT / ".claude", directory / ".claude")
+    git = [
+        "git",
+        "-c",
+        "user.email=t@example.invalid",
+        "-c",
+        "user.name=t",
+        "-c",
+        "commit.gpgsign=false",
+    ]
+    subprocess.run(["git", "init", "-q", "."], cwd=directory, check=True)
+    for message in ("first", "second"):
+        subprocess.run(
+            [*git, "commit", "-q", "--allow-empty", "-m", message], cwd=directory, check=True
+        )
+    return directory
+
+
+def decide(command: str, hook: str, project: Path) -> tuple[str, subprocess.CompletedProcess]:
     payload = json.dumps({"tool_name": "Bash", "tool_input": {"command": command}})
     result = subprocess.run(
         ["bash", "-c", hook],
         input=payload,
         capture_output=True,
         text=True,
-        cwd=ROOT,
-        env={**os.environ, "CLAUDE_PROJECT_DIR": str(ROOT)},
+        cwd=project,
+        env={**os.environ, "CLAUDE_PROJECT_DIR": str(project)},
         check=False,
     )
     refused = result.returncode == 2 or '"deny"' in result.stdout
@@ -177,6 +206,19 @@ class CorpusVerdictTests(unittest.TestCase):
         cls.prefixes = allow_prefixes(settings)
         cls.hook = hook_command(settings)
         cls.rows = [row for row in cls.corpus["rows"] if applies(row, cls.prefixes)]
+        scratch = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(scratch.cleanup)
+        cls.project = scratch_project(Path(scratch.name))
+
+    def test_the_scratch_repository_has_a_parent_commit(self) -> None:
+        result = subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", "HEAD~1^{commit}"],
+            cwd=self.project,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0)
 
     def test_enough_rows_apply_here_to_mean_something(self) -> None:
         # If the allow list stopped covering `git diff`, every row would be
@@ -186,7 +228,7 @@ class CorpusVerdictTests(unittest.TestCase):
     def test_every_row_this_repository_allows_is_decided_the_way_it_says(self) -> None:
         for row in self.rows:
             with self.subTest(row=row["id"], command=row["command"]):
-                verdict, result = decide(row["command"], self.hook)
+                verdict, result = decide(row["command"], self.hook, self.project)
                 self.assertIn(result.returncode, (0, 2), result.stderr)
                 self.assertEqual(
                     verdict,

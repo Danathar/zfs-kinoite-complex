@@ -227,5 +227,17 @@ class Main(unittest.TestCase):
         self.assertEqual(api.deletes(), [])
 
 
+    def test_the_old_child_of_a_young_untagged_index_is_kept(self) -> None:
+        # A rebuild can leave a young untagged index that the plan keeps. Its
+        # platform manifest may be older; deleting that would break the index.
+        pages = {
+            IMAGE: [[api_item(1, "latest")]],
+            AKMODS: [[api_item(20, age_days=3), api_item(21, age_days=30)]],
+        }
+        api = FakeApi(pages)
+        run_main(api, delete=True, registry=FakeRegistry({f"sha256:{20:064x}": [f"sha256:{21:064x}"]}))
+        self.assertEqual(api.deletes(), [])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -195,8 +195,10 @@ def _registry_get(url: str, accept: str = "", bearer: str = "") -> object:
 
 def referenced_children(owner: str, package: str, versions: list[Version]) -> frozenset[str]:
     """
-    Digests some tagged version's index points at. An untagged version in this
-    set is a live platform manifest, not a leftover, and must never be pruned.
+    Digests any version's index points at, tagged or not. An untagged version
+    in this set may be the platform manifest of an index the plan keeps (a
+    young untagged index, say), so it is never pruned in this run. Once the
+    index pointing at it is gone, a later run can prune it.
 
     Reads the public registry anonymously. Any failure raises: if the
     references can't be read, the run stops rather than guess.
@@ -208,7 +210,7 @@ def referenced_children(owner: str, package: str, versions: list[Version]) -> fr
     bearer = str(token["token"])
     children: set[str] = set()
     for v in versions:
-        if not v.tags or all(SIG_RE.match(t) for t in v.tags):
+        if v.tags and all(SIG_RE.match(t) for t in v.tags):
             continue
         manifest = _registry_get(f"{REGISTRY}/v2/{repo}/manifests/{v.digest}", INDEX_ACCEPT, bearer)
         assert isinstance(manifest, dict)

@@ -305,6 +305,7 @@ class RunnerRefusalTests(unittest.TestCase):
         # tells the reader something untrue about the option in their hand.
         self.assertIn("writes to a path", run_tests.refusal_message("--basetemp"))
         self.assertIn("import code from outside", run_tests.refusal_message("--pyargs"))
+        self.assertIn("interactive debugger", run_tests.refusal_message("--trace"))
 
     def test_the_refused_list_covers_the_options_that_import_from_elsewhere(self) -> None:
         # Pinned by name so that dropping one is a failure rather than a
@@ -350,18 +351,42 @@ class RunnerRefusalTests(unittest.TestCase):
             },
         )
 
+    def test_the_refused_list_covers_the_options_that_open_the_debugger(self) -> None:
+        # pdb runs any statement it reads from standard input, and the caller
+        # chooses that input: `printf '!stmt\nc\n' | python3
+        # tests/run_tests.py --trace tests` ran `stmt` with nothing written to
+        # the checkout. `--trace` stops before every test, `--pdb` at the
+        # first failure.
+        self.assertEqual(set(run_tests.REFUSED_DEBUGGER_OPTIONS), {"--pdb", "--trace"})
+
+    def test_a_debugger_option_is_refused_wherever_it_stands(self) -> None:
+        # `--trace-config` only prints the conftest files pytest loads, and
+        # `--pdb` is a prefix of the refused `--pdbcls`, so the match has to
+        # be the whole option, not its start.
+        for arguments in (
+            ["--trace", "tests"],
+            ["tests", "--pdb"],
+            ["-x", "--pdb", "tests/test_run_tests.py"],
+        ):
+            with self.subTest(arguments=arguments):
+                self.run_pytest.reset_mock()
+                self.assertEqual(run_tests.main(arguments), 2)
+                self.run_pytest.assert_not_called()
+        self.assertIsNone(run_tests.refused_option("--trace-config"))
+
     def test_every_refused_option_is_in_exactly_one_list(self) -> None:
         # `REFUSED_OPTIONS` is the concatenation, and `refusal_message` picks
-        # its wording by membership. An option in both lists would get the
-        # import wording for a write reason.
-        self.assertEqual(
-            set(run_tests.REFUSED_IMPORT_OPTIONS) & set(run_tests.REFUSED_WRITE_OPTIONS),
-            set(),
+        # its wording by membership. An option in two lists would get the
+        # wording of one for the reason of another.
+        lists = (
+            set(run_tests.REFUSED_IMPORT_OPTIONS),
+            set(run_tests.REFUSED_WRITE_OPTIONS),
+            set(run_tests.REFUSED_DEBUGGER_OPTIONS),
         )
-        self.assertEqual(
-            set(run_tests.REFUSED_OPTIONS),
-            set(run_tests.REFUSED_IMPORT_OPTIONS) | set(run_tests.REFUSED_WRITE_OPTIONS),
-        )
+        for index, first in enumerate(lists):
+            for second in lists[index + 1 :]:
+                self.assertEqual(first & second, set())
+        self.assertEqual(set(run_tests.REFUSED_OPTIONS), set().union(*lists))
 
     def test_the_write_options_are_pytests_own_and_take_a_path(self) -> None:
         # Held against the installed pytest's option table rather than memory,

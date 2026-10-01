@@ -1,7 +1,7 @@
 """
 Script: tests/run_tests.py
 What: Runs this repository's test suite, refusing any selection that would import Python from outside tests/.
-Doing: Rejects the pytest options that move collection off this tree, import a module by name or write to a path they name, resolves every positional selection inside tests/, requires every file Python or pytest could load from the checkout to be tracked by git, then execs pytest.
+Doing: Rejects the pytest options that move collection off this tree, import a module by name, write to a path they name or open the interactive debugger, resolves every positional selection inside tests/, requires every file Python or pytest could load from the checkout to be tracked by git, then execs pytest.
 Why: `.claude/settings.json` has to allow *some* test command unattended, and an unrestricted one is unbounded local code execution -- pytest imports every module it collects, and an import is not a tool call, so nothing in the deny list is consulted.
 Goal: Make the one command an agent may run without a prompt able to import only code that is already in the diff.
 
@@ -35,6 +35,12 @@ point:
     no prefix rule able to see a flag in the middle of an ordinary command.
     That is the write half of the primitive `.claude/hooks/gate-git-diff.sh`
     refuses for `git`; see `REFUSED_WRITE_OPTIONS`.
+  * **Closed:** the interactive debugger. `--trace` stops in pdb at the
+    start of every test and `--pdb` at the first failure, and pdb runs any
+    Python statement it reads from standard input (`!stmt`). So
+    `printf '!stmt\\nc\\n' | python3 tests/run_tests.py --trace tests`
+    runs code that is in no file at all, which no untracked-file check below
+    can see. See `REFUSED_DEBUGGER_OPTIONS`.
   * **Closed:** a file dropped into the checkout and not committed. Checking
     only the `*.py` under a selection was not enough, because pytest and
     Python load code from further afield: `python3 -m pytest` puts the
@@ -185,7 +191,24 @@ REFUSED_WRITE_OPTIONS = (
     "--cov-report",
 )
 
-REFUSED_OPTIONS = REFUSED_IMPORT_OPTIONS + REFUSED_WRITE_OPTIONS
+# Options that open pdb, the interactive debugger. `--trace` stops at the start
+# of every test and `--pdb` at the first failure or error, and at that prompt
+# pdb runs any Python statement it reads (`!stmt`, or any line that is not a
+# pdb command). The command this runner stands in front of is allow-listed,
+# and its standard input is whatever the caller pipes into it, so
+# `printf '!stmt\nc\n' | python3 tests/run_tests.py --trace tests` runs
+# `stmt` with no prompt -- code that was never in a file, so the
+# untracked-file refusal below has nothing to find. `--pdbcls` is on the import
+# list above, because its value names a module; these two take no value and
+# need no module, so they are their own list. Neither has a short spelling,
+# and `--trace-config`, which only prints the conftest files pytest loads,
+# opens no prompt and is not here.
+REFUSED_DEBUGGER_OPTIONS = (
+    "--pdb",
+    "--trace",
+)
+
+REFUSED_OPTIONS = REFUSED_IMPORT_OPTIONS + REFUSED_WRITE_OPTIONS + REFUSED_DEBUGGER_OPTIONS
 
 # pytest builds its argparse parser with `fromfile_prefix_chars="@"`, so an
 # argument starting with this character is not an argument at all: argparse
@@ -233,8 +256,8 @@ def refused_option(argument: str) -> str | None:
 def refusal_message(option: str) -> str:
     """Why `option` is refused, in the words that apply to it.
 
-    The two lists are refused for unrelated reasons, and one message covering
-    both would have to be vague enough to explain neither. A reader who sees
+    The three lists are refused for unrelated reasons, and one message
+    covering all of them would have to be vague enough to explain none. A reader who sees
     `--basetemp` refused for letting pytest import outside code learns nothing
     they can act on.
     """
@@ -242,6 +265,12 @@ def refusal_message(option: str) -> str:
         "Run pytest directly if you mean it -- that command is not on the "
         "unattended allow list."
     )
+    if option in REFUSED_DEBUGGER_OPTIONS:
+        return (
+            f"{option} is refused here: it opens pytest's interactive debugger, "
+            "which runs any Python statement it reads from standard input, and "
+            f"this command runs unattended. {tail}"
+        )
     if option in REFUSED_WRITE_OPTIONS:
         return (
             f"{option} is refused here: it writes to a path this command names, "

@@ -240,5 +240,89 @@ class Main(unittest.TestCase):
         self.assertEqual(api.deletes(), [])
 
 
+class FailingDeleteApi(FakeApi):
+    """A FakeApi whose DELETE of the given version IDs raises, as a 403 or 5xx would."""
+
+    def __init__(self, pages: dict[str, list[list[dict]]], fail_ids: set[int]) -> None:
+        super().__init__(pages)
+        self.fail_ids = fail_ids
+
+    def __call__(self, method: str, path: str, token: str):
+        if method == "DELETE" and int(path.rsplit("/", 1)[1]) in self.fail_ids:
+            self.calls.append((method, path))
+            raise OSError("delete refused")
+        return super().__call__(method, path, token)
+
+
+class RecordingRegistry(FakeRegistry):
+    def __init__(self) -> None:
+        super().__init__()
+        self.urls: list[str] = []
+
+    def __call__(self, url: str, accept: str = "", bearer: str = ""):
+        self.urls.append(url)
+        return super().__call__(url, accept, bearer)
+
+
+class MainEdges(unittest.TestCase):
+    def test_the_retention_numbers_are_the_ones_decided_on_308(self) -> None:
+        self.assertEqual(prune_registry.KEEP_STABLE, 20)
+        self.assertEqual(prune_registry.MIN_AGE, timedelta(days=14))
+        self.assertEqual(prune_registry.PRUNE_UNTAGGED, frozenset({AKMODS}))
+
+    def test_an_old_untagged_image_version_is_never_deleted(self) -> None:
+        # Only the akmods cache prunes untagged versions. In the image package
+        # they can be the platform manifests of a multi-arch image, and no
+        # index lookup runs for it, so main() must not hand it the flag.
+        pages = {IMAGE: [[api_item(1, "latest"), api_item(4)]], AKMODS: [[api_item(10, "main-44")]]}
+        api = FakeApi(pages)
+        run_main(api, delete=True)
+        self.assertEqual(api.deletes(), [])
+
+    def test_a_failed_delete_fails_the_run_after_trying_the_rest(self) -> None:
+        pages = {IMAGE: [[api_item(1, "latest"), api_item(2, "br-old"), api_item(3, "br-older")]], AKMODS: [[]]}
+        api = FailingDeleteApi(pages, fail_ids={2})
+        with self.assertRaises(CiToolError):
+            run_main(api, delete=True)
+        self.assertEqual(
+            sorted(api.deletes()),
+            [f"/users/o/packages/container/{IMAGE}/versions/2", f"/users/o/packages/container/{IMAGE}/versions/3"],
+        )
+
+    def test_the_registry_repository_is_lowercased(self) -> None:
+        # GHCR repository names are lowercase; the owner login is not.
+        pages = {IMAGE: [[api_item(1, "latest")]], AKMODS: [[api_item(10, "main-44")]]}
+        registry = RecordingRegistry()
+        env = {"PACKAGE_OWNER": "Danathar"}
+        with mock.patch.dict(os.environ, env, clear=False):
+            run_main_owner(FakeApi(pages), registry)
+        self.assertTrue(registry.urls)
+        self.assertTrue(all(f"danathar/{AKMODS}" in u for u in registry.urls), registry.urls)
+
+    def test_a_signature_is_kept_when_deleting_its_image_failed(self) -> None:
+        # Deleting the signature of an image that is still there leaves a
+        # published image unsigned. FAILS on c09935c: phase 2 deletes the
+        # signature regardless.
+        sig = f"sha256-{2:064x}.sig"
+        pages = {IMAGE: [[api_item(1, "latest"), api_item(2, "br-old"), api_item(5, sig)]], AKMODS: [[]]}
+        api = FailingDeleteApi(pages, fail_ids={2})
+        with self.assertRaises(CiToolError):
+            run_main(api, delete=True)
+        self.assertNotIn(f"/users/o/packages/container/{IMAGE}/versions/5", api.deletes())
+
+
+def run_main_owner(api: FakeApi, registry: FakeRegistry) -> str:
+    env = {"GITHUB_TOKEN": "t", "PRUNE_DELETE": "false", "PACKAGES": f"{IMAGE} {AKMODS}"}
+    out = io.StringIO()
+    with (
+        mock.patch.dict(os.environ, env, clear=False),
+        mock.patch.object(prune_registry, "_request", api),
+        mock.patch.object(prune_registry, "_registry_get", registry),
+        redirect_stdout(out),
+    ):
+        prune_registry.main()
+    return out.getvalue()
+
+
 if __name__ == "__main__":
     unittest.main()

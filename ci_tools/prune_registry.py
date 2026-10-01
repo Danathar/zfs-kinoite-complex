@@ -250,13 +250,27 @@ def main() -> None:
             v = by_id[vid]
             print(f"  delete {vid} {v.created:%Y-%m-%d} {v.digest[:19]} {','.join(v.tags) or '-'}  ({why})")
 
-    # Phase 2: delete, only when asked, only the planned IDs.
+    # Phase 2: delete, only when asked, only the planned IDs. Images first; a
+    # signature goes only once every image it signs is gone (deleted in this run
+    # or already absent). A failed image delete must not leave that still
+    # published image without its signature.
     failures = 0
     if delete:
-        for package, _versions, plan in planned:
-            for vid in plan.delete:
+        for package, versions, plan in planned:
+            by_id = {v.id: v for v in versions}
+            present = {v.digest for v in versions}
+            sig_ids = {vid for vid in plan.delete if by_id[vid].tags and all(SIG_RE.match(t) for t in by_id[vid].tags)}
+            gone: set[str] = set()
+            for vid in [i for i in plan.delete if i not in sig_ids] + sorted(sig_ids):
+                v = by_id[vid]
+                if vid in sig_ids:
+                    subjects = {"sha256:" + m.group("hex") for t in v.tags if (m := SIG_RE.match(t))}
+                    if any(s in present and s not in gone for s in subjects):
+                        print(f"  kept signature {vid}: the image it signs was not deleted")
+                        continue
                 try:
                     _request("DELETE", f"/users/{owner}/packages/container/{package}/versions/{vid}", token)
+                    gone.add(v.digest)
                 except Exception as exc:  # noqa: BLE001 - report every failure, keep going
                     failures += 1
                     print(f"  FAILED to delete {vid}: {exc}", file=sys.stderr)

@@ -244,9 +244,10 @@ every other process on the runner to read. `skopeo_inspect_json` and
 `skopeo_copy` use the same file via `--authfile`. See gotcha 6 in
 [`docs/signing-and-bootc.md`](signing-and-bootc.md). Both cosign versions above
 read `DOCKER_CONFIG` -- verified directly with cosign v2.4.1 and v3.1.3 (one
-patch ahead of the pinned v3.1.2, same release line) against this repo's signed
-akmods image, including the negative case where a wrong credential in the file
-is denied rather than silently falling back to an anonymous pull.
+patch ahead of v3.1.2, the pin when this was checked, same release line)
+against this repo's signed akmods image, including the negative case where a
+wrong credential in the file is denied rather than silently falling back to an
+anonymous pull.
 
 Even when the shared cache is reusable, the workflows still clone the resolved
 `Danathar/akmods` commit once per run.

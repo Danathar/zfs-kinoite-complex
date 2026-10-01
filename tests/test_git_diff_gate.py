@@ -2387,6 +2387,81 @@ UNREACHABLE_SHAPES: tuple[tuple[str, str, str], ...] = (
             "list. Listed so that an allow row for one is not a new hole nobody noticed."
         ),
     ),
+    (
+        "export in front of an allow-listed command the gate does not cover",
+        "export ",
+        (
+            "the export family arms a later command of the same string, and the gate refuses "
+            "that only when the later command is git or a GATED_PREFIXES entry. The two "
+            "`ruff check` rows are neither, and ruff reads its --output-file from "
+            "RUFF_OUTPUT_FILE, so `export RUFF_OUTPUT_FILE=cosign.pub; ruff check` passes the "
+            "hook and would overwrite the anchor. What stops it is the export half matching no "
+            "allow row, so Claude Code prompts for it -- the claim EXPORT_ENV_MSG and "
+            "docs/SECURITY-AI.md's git row make (#318). An allow row for this builtin makes "
+            "that claim false; gate the ruff rows first."
+        ),
+    ),
+    (
+        "declare in front of an allow-listed command the gate does not cover",
+        "declare ",
+        (
+            "the export family arms a later command of the same string, and the gate refuses "
+            "that only when the later command is git or a GATED_PREFIXES entry. The two "
+            "`ruff check` rows are neither, and ruff reads its --output-file from "
+            "RUFF_OUTPUT_FILE, so `export RUFF_OUTPUT_FILE=cosign.pub; ruff check` passes the "
+            "hook and would overwrite the anchor. What stops it is the export half matching no "
+            "allow row, so Claude Code prompts for it -- the claim EXPORT_ENV_MSG and "
+            "docs/SECURITY-AI.md's git row make (#318). An allow row for this builtin makes "
+            "that claim false; gate the ruff rows first."
+        ),
+    ),
+    (
+        "typeset in front of an allow-listed command the gate does not cover",
+        "typeset ",
+        (
+            "the export family arms a later command of the same string, and the gate refuses "
+            "that only when the later command is git or a GATED_PREFIXES entry. The two "
+            "`ruff check` rows are neither, and ruff reads its --output-file from "
+            "RUFF_OUTPUT_FILE, so `export RUFF_OUTPUT_FILE=cosign.pub; ruff check` passes the "
+            "hook and would overwrite the anchor. What stops it is the export half matching no "
+            "allow row, so Claude Code prompts for it -- the claim EXPORT_ENV_MSG and "
+            "docs/SECURITY-AI.md's git row make (#318). An allow row for this builtin makes "
+            "that claim false; gate the ruff rows first."
+        ),
+    ),
+    (
+        "readonly in front of an allow-listed command the gate does not cover",
+        "readonly ",
+        (
+            "the export family arms a later command of the same string, and the gate refuses "
+            "that only when the later command is git or a GATED_PREFIXES entry. The two "
+            "`ruff check` rows are neither, and ruff reads its --output-file from "
+            "RUFF_OUTPUT_FILE, so `export RUFF_OUTPUT_FILE=cosign.pub; ruff check` passes the "
+            "hook and would overwrite the anchor. What stops it is the export half matching no "
+            "allow row, so Claude Code prompts for it -- the claim EXPORT_ENV_MSG and "
+            "docs/SECURITY-AI.md's git row make (#318). An allow row for this builtin makes "
+            "that claim false; gate the ruff rows first."
+        ),
+    ),
+    (
+        "set -a in front of an allow-listed command the gate does not cover",
+        "set ",
+        (
+            "`set -a` (and `set -o allexport`) turns a plain assignment into an export, so "
+            "`set -a; RUFF_OUTPUT_FILE=cosign.pub; ruff check` is the export row above spelled "
+            "another way and passes the hook for the same reason. It prompts only because "
+            "`set` matches no allow row."
+        ),
+    ),
+    (
+        "env NAME=value in front of an allow-listed command the gate does not cover",
+        "env ",
+        (
+            "`env RUFF_OUTPUT_FILE=cosign.pub ruff check` hands ruff the same environment as "
+            "a leading assignment, and the gate's assignment refusal covers only git and the "
+            "GATED_PREFIXES commands. It prompts only because no allow row matches it."
+        ),
+    ),
 )
 
 

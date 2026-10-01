@@ -595,6 +595,14 @@ class SecurityDocEnforcementTests(unittest.TestCase):
         # understating the boundary.
         self.assertNotEqual(decide("git push origin +main", self.permissions), "deny")
 
+    def test_the_doc_does_not_say_an_export_outlives_a_bash_call(self) -> None:
+        # Each Bash call starts a fresh shell (e1e45a2 checked it with two
+        # calls), and EXPORT_ENV_MSG and tests/test_git_diff_gate.py were
+        # corrected to say so. The doc kept the old claim until #318.
+        text = SECURITY_AI.read_text(encoding="utf-8")
+        self.assertNotIn("keeps an exported variable across Bash calls", text)
+        self.assertIn("each call starts a fresh shell", text)
+
     def test_the_delete_refspec_hole_is_still_a_hole(self) -> None:
         # The same mechanism one line down: a refspec with an empty source side
         # deletes the remote ref, with no option for a prefix rule to match. The

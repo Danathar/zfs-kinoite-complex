@@ -13,7 +13,7 @@
     "ci_tools/pin_akmods_cache.py": 18,
     "ci_tools/prepare_validation_build.py": 25,
     "ci_tools/promote_stable.py": 37,
-    "ci_tools/prune_registry.py": 66,
+    "ci_tools/prune_registry.py": 102,
     "ci_tools/resolve_build_inputs.py": 221,
     "ci_tools/sign_image.py": 36,
     "ci_tools/tagging_context.py": 42,

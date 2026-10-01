@@ -165,25 +165,33 @@ def main() -> None:
     delete = os.environ.get("PRUNE_DELETE", "false") == "true"
     now = datetime.now(timezone.utc)
 
-    failures = 0
+    # Phase 1: list and plan every package before touching any. A listing or
+    # sanity failure on the second package must not leave the first one half
+    # pruned by a run nobody reviewed in full.
+    planned: list[tuple[str, list[Version], Plan]] = []
     for package in packages:
         versions = list_versions(owner, package, token)
-        plan = plan_versions(versions, now)
         if package == DEFAULT_PACKAGES[0] and not any(LATEST_RE.match(t) for v in versions for t in v.tags):
             raise CiToolError(f"{package} has no version tagged latest; refusing to plan against it")
+        planned.append((package, versions, plan_versions(versions, now)))
+
+    for package, versions, plan in planned:
         print(f"== {package}: {len(versions)} versions, keep {len(plan.keep)}, delete {len(plan.delete)}")
         by_id = {v.id: v for v in versions}
         for vid, why in sorted(plan.delete.items(), key=lambda kv: by_id[kv[0]].created):
             v = by_id[vid]
             print(f"  delete {vid} {v.created:%Y-%m-%d} {v.digest[:19]} {','.join(v.tags) or '-'}  ({why})")
-        if not delete:
-            continue
-        for vid in plan.delete:
-            try:
-                _request("DELETE", f"/users/{owner}/packages/container/{package}/versions/{vid}", token)
-            except Exception as exc:  # noqa: BLE001 - report every failure, keep going
-                failures += 1
-                print(f"  FAILED to delete {vid}: {exc}", file=sys.stderr)
+
+    # Phase 2: delete, only when asked, only the planned IDs.
+    failures = 0
+    if delete:
+        for package, _versions, plan in planned:
+            for vid in plan.delete:
+                try:
+                    _request("DELETE", f"/users/{owner}/packages/container/{package}/versions/{vid}", token)
+                except Exception as exc:  # noqa: BLE001 - report every failure, keep going
+                    failures += 1
+                    print(f"  FAILED to delete {vid}: {exc}", file=sys.stderr)
     print("mode: " + ("delete" if delete else "dry run (nothing deleted)"))
     if failures:
         raise CiToolError(f"{failures} deletion(s) failed")

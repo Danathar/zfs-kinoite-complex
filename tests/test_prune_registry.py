@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+import io
+import os
 import unittest
+from contextlib import redirect_stdout
 from datetime import datetime, timedelta, timezone
+from unittest import mock
 
+from ci_tools import prune_registry
+from ci_tools.common import CiToolError
 from ci_tools.prune_registry import KEEP_STABLE, Version, plan_versions
 
 NOW = datetime(2026, 10, 1, tzinfo=timezone.utc)
@@ -79,6 +85,86 @@ class Signatures(unittest.TestCase):
         kept = v(1, "stable-1-abc")
         plan = plan_versions([kept, sig_for(2, kept, age_days=500)], NOW)
         self.assertIn(2, plan.keep)
+
+
+
+def api_item(vid: int, *tags: str, age_days: float = 30) -> dict:
+    created = (datetime.now(timezone.utc) - timedelta(days=age_days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return {"id": vid, "name": f"sha256:{vid:064x}", "created_at": created, "metadata": {"container": {"tags": list(tags)}}}
+
+
+class FakeApi:
+    """Stands in for _request: serves canned version pages and records every call."""
+
+    def __init__(self, pages: dict[str, list[list[dict]]], fail_list: str | None = None) -> None:
+        self.pages = pages
+        self.fail_list = fail_list
+        self.calls: list[tuple[str, str]] = []
+
+    def __call__(self, method: str, path: str, token: str):
+        self.calls.append((method, path))
+        if method == "DELETE":
+            return None, ""
+        package = path.split("/container/", 1)[1].split("/", 1)[0]
+        if package == self.fail_list:
+            raise OSError("listing failed")
+        page = int(path.rsplit("page=", 1)[1])
+        pages = self.pages[package]
+        link = '<next>; rel="next"' if page < len(pages) else ""
+        return pages[page - 1], link
+
+    def deletes(self) -> list[str]:
+        return [path for method, path in self.calls if method == "DELETE"]
+
+
+IMAGE = "zfs-kinoite-complex"
+AKMODS = "zfs-kinoite-complex-akmods"
+
+
+def run_main(api: FakeApi, delete: bool) -> str:
+    env = {"GITHUB_TOKEN": "t", "PACKAGE_OWNER": "o", "PRUNE_DELETE": "true" if delete else "false", "PACKAGES": f"{IMAGE} {AKMODS}"}
+    out = io.StringIO()
+    with mock.patch.dict(os.environ, env, clear=False), mock.patch.object(prune_registry, "_request", api), redirect_stdout(out):
+        prune_registry.main()
+    return out.getvalue()
+
+
+class Main(unittest.TestCase):
+    def pages(self) -> dict[str, list[list[dict]]]:
+        # Two pages for the image, so pagination is exercised too.
+        return {
+            IMAGE: [[api_item(1, "latest"), api_item(2, "br-old")], [api_item(3, "candidate-abc123-44")]],
+            AKMODS: [[api_item(10, "main-44")]],
+        }
+
+    def test_a_dry_run_lists_both_packages_and_deletes_nothing(self) -> None:
+        api = FakeApi(self.pages())
+        output = run_main(api, delete=False)
+        self.assertEqual(api.deletes(), [])
+        self.assertIn("delete 2", output)
+        self.assertIn("delete 3", output)
+        self.assertIn("mode: dry run (nothing deleted)", output)
+
+    def test_a_delete_run_removes_exactly_the_planned_versions(self) -> None:
+        api = FakeApi(self.pages())
+        run_main(api, delete=True)
+        self.assertEqual(
+            sorted(api.deletes()),
+            [f"/users/o/packages/container/{IMAGE}/versions/2", f"/users/o/packages/container/{IMAGE}/versions/3"],
+        )
+
+    def test_every_package_is_planned_before_anything_is_deleted(self) -> None:
+        api = FakeApi(self.pages(), fail_list=AKMODS)
+        with self.assertRaises(OSError):
+            run_main(api, delete=True)
+        self.assertEqual(api.deletes(), [], "a failure listing the second package must leave the first untouched")
+
+    def test_no_latest_in_the_image_package_refuses_before_deleting(self) -> None:
+        pages = {IMAGE: [[api_item(2, "br-old")]], AKMODS: [[]]}
+        api = FakeApi(pages)
+        with self.assertRaises(CiToolError):
+            run_main(api, delete=True)
+        self.assertEqual(api.deletes(), [])
 
 
 if __name__ == "__main__":

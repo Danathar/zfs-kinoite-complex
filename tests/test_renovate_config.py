@@ -75,11 +75,10 @@ RUFF_PIN_FILES = {
 RUFF_LIVE_PIN_FILES = RUFF_PIN_FILES - {".claude/memory/corrections.md"}
 
 # Files that write the privileged build container's digest by hand. Renovate's
-# built-in github-actions manager owns the two workflow copies; the custom
-# manager in renovate.json owns the ci/defaults.json copy.
+# built-in github-actions manager owns the workflow copy; the custom manager in
+# renovate.json owns the ci/defaults.json copy.
 DEVCONTAINER_DIGEST_FILES = {
     ".github/workflows/build.yml",
-    ".github/workflows/build-branch.yml",
     "ci/defaults.json",
 }
 

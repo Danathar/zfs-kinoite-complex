@@ -211,15 +211,16 @@ That check now does one direct inspection path:
    `cosign_verify` call)
 
 The signature check exists because this cache is a real supply-chain input,
-not just build-time infrastructure: branch workflows also hold `packages:
-write` and can rebuild and republish this same shared tag, so a matching
-filename alone does not prove who produced the content being reused. A cache
-that matches the kernel and ZFS version but fails signature verification is
+not just build-time infrastructure: `main`'s workflow holds `packages: write`
+and can rebuild and republish this same shared tag, so a matching filename
+alone does not prove who produced the content being reused. A cache that
+matches the kernel and ZFS version but fails signature verification is
 treated the same as a cache miss. Only `main` runs may rebuild and republish
-this cache: branch runs pass `allow_cache_rebuild: "false"` and fail with an
-explanation instead, because the signing key lives in a `main`-restricted
-environment they cannot reach, so anything they published would be unsigned
-and rejected by every later consumer anyway. When a `main` run does rebuild,
+this cache: branch runs use the same read-only `prepare-validation-build`
+step as pull requests, which has no rebuild path at all, holds only
+`packages: read`, and fails with an explanation instead. The signing key lives
+in a `main`-restricted environment branch runs cannot reach, so anything they
+published would be unsigned and rejected by every later consumer anyway. When a `main` run does rebuild,
 a dedicated `sign-akmods-cache` job (in `build.yml`, running in the
 `production-signing` environment) signs the freshly published digest, reusing
 `ci_tools/sign_image.py` unchanged.
@@ -648,9 +649,10 @@ model and the cosign v3 compatibility flags.
 One unavoidable exception exists:
 
 - GitHub resolves `jobs.<job>.container.image` before any step can run
-- because of that, the akmods jobs in both `build.yml` and `build-branch.yml`
-  still carry one literal fallback build-container ref next to the checked-in
-  defaults file
-- both workflows accept a `workflow_dispatch` input to override this fallback
-  when the default image breaks
+- because of that, the akmods job in `build.yml` still carries one literal
+  fallback build-container ref next to the checked-in defaults file (branch
+  runs no longer use that container; they verify the cache read-only)
+- there is deliberately no `workflow_dispatch` override for it: a free-text
+  image for a privileged job cannot be made safe, so changing the build
+  container is a reviewed edit to `ci/defaults.json` plus that literal
 - every later step reads the checked-in defaults instead of repeating them

@@ -54,7 +54,7 @@ applies as-is. What each rule does:
   and no `if:`. `Build PR Image (No Push)` in `build-pr.yml` is not required,
   because `build-pr.yml` ignores Markdown and `docs/**`, so a docs-only pull
   request never gets it and would wait forever. The `build-branch.yml` jobs
-  (`Compute Branch Tag`, `Build Or Reuse Shared ZFS Akmods Cache`,
+  (`Compute Branch Tag`, `Verify Shared ZFS Akmods Cache`,
   `Build Branch Image`) run on branch pushes, not on pull requests, and skip
   `ai-fix/**` branches. `Apply area labels` classifies a change rather than
   checking it. `integration_id` 15368 is GitHub Actions, so a status with the

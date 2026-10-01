@@ -797,8 +797,14 @@ class OperationalModelTests(unittest.TestCase):
         )
 
     def test_branch_runs_never_rebuild_the_shared_cache(self) -> None:
-        self.assertIn("branch runs pass `allow_cache_rebuild: \"false\"`", doc())
-        self.assertIn('allow_cache_rebuild: "false"', read(".github/workflows/build-branch.yml"))
+        self.assertIn(
+            "branch runs use the same read-only `prepare-validation-build`\nstep as pull requests",
+            doc(),
+        )
+        branch = read(".github/workflows/build-branch.yml")
+        self.assertIn("python3 -m ci_tools.cli prepare-validation-build", branch)
+        self.assertNotIn("allow_cache_rebuild", branch)
+        self.assertNotIn("prepare-main-akmods", branch)
         self.assertNotIn(
             'allow_cache_rebuild: "false"',
             read(".github/workflows/build.yml"),
@@ -830,17 +836,17 @@ class OperationalModelTests(unittest.TestCase):
     def test_the_documented_container_image_exception_is_still_one_literal(self) -> None:
         """
         The overview's closing exception: `jobs.<job>.container.image` cannot
-        read the defaults file, so both akmods jobs carry one literal fallback.
+        read the defaults file, so the main akmods job carries one literal fallback.
         """
-        self.assertIn("still carry one literal fallback build-container ref", doc())
+        self.assertIn("still carries one literal\n  fallback build-container ref", doc())
         configured = defaults()["DEFAULT_BUILD_CONTAINER_IMAGE"]
         base = configured.split("@")[0]
-        for name in ("build.yml", "build-branch.yml"):
-            with self.subTest(workflow=name):
-                workflow = read(f".github/workflows/{name}")
-                literals = re.findall(rf"^\s+image: .*{re.escape(base)}.*$", workflow, re.MULTILINE)
-                self.assertEqual(len(literals), 1, literals)
-                self.assertIn("workflow_dispatch", workflow)
+        workflow = read(".github/workflows/build.yml")
+        literals = re.findall(rf"^\s+image: .*{re.escape(base)}.*$", workflow, re.MULTILINE)
+        self.assertEqual(len(literals), 1, literals)
+        # Branch runs verify the cache read-only and run no build container at all.
+        branch = read(".github/workflows/build-branch.yml")
+        self.assertEqual(re.findall(rf"^\s+image: .*{re.escape(base)}.*$", branch, re.MULTILINE), [])
 
 
 if __name__ == "__main__":

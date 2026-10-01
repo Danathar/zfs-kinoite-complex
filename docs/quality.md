@@ -210,7 +210,7 @@ Three things worth knowing before you conclude anything:
 
    | Message | Where it surfaces | What actually happened |
    | --- | --- | --- |
-   | `happened during read: unexpected EOF` | pulling the base image, in `Build Candidate Image` or `Build Shared ZFS Akmods Cache` | A quay.io CDN blob transfer died mid-download. |
+   | `happened during read: unexpected EOF` | pulling the base image, in `Build Candidate Image`, `Build Shared ZFS Akmods Cache` or `Verify Shared ZFS Akmods Cache` | A quay.io CDN blob transfer died mid-download. |
    | `writing blob: … received unexpected HTTP status: 500` | pushing, in `Build Branch Image` | ghcr.io returned a server error on a layer upload. |
    | `Error: trusted root is required when using new bundle format`, preceded by `failed to download https://tuf-repo-cdn.sigstore.dev/…root.json, http status code: 403` | the `Install skopeo and cosign` step, before any of this repo's own code runs | Sigstore's TUF CDN was unavailable, so the installer could not verify the `cosign` binary it downloads. |
 

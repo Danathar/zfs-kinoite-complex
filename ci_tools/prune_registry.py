@@ -23,8 +23,16 @@ from datetime import datetime, timedelta, timezone
 from ci_tools.common import CiToolError
 
 API = "https://api.github.com"
-DEFAULT_PACKAGES = ("zfs-kinoite-complex", "zfs-kinoite-complex-akmods")
-KEEP_STABLE = 10
+REGISTRY = "https://ghcr.io"
+IMAGE_PACKAGE = "zfs-kinoite-complex"
+AKMODS_PACKAGE = "zfs-kinoite-complex-akmods"
+DEFAULT_PACKAGES = (IMAGE_PACKAGE, AKMODS_PACKAGE)
+# Packages whose untagged versions may be pruned. Rebuilding the akmods cache
+# moves its mutable `main-<fedora>` tags to the new build and leaves the old one
+# untagged, so without this its history grows forever. The image package keeps
+# untagged versions: they can be pieces of a multi-arch image.
+PRUNE_UNTAGGED = frozenset({AKMODS_PACKAGE})
+KEEP_STABLE = 20
 MIN_AGE = timedelta(days=14)
 
 # Tag families. A version is deleted only when every one of its tags is in a
@@ -57,9 +65,17 @@ class Plan:
     delete: dict[int, str] = field(default_factory=dict)
 
 
-def plan_versions(versions: list[Version], now: datetime) -> Plan:
+def plan_versions(
+    versions: list[Version],
+    now: datetime,
+    prune_untagged: bool = False,
+    referenced: frozenset[str] = frozenset(),
+) -> Plan:
     """
     Decide each version's fate. Pure: no network, so the rule is testable.
+
+    `prune_untagged` lets an old untagged version go, but never one whose
+    digest is in `referenced` (a child some tagged index still points at).
 
     Order matters: images first, then signatures, because a signature is kept
     exactly when the image it signs is kept.
@@ -82,7 +98,14 @@ def plan_versions(versions: list[Version], now: datetime) -> Plan:
             signatures.append(v)
             continue
         if not v.tags:
-            plan.keep[v.id] = "untagged (may belong to a multi-arch image)"
+            if not prune_untagged:
+                plan.keep[v.id] = "untagged (may belong to a multi-arch image)"
+            elif v.digest in referenced:
+                plan.keep[v.id] = "untagged, but a tagged index points at it"
+            elif now - v.created < MIN_AGE:
+                plan.keep[v.id] = f"untagged, younger than {MIN_AGE.days} days"
+            else:
+                plan.delete[v.id] = "untagged: a rebuild moved its tag to a newer version"
         elif any(LATEST_RE.match(t) for t in image_tags):
             plan.keep[v.id] = "tagged latest"
         elif v.id in newest_stable:
@@ -154,6 +177,47 @@ def list_versions(owner: str, package: str, token: str) -> list[Version]:
         page += 1
 
 
+INDEX_ACCEPT = (
+    "application/vnd.oci.image.index.v1+json, "
+    "application/vnd.docker.distribution.manifest.list.v2+json, "
+    "application/vnd.oci.image.manifest.v1+json, "
+    "application/vnd.docker.distribution.manifest.v2+json"
+)
+
+
+def _registry_get(url: str, accept: str = "", bearer: str = "") -> object:
+    headers = {"Accept": accept} if accept else {}
+    if bearer:
+        headers["Authorization"] = f"Bearer {bearer}"
+    with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=30) as resp:
+        return json.loads(resp.read())
+
+
+def referenced_children(owner: str, package: str, versions: list[Version]) -> frozenset[str]:
+    """
+    Digests any version's index points at, tagged or not. An untagged version
+    in this set may be the platform manifest of an index the plan keeps (a
+    young untagged index, say), so it is never pruned in this run. Once the
+    index pointing at it is gone, a later run can prune it.
+
+    Reads the public registry anonymously. Any failure raises: if the
+    references can't be read, the run stops rather than guess.
+    """
+
+    repo = f"{owner.lower()}/{package}"
+    token = _registry_get(f"{REGISTRY}/token?scope=repository:{repo}:pull")
+    assert isinstance(token, dict)
+    bearer = str(token["token"])
+    children: set[str] = set()
+    for v in versions:
+        if v.tags and all(SIG_RE.match(t) for t in v.tags):
+            continue
+        manifest = _registry_get(f"{REGISTRY}/v2/{repo}/manifests/{v.digest}", INDEX_ACCEPT, bearer)
+        assert isinstance(manifest, dict)
+        children.update(str(m["digest"]) for m in manifest.get("manifests", []))
+    return frozenset(children)
+
+
 def main() -> None:
     """List, plan and (only with PRUNE_DELETE=true) delete. Dry run otherwise."""
 
@@ -165,25 +229,37 @@ def main() -> None:
     delete = os.environ.get("PRUNE_DELETE", "false") == "true"
     now = datetime.now(timezone.utc)
 
-    failures = 0
+    # Phase 1: list and plan every package before touching any. A listing or
+    # sanity failure on the second package must not leave the first one half
+    # pruned by a run nobody reviewed in full.
+    planned: list[tuple[str, list[Version], Plan]] = []
     for package in packages:
         versions = list_versions(owner, package, token)
-        plan = plan_versions(versions, now)
         if package == DEFAULT_PACKAGES[0] and not any(LATEST_RE.match(t) for v in versions for t in v.tags):
             raise CiToolError(f"{package} has no version tagged latest; refusing to plan against it")
+        if package in PRUNE_UNTAGGED:
+            plan = plan_versions(versions, now, True, referenced_children(owner, package, versions))
+        else:
+            plan = plan_versions(versions, now)
+        planned.append((package, versions, plan))
+
+    for package, versions, plan in planned:
         print(f"== {package}: {len(versions)} versions, keep {len(plan.keep)}, delete {len(plan.delete)}")
         by_id = {v.id: v for v in versions}
         for vid, why in sorted(plan.delete.items(), key=lambda kv: by_id[kv[0]].created):
             v = by_id[vid]
             print(f"  delete {vid} {v.created:%Y-%m-%d} {v.digest[:19]} {','.join(v.tags) or '-'}  ({why})")
-        if not delete:
-            continue
-        for vid in plan.delete:
-            try:
-                _request("DELETE", f"/users/{owner}/packages/container/{package}/versions/{vid}", token)
-            except Exception as exc:  # noqa: BLE001 - report every failure, keep going
-                failures += 1
-                print(f"  FAILED to delete {vid}: {exc}", file=sys.stderr)
+
+    # Phase 2: delete, only when asked, only the planned IDs.
+    failures = 0
+    if delete:
+        for package, _versions, plan in planned:
+            for vid in plan.delete:
+                try:
+                    _request("DELETE", f"/users/{owner}/packages/container/{package}/versions/{vid}", token)
+                except Exception as exc:  # noqa: BLE001 - report every failure, keep going
+                    failures += 1
+                    print(f"  FAILED to delete {vid}: {exc}", file=sys.stderr)
     print("mode: " + ("delete" if delete else "dry run (nothing deleted)"))
     if failures:
         raise CiToolError(f"{failures} deletion(s) failed")

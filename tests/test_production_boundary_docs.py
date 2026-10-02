@@ -422,10 +422,18 @@ class QuotedDocumentTests(unittest.TestCase):
         self.assertIn(quote, self.section)
         self.assertIn(quote, _normalized(BOUNDARY_PROPOSAL.read_text(encoding="utf-8")))
 
-    def test_the_testing_document_still_states_the_boundary_as_fact(self) -> None:
+    def test_the_testing_document_no_longer_states_the_boundary_as_fact(self) -> None:
+        # The finding records that zfs-kinoite-testing.md once asserted the restriction.
+        # Now that it links here instead, pin both halves so the claim cannot creep back.
         quote = f"inside the `{SIGNING_ENVIRONMENT}` environment that only `main` refs can reach"
         self.assertIn(quote, self.section)
-        self.assertIn(quote, _normalized(TESTING_DOC.read_text(encoding="utf-8")))
+        self.assertIn("It no longer does", self.section)
+        testing = _normalized(TESTING_DOC.read_text(encoding="utf-8"))
+        self.assertNotIn("only `main` refs can reach", testing)
+        self.assertIn(
+            "maintenance-watchlist.md#open-the-production-signing-environment-is-not-branch-restricted",
+            testing,
+        )
 
     def test_the_test_the_finding_credits_still_pins_what_it_says(self) -> None:
         self.assertIn("tests/test_workflow_build_container.py", self.section)

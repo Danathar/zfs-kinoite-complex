@@ -49,9 +49,10 @@ prevent untrusted branch runs from reaching the production signing key.
 "environment rules restricting the signing jobs to `main`" as a **required
 setting**, and its verification checklist says `production-signing` must be
 "unavailable to branch and pull-request runs".
-[`zfs-kinoite-testing.md`](./zfs-kinoite-testing.md) goes further and states as
-fact that signing happens "inside the `production-signing` environment that only
-`main` refs can reach".
+[`zfs-kinoite-testing.md`](./zfs-kinoite-testing.md) used to go further and
+state as fact that signing happens "inside the `production-signing` environment
+that only `main` refs can reach". It no longer does: its signing section now
+links here instead.
 
 As checked on 2026-09-04 that restriction is not configured:
 
@@ -91,7 +92,8 @@ This cannot be checked from CI without an admin-scoped token, which is why it
 belongs here rather than in a test. Three ways to close it: configure the
 environment's branch policy, add a `github.ref` guard to the signing and
 promotion jobs in `build.yml` so the workflow enforces it itself, or correct the
-two documents that assert the boundary is already in place. Leaving it as it
+two documents that assert the boundary is already in place (done for
+`zfs-kinoite-testing.md` on 2026-10-02). Leaving it as it
 stands is the one option that should not, because a documented boundary nobody
 enforces is worse than an acknowledged gap.
 

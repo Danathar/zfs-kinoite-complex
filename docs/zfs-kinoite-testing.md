@@ -160,15 +160,17 @@ without requiring a manual `modprobe zfs`.
 ### 5. Sign Published Tags
 
 Candidate tags are signed after push by resolving the pushed tag to a digest and
-then signing that digest, inside the `production-signing` environment that only
-`main` refs can reach.
+then signing that digest, inside the `production-signing` environment (see
+[`maintenance-watchlist.md`](./maintenance-watchlist.md#open-the-production-signing-environment-is-not-branch-restricted)
+for the environment's current, unrestricted branch policy).
 
 Stable `latest` is promoted by copying the already-signed candidate digest, not
 by signing a second time.
 
 Branch note:
 
-- branch runs cannot sign: the key is environment-scoped to `main`
+- branch runs are not *intended* to sign, but the environment itself does not
+  currently enforce that — see the watchlist entry linked above
 - human-authored branch runs push an UNSIGNED `br-*` test image via an explicit
   `allow_unsigned` opt-in -- usable only on fresh, never-enforced throwaway VMs,
   since enforced machines refuse unsigned tags under this repository's policy

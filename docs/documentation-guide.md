@@ -32,6 +32,7 @@ docs/
   architecture-overview.md    <- high-level design and flow
   signing-and-bootc.md        <- image signing, bootc policy, and cosign compatibility
   upstream-change-response.md <- incident triage and recovery actions
+  ai-ops-runbook.md           <- what each automated signal and agent output means, the first thing to do, and where the detail is
   zfs-kinoite-testing.md       <- deep technical design + issue history
   akmods-fork-maintenance.md  <- how akmods source refs are selected and pinned
   maintenance-watchlist.md    <- pins and decisions on a clock that no automation watches
@@ -121,6 +122,12 @@ verify is worse than no entry.
 1. [`docs/upstream-change-response.md`](./upstream-change-response.md)
 2. [`docs/signing-and-bootc.md`](./signing-and-bootc.md)
 3. [`docs/zfs-kinoite-testing.md`](./zfs-kinoite-testing.md)
+
+### Goal: An automated signal or an agent's output looks wrong
+
+1. [`docs/ai-ops-runbook.md`](./ai-ops-runbook.md)
+2. [`docs/SECURITY-AI.md`](./SECURITY-AI.md)
+3. [`docs/quality.md`](./quality.md)
 
 ### Goal: I need to update the akmods source pin
 

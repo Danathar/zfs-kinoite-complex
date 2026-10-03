@@ -5,6 +5,10 @@ OpenZFS, the `Danathar/akmods` fork, the build container, and the GitHub
 Actions runner/toolchain. A red build is expected to stop promotion while the
 last known-good image remains available.
 
+For any other signal -- an agent's pull request, a sticky issue, a skipped
+workflow -- start at [`ai-ops-runbook.md`](./ai-ops-runbook.md), which points
+back here for build and upstream incidents.
+
 ## First triage
 
 Identify the failed job and exact step before changing repository code:

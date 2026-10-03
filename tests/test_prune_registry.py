@@ -4,14 +4,24 @@ from __future__ import annotations
 
 import io
 import os
+import re
 import unittest
 from contextlib import redirect_stdout
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from unittest import mock
 
-from ci_tools import prune_registry
+from ci_tools import promote_stable, prune_registry
 from ci_tools.common import CiToolError
 from ci_tools.prune_registry import KEEP_STABLE, Version, plan_versions
+from ci_tools.tagging_context import (
+    build_branch_image_tag,
+    build_branch_metadata,
+    build_candidate_tag,
+)
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+PUBLISH_ACTION = REPO_ROOT / ".github" / "actions" / "publish-native-image" / "action.yml"
 
 NOW = datetime(2026, 10, 1, tzinfo=timezone.utc)
 OLD = NOW - timedelta(days=30)
@@ -65,6 +75,142 @@ class RetentionRule(unittest.TestCase):
         plan = plan_versions([v(1)], NOW)
         self.assertIn(1, plan.keep)
 
+
+
+class ProducerTagContract(unittest.TestCase):
+    """
+    The tags the pipeline writes are the tags the retention rule recognises.
+
+    prune_registry.py spells the tag grammar as regexes, but the tags come from
+    elsewhere: tagging_context.py (candidate and branch tags), promote_stable.py
+    (the `stable-<run>-<sha>` audit tag and `latest`) and the
+    publish-native-image action (`<tag>-unsigned-<run_id>`). The tests above use
+    hand-written literals, so a producer can change its format and every one of
+    them still passes. Drift fails towards "keep" -- an unrecognised tag keeps
+    its version -- so nothing breaks; the registry just grows again, which is
+    #308, and only a person reading a dry run's plan would notice. These build
+    each tag with the code that really writes it.
+    """
+
+    SHA = "4f4264cdeadbeefcafef00d4f4264cdeadbeefca"
+    RUN_ID = "33270846007"
+    BRANCHES = ("main", "feature/ZFS 2.4", "--", "x" * 300)
+
+    def candidate_tag(self) -> str:
+        return build_candidate_tag(github_sha=self.SHA, fedora_version="44")
+
+    def branch_tags(self) -> list[str]:
+        return [
+            build_branch_image_tag(
+                branch_tag_prefix=build_branch_metadata(name), fedora_version="44"
+            )
+            for name in self.BRANCHES
+        ]
+
+    def promoted_tags(self) -> list[str]:
+        """The destination tags promote_stable.main() copies to, in order."""
+
+        env = {
+            "GITHUB_REPOSITORY_OWNER": "Danathar",
+            "REGISTRY_ACTOR": "actor",
+            "REGISTRY_TOKEN": "token",
+            "FEDORA_VERSION": "44",
+            "IMAGE_NAME": "zfs-kinoite-complex",
+            "GITHUB_RUN_NUMBER": "1234",
+            "GITHUB_SHA": self.SHA,
+        }
+        with (
+            mock.patch.dict(os.environ, env, clear=True),
+            mock.patch.object(promote_stable, "skopeo_inspect_digest", return_value="sha256:abc"),
+            mock.patch.object(promote_stable, "skopeo_copy") as skopeo_copy,
+            mock.patch.object(promote_stable, "run_cmd"),
+            redirect_stdout(io.StringIO()),
+        ):
+            promote_stable.main()
+        return [call.args[1].rsplit(":", 1)[1] for call in skopeo_copy.call_args_list]
+
+    def transient_tags(self, image_tag: str) -> list[str]:
+        """Every `-unsigned-` tag the publish action spells, for one input tag."""
+
+        templates = re.findall(
+            r"^\s+\w+: (\$\{\{ inputs\.image_tag \}\}-unsigned-.*)$",
+            PUBLISH_ACTION.read_text(),
+            re.MULTILINE,
+        )
+        self.assertTrue(templates, "publish-native-image no longer spells a -unsigned- tag")
+        return [
+            t.replace("${{ inputs.image_tag }}", image_tag).replace(
+                "${{ github.run_id }}", self.RUN_ID
+            )
+            for t in templates
+        ]
+
+    def assert_deleted_when_old(self, tag: str) -> None:
+        plan = plan_versions([v(1, "latest"), v(2, tag)], NOW)
+        self.assertIn(
+            2, plan.delete, f"{tag!r} is not a tag the retention rule deletes: {plan.keep.get(2)}"
+        )
+
+    def test_publish_is_only_ever_given_a_candidate_or_branch_tag(self) -> None:
+        # The two producers below are the whole input to the publish action;
+        # a third would be a tag family nothing here builds.
+        workflows = REPO_ROOT / ".github" / "workflows"
+        passed: set[str] = set()
+        for workflow in sorted(workflows.glob("*.yml")):
+            lines = workflow.read_text().splitlines()
+            for i, line in enumerate(lines):
+                if line.strip() != "uses: ./.github/actions/publish-native-image":
+                    continue
+                for following in lines[i + 1 : i + 20]:
+                    if following.strip().startswith("image_tag:"):
+                        passed.add(following.split(":", 1)[1].strip())
+                        break
+                else:
+                    self.fail(f"{workflow.name}: a publish-native-image call with no image_tag")
+        self.assertEqual(
+            passed,
+            {
+                "${{ steps.tags.outputs.candidate_tag }}",
+                "${{ steps.tags.outputs.branch_image_tag }}",
+            },
+        )
+
+    def test_an_old_candidate_tag_is_deleted(self) -> None:
+        self.assert_deleted_when_old(self.candidate_tag())
+
+    def test_an_old_branch_tag_is_deleted_for_any_branch_name(self) -> None:
+        for tag in self.branch_tags():
+            with self.subTest(tag=tag):
+                self.assert_deleted_when_old(tag)
+
+    def test_an_old_transient_tag_is_deleted_for_every_published_tag(self) -> None:
+        for image_tag in [self.candidate_tag(), *self.branch_tags()]:
+            for tag in self.transient_tags(image_tag):
+                with self.subTest(tag=tag):
+                    self.assert_deleted_when_old(tag)
+
+    def test_promotion_writes_latest_and_a_stable_rollback_tag(self) -> None:
+        audit, stable = self.promoted_tags()
+        self.assertEqual(stable, "latest")
+        self.assertTrue(prune_registry.LATEST_RE.match(stable))
+        self.assertTrue(
+            prune_registry.STABLE_RE.match(audit), f"{audit!r} is not a stable-* tag to the rule"
+        )
+
+    def test_a_promoted_version_is_a_counted_rollback_target(self) -> None:
+        # A promoted version carries its candidate tag and its audit tag. It
+        # must count toward the newest KEEP_STABLE, and go once it falls out
+        # of them -- kept as "unrecognised" would be the #308 growth again.
+        audit, _ = self.promoted_tags()
+        promoted = v(99, audit, self.candidate_tag(), age_days=20)
+        older = [v(i, f"stable-{i}-abc{i:04x}", age_days=20 + i) for i in range(1, KEEP_STABLE)]
+        plan = plan_versions([v(0, "latest"), promoted, *older], NOW)
+        self.assertEqual(plan.keep[99], f"one of the newest {KEEP_STABLE} stable-* tags")
+
+        promoted = v(99, audit, self.candidate_tag(), age_days=200)
+        newer = [v(i, f"stable-{i}-abc{i:04x}", age_days=20 + i) for i in range(1, KEEP_STABLE + 1)]
+        plan = plan_versions([v(0, "latest"), promoted, *newer], NOW)
+        self.assertIn(99, plan.delete)
 
 class Signatures(unittest.TestCase):
     def test_a_signature_follows_its_image(self) -> None:

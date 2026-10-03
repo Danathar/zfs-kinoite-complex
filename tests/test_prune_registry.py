@@ -310,6 +310,39 @@ class MainEdges(unittest.TestCase):
             run_main(api, delete=True)
         self.assertNotIn(f"/users/o/packages/container/{IMAGE}/versions/5", api.deletes())
 
+    def test_a_signature_goes_after_its_image_in_the_same_run(self) -> None:
+        # The signature is listed before its image, so a run that deletes in
+        # listing order would reach it while the image is still published.
+        sig = f"sha256-{2:064x}.sig"
+        pages = {IMAGE: [[api_item(1, "latest"), api_item(5, sig), api_item(2, "br-old")]], AKMODS: [[]]}
+        api = FakeApi(pages)
+        output = run_main(api, delete=True)
+        self.assertEqual(
+            api.deletes(),
+            [f"/users/o/packages/container/{IMAGE}/versions/2", f"/users/o/packages/container/{IMAGE}/versions/5"],
+        )
+        self.assertNotIn("kept signature", output)
+
+    def test_an_old_orphan_signature_is_deleted(self) -> None:
+        # Its image is already gone from the package, so nothing is left for
+        # it to sign. Keeping it would keep it forever.
+        sig = f"sha256-{99:064x}.sig"
+        pages = {IMAGE: [[api_item(1, "latest"), api_item(5, sig)]], AKMODS: [[]]}
+        api = FakeApi(pages)
+        run_main(api, delete=True)
+        self.assertEqual(api.deletes(), [f"/users/o/packages/container/{IMAGE}/versions/5"])
+
+    def test_a_version_with_an_image_tag_is_not_a_signature_in_the_delete_loop(self) -> None:
+        # plan_versions() calls a version a signature only when every tag is a
+        # .sig tag; one throwaway image tag makes it an image. The delete loop
+        # must agree, or it keeps this version as "the signature" of latest.
+        sig = f"sha256-{1:064x}.sig"
+        pages = {IMAGE: [[api_item(1, "latest"), api_item(6, "br-old", sig)]], AKMODS: [[]]}
+        api = FakeApi(pages)
+        output = run_main(api, delete=True)
+        self.assertEqual(api.deletes(), [f"/users/o/packages/container/{IMAGE}/versions/6"])
+        self.assertNotIn("kept signature", output)
+
 
 def run_main_owner(api: FakeApi, registry: FakeRegistry) -> str:
     env = {"GITHUB_TOKEN": "t", "PRUNE_DELETE": "false", "PACKAGES": f"{IMAGE} {AKMODS}"}

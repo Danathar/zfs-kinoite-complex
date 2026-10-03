@@ -103,6 +103,30 @@ class UntaggedPruning(unittest.TestCase):
         self.assertIn(2, plan.keep)
         self.assertIn(1, plan.keep)  # an unknown tag keeps the index itself
 
+    def test_old_kernel_specific_cache_tags_are_deleted(self) -> None:
+        index = v(1, "main-44-7.1.8-200.fc44")
+        child = v(2, "main-44-7.1.8-200.fc44.x86_64")
+        plan = plan_versions([index, child, sig_for(3, index)], NOW, prune_untagged=True)
+        self.assertEqual(set(plan.delete), {1, 2, 3})
+
+    def test_the_moving_cache_tags_keep_the_current_kernel_build(self) -> None:
+        # The current build also carries main-<fedora> and main-<fedora>-<arch>;
+        # the kernel pattern must match neither.
+        index = v(1, "main-44-7.2.8-200.fc44", "main-44")
+        child = v(2, "main-44-7.2.8-200.fc44.x86_64", "main-44-x86_64")
+        plan = plan_versions([index, child], NOW, True, frozenset({child.digest}))
+        self.assertEqual(set(plan.keep), {1, 2})
+        self.assertEqual(plan.delete, {})
+
+    def test_a_deletable_tagged_child_of_an_index_waits_for_the_index(self) -> None:
+        child = v(2, "main-44-7.1.8-200.fc44.x86_64")
+        plan = plan_versions([v(1, "main-44"), child], NOW, True, frozenset({child.digest}))
+        self.assertIn(2, plan.keep)
+
+    def test_a_young_kernel_specific_cache_build_is_kept(self) -> None:
+        plan = plan_versions([v(1, "main-44-7.2.8-200.fc44", age_days=3)], NOW, prune_untagged=True)
+        self.assertIn(1, plan.keep)
+
     def test_a_pruned_untagged_versions_signature_goes_with_it(self) -> None:
         old = v(1)
         plan = plan_versions([old, sig_for(2, old)], NOW, prune_untagged=True)

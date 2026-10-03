@@ -43,6 +43,12 @@ DELETABLE_RES = (
     re.compile(r"^candidate-[0-9a-f]+-\d+$"),  # per-commit candidates
     re.compile(r"^.+-unsigned-\d+$"),  # publish-native-image's pre-sign tag
     re.compile(r"^br-.+$"),  # unsigned throwaway branch images
+    # The akmods cache's per-kernel tags, `main-<fedora>-<kernel>` on the index
+    # and `.<arch>` on its child. Nothing reads them, and the build that still
+    # matters also carries `main-<fedora>`/`main-<fedora>-<arch>`, which stay
+    # unrecognised and so keep it. The arch tag starts with a letter, so this
+    # never matches `main-<fedora>-<arch>`.
+    re.compile(r"^main-\d+-\d+\.\d+[0-9A-Za-z._+~-]*$"),
 )
 SIG_RE = re.compile(r"^sha256-(?P<hex>[0-9a-f]{64})\.sig$")
 
@@ -74,8 +80,9 @@ def plan_versions(
     """
     Decide each version's fate. Pure: no network, so the rule is testable.
 
-    `prune_untagged` lets an old untagged version go, but never one whose
-    digest is in `referenced` (a child some tagged index still points at).
+    `prune_untagged` lets an old untagged version go. No version whose digest
+    is in `referenced` (a child some index points at) is deleted, tagged or
+    not: once the index is gone, a later run can take the child.
 
     Order matters: images first, then signatures, because a signature is kept
     exactly when the image it signs is kept.
@@ -112,10 +119,12 @@ def plan_versions(
             plan.keep[v.id] = f"one of the newest {KEEP_STABLE} stable-* tags"
         elif now - v.created < MIN_AGE:
             plan.keep[v.id] = f"younger than {MIN_AGE.days} days"
-        elif all(_deletable(t) for t in image_tags):
-            plan.delete[v.id] = "only throwaway tags: " + ", ".join(image_tags)
-        else:
+        elif not all(_deletable(t) for t in image_tags):
             plan.keep[v.id] = "has a tag this tool does not recognise"
+        elif v.digest in referenced:
+            plan.keep[v.id] = "only throwaway tags, but an index points at it"
+        else:
+            plan.delete[v.id] = "only throwaway tags: " + ", ".join(image_tags)
 
     by_digest = {v.digest: v for v in versions}
     for sig in signatures:

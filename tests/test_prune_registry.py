@@ -273,6 +273,35 @@ class UntaggedPruning(unittest.TestCase):
         plan = plan_versions([v(1, "main-44-7.2.8-200.fc44", age_days=3)], NOW, prune_untagged=True)
         self.assertIn(1, plan.keep)
 
+    def test_the_kernel_tag_family_matches_only_kernel_builds(self) -> None:
+        # The tags the akmods cache really carries (read from the registry on
+        # 2026-10-03), and the neighbours the kernel pattern must not swallow.
+        # `main-<fedora>-<arch>` is why the existing moving-tag test cannot
+        # stand in for this: its child is also referenced, so it is kept even
+        # when the pattern matches the arch tag.
+        kernel_builds = (
+            "main-44-7.1.8-200.fc44",
+            "main-44-7.1.8-200.fc44.x86_64",
+            "main-44-7.1.10-200.fc44",
+            "main-44-7.2.8-200.fc44.aarch64",
+        )
+        not_kernel_builds = (
+            "main-44",
+            "main-44-x86_64",
+            "main-44-aarch64",
+            "main-44-7",
+            "xmain-44-7.1.8-200.fc44",
+            "stable-44-7.1.8-200.fc44",
+        )
+        for tag in kernel_builds:
+            with self.subTest(tag=tag):
+                plan = plan_versions([v(1, tag)], NOW, prune_untagged=True)
+                self.assertIn(1, plan.delete)
+        for tag in not_kernel_builds:
+            with self.subTest(tag=tag):
+                plan = plan_versions([v(1, tag)], NOW, prune_untagged=True)
+                self.assertEqual(plan.keep.get(1), "has a tag this tool does not recognise")
+
     def test_a_pruned_untagged_versions_signature_goes_with_it(self) -> None:
         old = v(1)
         plan = plan_versions([old, sig_for(2, old)], NOW, prune_untagged=True)
@@ -408,6 +437,52 @@ class Main(unittest.TestCase):
         api = FakeApi(pages)
         run_main(api, delete=True, registry=FakeRegistry({f"sha256:{20:064x}": [f"sha256:{21:064x}"]}))
         self.assertEqual(api.deletes(), [])
+
+
+    def test_an_old_kernel_build_goes_index_first_then_its_child_next_run(self) -> None:
+        # A kernel bump leaves the old build with only its per-kernel tags.
+        # The index and its signature go first; its child is still pointed at
+        # by that index while this run plans, so it waits for the next run.
+        # The current build keeps everything.
+        old_index, old_child, old_sig = 30, 31, 32
+        new_index, new_child = 40, 41
+        registry = FakeRegistry(
+            {
+                f"sha256:{old_index:064x}": [f"sha256:{old_child:064x}"],
+                f"sha256:{new_index:064x}": [f"sha256:{new_child:064x}"],
+            }
+        )
+        current = [
+            api_item(new_index, "main-44", "main-44-7.2.8-200.fc44", age_days=20),
+            api_item(new_child, "main-44-x86_64", "main-44-7.2.8-200.fc44.x86_64", age_days=20),
+        ]
+        first = FakeApi(
+            {
+                IMAGE: [[api_item(1, "latest")]],
+                AKMODS: [
+                    [
+                        api_item(old_index, "main-44-7.1.8-200.fc44"),
+                        api_item(old_child, "main-44-7.1.8-200.fc44.x86_64"),
+                        api_item(old_sig, f"sha256-{old_index:064x}.sig"),
+                        *current,
+                    ]
+                ],
+            }
+        )
+        run_main(first, delete=True, registry=registry)
+        self.assertEqual(
+            first.deletes(),
+            [f"/users/o/packages/container/{AKMODS}/versions/{old_index}", f"/users/o/packages/container/{AKMODS}/versions/{old_sig}"],
+        )
+
+        second = FakeApi(
+            {
+                IMAGE: [[api_item(1, "latest")]],
+                AKMODS: [[api_item(old_child, "main-44-7.1.8-200.fc44.x86_64"), *current]],
+            }
+        )
+        run_main(second, delete=True, registry=registry)
+        self.assertEqual(second.deletes(), [f"/users/o/packages/container/{AKMODS}/versions/{old_child}"])
 
 
 class FailingDeleteApi(FakeApi):

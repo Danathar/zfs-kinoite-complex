@@ -143,8 +143,10 @@ gh label list --limit 60 --json name,description \
   -q '.[] | select(.description | test("auto-merge"; "i")) | .name'
 ```
 
-Those labels do not merge anything in this repository by themselves. See the
-next sections.
+No workflow in this repository merges on these labels. They are still not
+inert: their description, and `SECURITY-AI.md`, say Hive reads them as approval
+to auto-merge on green CI. See [Who merges](#who-merges) for what has actually
+happened.
 
 ## Keeping agents from colliding
 

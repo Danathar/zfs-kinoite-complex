@@ -43,6 +43,7 @@ docs/
   branch-protection.md        <- the ruleset that keeps `main` behind a pull request, and how to check it is applied
   quality.md                  <- what each badge, gate, and fail-closed refusal actually means
   metrics.md                  <- reproducible commands, and what the numbers are worth at this scale
+  strategy.md                 <- the stated goal, linked rather than copied, and commands to read progress toward it
 docs/metrics/
   YYYY-MM-DD.md               <- one dated reading of the numbers metrics.md describes, left as it was read
 docs/reflections/
@@ -130,6 +131,10 @@ verify is worse than no entry.
 ### Goal: I want to know what might silently go stale over time
 
 1. [`docs/maintenance-watchlist.md`](./maintenance-watchlist.md)
+
+### Goal: I want to know where the project is headed and how far along it is
+
+1. [`docs/strategy.md`](./strategy.md)
 
 ### Goal: I want to contribute a change
 

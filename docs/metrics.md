@@ -21,6 +21,9 @@ fixed range of pull requests and runs, and is left as it was read.
 [`docs/quality.md`](./quality.md) is the companion: this page is how to get
 numbers, that one is what the gates and signals mean.
 
+For where the project is headed, rather than how to get a number, see
+[`docs/strategy.md`](./strategy.md).
+
 ## Pull request acceptance
 
 ```bash

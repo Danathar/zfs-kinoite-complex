@@ -95,9 +95,12 @@ guessing one.
 
 ### The commit trailer
 
-Hive's commits are authored by the role, for example
+Some of Hive's commits are authored by the role, for example
 `quality <quality@hive.kubestellar.io>`, and end with a `Signed-off-by:` line
-naming the same role. `git log` shows this without GitHub:
+naming the same role. Many are not: commits on agent branches also carry the
+Hive app's identity (`danathar-atomic-hive[bot]`) or the maintainer's own name,
+so a commit author is weaker evidence than the pull request author. `git log`
+shows it without GitHub:
 
 ```sh
 git log -1 --format='%an <%ae>%n%b' <sha>
@@ -146,13 +149,15 @@ gh pr list --state merged --search <sha> --json number,title,headRefName,author
 ```
 
 Without `gh`, use git. For a commit that came in with a pull request,
-`--ancestry-path` lists the merge commits between it and `main`:
+`--ancestry-path` lists the merge commits between it and `main`. A branch that
+merged `main` into itself before it landed has those merges on the path too,
+and they come first, so keep only the first pull request merge:
 
 ```sh
-git log --merges --ancestry-path --reverse --format='%h %s' <sha>..main
+git log --merges --ancestry-path --reverse --format='%h %s' <sha>..main | grep -m1 ' Merge pull request #'
 ```
 
-The first line is the merge that brought it in.
+That line is the merge that brought it in.
 
 Find the issue a pull request closes:
 

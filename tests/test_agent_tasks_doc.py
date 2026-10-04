@@ -21,8 +21,10 @@ requests that live on GitHub and a system outside this repository. The unit suit
 and no network, and a shallow CI clone does not carry the history, so these stay review claims.
 The page gives the `gh` commands that show them.
 
-The `gh` and `git` commands are not run. Their flags are checked by hand against the live
-repository when the page is written.
+The `gh` commands are not run. Their flags are checked by hand against the live repository
+when the page is written. The one git-only lookup (`--ancestry-path`) is run, against a small
+repository built in a temporary directory, because its claim -- that its output names the merge
+that brought a commit in -- depends on the history's shape and not on any flag being valid.
 
 No PyYAML, for the reason tests/test_docs_consistency.py gives: the workflow tests that import
 yaml skip when it is missing, and a doc-join test is the worst place to accept a silent skip.
@@ -32,6 +34,9 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -165,6 +170,109 @@ class NoTaskLogTests(unittest.TestCase):
     def test_the_page_directory_holds_only_the_page(self) -> None:
         self.assertIn("this directory holds only this page", _flat(_doc()))
         self.assertEqual([p.name for p in DOC.parent.iterdir()], ["README.md"])
+
+
+def _merge_lookup_command() -> str:
+    """Return the page's git-only command for finding the merge that brought a commit in."""
+    blocks = re.findall(r"```sh\n(.*?)```", _doc(), flags=re.DOTALL)
+    commands = [block.strip() for block in blocks if "--ancestry-path" in block]
+    if len(commands) != 1 or "\n" in commands[0]:
+        raise AssertionError("expected exactly one one-line `--ancestry-path` command")
+    return commands[0]
+
+
+@unittest.skipIf(shutil.which("git") is None, "git is not installed")
+@unittest.skipIf(shutil.which("bash") is None, "bash is not installed")
+class MergeLookupTests(unittest.TestCase):
+    """Run the page's git-only lookup on a history shaped like this repository's.
+
+    Branches here often merge `main` into themselves before they land (`Merge remote-tracking
+    branch 'origin/main' into ...`), and those merges sit on the ancestry path ahead of the pull
+    request merge. A lookup that took the first merge on the path named the branch's own merge for
+    19 of the 241 commits brought in by pull request merges on `main` when this test was written.
+    """
+
+    def setUp(self) -> None:
+        temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(temp_dir.cleanup)
+        self.repo = Path(temp_dir.name)
+        self.env = {
+            "PATH": "/usr/bin:/bin:/usr/local/bin",
+            "HOME": str(self.repo),
+            "GIT_CONFIG_GLOBAL": "/dev/null",
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_AUTHOR_NAME": "test",
+            "GIT_AUTHOR_EMAIL": "test@example.invalid",
+            "GIT_COMMITTER_NAME": "test",
+            "GIT_COMMITTER_EMAIL": "test@example.invalid",
+        }
+        self.git("init", "-q", "-b", "main")
+        self.commit("base")
+
+    def git(self, *args: str) -> str:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=self.repo,
+            env=self.env,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return result.stdout.strip()
+
+    def commit(self, message: str) -> str:
+        self.git("commit", "-q", "--allow-empty", "-m", message)
+        return self.git("rev-parse", "HEAD")
+
+    def merge(self, into: str, branch: str, message: str) -> str:
+        self.git("checkout", "-q", into)
+        self.git("merge", "-q", "--no-ff", "-m", message, branch)
+        return self.git("rev-parse", "HEAD")
+
+    def land(self, number: int, branch: str) -> str:
+        """Merge `branch` into main the way the maintainer does, and return the merge."""
+        return self.merge("main", branch, f"Merge pull request #{number} from Danathar/{branch}")
+
+    def lookup(self, sha: str) -> str:
+        command = _merge_lookup_command().replace("<sha>", sha)
+        result = subprocess.run(
+            ["bash", "-c", command],
+            cwd=self.repo,
+            env=self.env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        return result.stdout.strip()
+
+    def assertNames(self, line: str, merge: str) -> None:
+        subject = self.git("log", "-1", "--format=%s", merge)
+        self.assertEqual(line.split(" ", 1), [self.git("rev-parse", "--short", merge), subject])
+
+    def test_a_branch_merged_once_names_its_pull_request_merge(self) -> None:
+        self.git("checkout", "-q", "-b", "quality/one")
+        target = self.commit("the change")
+        self.commit("a follow-up")
+        landed = self.land(2, "quality/one")
+        self.git("checkout", "-q", "-b", "quality/later")
+        self.commit("later work")
+        self.land(3, "quality/later")
+        self.assertNames(self.lookup(target), landed)
+
+    def test_a_branch_that_merged_main_names_its_pull_request_merge(self) -> None:
+        self.git("checkout", "-q", "-b", "quality/behind")
+        target = self.commit("the change")
+        self.git("checkout", "-q", "-b", "sec/other", "main")
+        self.commit("someone else's change")
+        self.land(1, "sec/other")
+        update = "Merge remote-tracking branch 'origin/main' into quality/behind"
+        self.merge("quality/behind", "main", update)
+        self.commit("a fix after the update")
+        landed = self.land(2, "quality/behind")
+        self.git("checkout", "-q", "-b", "quality/later")
+        self.commit("later work")
+        self.land(3, "quality/later")
+        self.assertNames(self.lookup(target), landed)
 
 
 if __name__ == "__main__":

@@ -48,6 +48,8 @@ docs/metrics/
 docs/reflections/
   README.md                   <- what earns a retrospective entry, and how it differs from corrections.md
   YYYY-MM-DD-*.md             <- one durable lesson each, append-only
+docs/agent-tasks/
+  README.md                   <- how to trace an agent-made change back to its task, with the commands; there is no stored task log
 .github/scripts/
   README.md                   <- workflow step -> command-line interface (CLI) command -> Python module map
 .github/pull_request_template.md <- the checklist every pull request opens with, drawn from CONTRIBUTING.md

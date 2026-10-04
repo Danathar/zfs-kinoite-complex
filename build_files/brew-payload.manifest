@@ -2,14 +2,17 @@
 #
 # Paths are relative to the payload's own /system_files, which is the same thing
 # as being relative to / in the built image. One path per line; `#` starts a
-# comment. build-image.sh's check_brew_payload_inventory() compares this list
-# against what actually arrived and fails the build on any difference.
+# comment. build_files/check-brew-payload-inventory.sh compares this list
+# against the payload and fails the build on any difference. It runs from its
+# own RUN in the Containerfile, above `COPY --from=brew /system_files /`, so the
+# tools doing the comparison still come from the base image, not the payload.
 #
 # The list is a review record, not a lock file. ci/defaults.json pins which
 # payload arrives; this says what was in it when a person last looked. Bumping
-# DEFAULT_BREW_IMAGE without touching this file fails the build, which is the
-# point: the reviewer of a digest bump otherwise sees a 64-hex string and no
-# way to tell that a new file came with it.
+# DEFAULT_BREW_IMAGE to a payload that adds or removes a path fails the build
+# until this file is updated, which is the point: the reviewer of a digest bump
+# otherwise sees a 64-hex string and no way to tell that a new file came with
+# it. A bump whose payload has the same paths passes without touching this file.
 #
 # Read the file before adding a line here. Everything below is copied into / and
 # then signed and promoted, so an entry is this repository saying it looked.

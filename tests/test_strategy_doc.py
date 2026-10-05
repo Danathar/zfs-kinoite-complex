@@ -24,7 +24,7 @@ import shutil
 import subprocess
 import unittest
 
-from tests.test_docs_consistency import REPO_ROOT, heading_slugs
+from tests.test_docs_consistency import REPO_ROOT, heading_slugs, workflow_paths
 from tests.test_metrics_doc import (
     fenced_blocks,
     fields_read,
@@ -342,7 +342,7 @@ class ScheduledReportTests(unittest.TestCase):
     def test_the_workflows_with_a_schedule_are_the_ones_the_page_names(self) -> None:
         scheduled = sorted(
             path.name
-            for path in WORKFLOW_DIR.glob("*.yml")
+            for path in workflow_paths()
             if re.search(r"^  schedule:\s*$", path.read_text(encoding="utf-8"), re.MULTILINE)
         )
         self.assertEqual(scheduled, sorted(SCHEDULED))

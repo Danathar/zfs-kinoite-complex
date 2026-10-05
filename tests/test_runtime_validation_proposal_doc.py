@@ -46,6 +46,8 @@ import subprocess
 import unittest
 from pathlib import Path
 
+from tests.test_docs_consistency import workflow_paths
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DOCS_DIR = REPO_ROOT / "docs"
 WORKFLOW_DIR = REPO_ROOT / ".github" / "workflows"
@@ -113,7 +115,7 @@ def _line_oriented_pipeline_files() -> list[Path]:
 
     return sorted(
         [
-            *WORKFLOW_DIR.glob("*.yml"),
+            *workflow_paths(),
             *ACTION_DIR.glob("*/action.yml"),
             CONTAINERFILE,
             *(REPO_ROOT / "build_files").glob("*.sh"),
@@ -446,7 +448,7 @@ class CurrentBoundaryTests(unittest.TestCase):
     def test_every_runner_is_github_hosted(self) -> None:
         self.assertIn("a hosted runner is not a safe place", self.section)
         labels = set()
-        for path in sorted(WORKFLOW_DIR.glob("*.yml")):
+        for path in workflow_paths():
             labels.update(
                 re.findall(
                     r"^\s*runs-on:\s*(?P<label>\S+)",

@@ -45,6 +45,7 @@ from tests.test_docs_consistency import (
     WORKFLOW_DIR,
     heading_slugs,
     tracked_markdown,
+    workflow_paths,
 )
 
 DOC = REPO_ROOT / "docs" / "ai-ops-runbook.md"
@@ -184,10 +185,7 @@ def workflow_text(name: str) -> str:
 
 
 def workflow_files() -> list[str]:
-    return sorted(
-        path.name
-        for path in list(WORKFLOW_DIR.glob("*.yml")) + list(WORKFLOW_DIR.glob("*.yaml"))
-    )
+    return [path.name for path in workflow_paths()]
 
 
 def page_sections(text: str) -> dict[str, str]:

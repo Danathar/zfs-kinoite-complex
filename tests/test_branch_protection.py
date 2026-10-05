@@ -34,6 +34,8 @@ import subprocess
 import unittest
 from pathlib import Path
 
+from tests.test_docs_consistency import workflow_paths
+
 try:
     import yaml
 except ImportError:  # pragma: no cover - CI installs PyYAML; see test.yml
@@ -127,7 +129,7 @@ def required_checks(ruleset: dict) -> list[dict]:
 
 def workflows() -> dict[str, dict]:
     loaded = {}
-    for path in sorted(WORKFLOWS.glob("*.y*ml")):
+    for path in workflow_paths():
         doc = yaml.safe_load(path.read_text(encoding="utf-8"))
         loaded[path.name] = doc
     return loaded

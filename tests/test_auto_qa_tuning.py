@@ -21,8 +21,9 @@ import re
 import unittest
 from pathlib import Path
 
+from tests.test_docs_consistency import workflow_paths
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
-WORKFLOW_DIR = REPO_ROOT / ".github" / "workflows"
 TUNING_PATH = REPO_ROOT / ".github" / "auto-qa-tuning.json"
 
 # A job key is two-space indented; `timeout-minutes:` is four-space indented
@@ -35,7 +36,7 @@ TIMEOUT_RE = re.compile(r"^    timeout-minutes:\s*(?P<minutes>\d+)\s*$")
 def workflow_files() -> list[Path]:
     """Every workflow file, both suffixes GitHub accepts."""
 
-    return sorted(list(WORKFLOW_DIR.glob("*.yml")) + list(WORKFLOW_DIR.glob("*.yaml")))
+    return workflow_paths()
 
 
 def declared_timeouts() -> dict[tuple[str, str], int]:

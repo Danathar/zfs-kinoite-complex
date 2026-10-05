@@ -189,7 +189,7 @@ def _steps() -> list[_Step]:
     """Every step of every workflow and composite action, with the env visible to it."""
 
     steps = []
-    for path in sorted((REPO_ROOT / ".github").rglob("*.yml")):
+    for path in sorted([*(REPO_ROOT / ".github").rglob("*.yml"), *(REPO_ROOT / ".github").rglob("*.yaml")]):
         document = yaml.safe_load(path.read_text(encoding="utf-8"))
         if not isinstance(document, dict):
             continue

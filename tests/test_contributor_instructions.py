@@ -44,6 +44,8 @@ import sys
 import unittest
 from pathlib import Path
 
+from tests.test_docs_consistency import workflow_paths
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TEMPLATE = REPO_ROOT / ".github" / "pull_request_template.md"
 COPILOT = REPO_ROOT / ".github" / "copilot-instructions.md"
@@ -51,7 +53,6 @@ AGENTS = REPO_ROOT / "AGENTS.md"
 CONTRIBUTING = REPO_ROOT / "CONTRIBUTING.md"
 TEST_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "test.yml"
 BUILD_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "build.yml"
-WORKFLOW_DIR = REPO_ROOT / ".github" / "workflows"
 SCRIPTS_README = REPO_ROOT / ".github" / "scripts" / "README.md"
 THRESHOLDS = REPO_ROOT / ".coverage-thresholds.json"
 
@@ -557,7 +558,7 @@ class BuildTriggerTests(unittest.TestCase):
         # Being on paths-ignore is only safe while nothing that builds reads
         # the file. A step that started reading the template would make an
         # ignored edit change what ships.
-        for workflow in sorted(WORKFLOW_DIR.glob("*.yml")):
+        for workflow in workflow_paths():
             text = workflow.read_text(encoding="utf-8")
             if workflow == BUILD_WORKFLOW:
                 text = text.replace(".github/pull_request_template.md", "")

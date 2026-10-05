@@ -58,6 +58,8 @@ import subprocess
 import unittest
 from pathlib import Path
 
+from tests.test_docs_consistency import workflow_paths
+
 try:
     import yaml
 except ImportError:  # pragma: no cover - exercised only where PyYAML is absent
@@ -241,7 +243,7 @@ class CrossReferenceTests(unittest.TestCase):
         self.assertGreater(seen, 0, "Expected the templates to name repository paths.")
 
     def test_every_workflow_filename_named_is_a_real_workflow(self):
-        workflows = {path.name for path in WORKFLOW_DIR.glob("*.yml")}
+        workflows = {path.name for path in workflow_paths()}
         seen = 0
         for name, text in self.sources.items():
             for candidate in WORKFLOW_FILE_RE.findall(text):
@@ -463,7 +465,7 @@ class FormContentJoinTests(unittest.TestCase):
 
     def test_build_failure_workflow_options_all_exist(self):
         options = self._dropdown("build-failure.yml", "workflow")
-        workflows = {path.name for path in WORKFLOW_DIR.glob("*.yml")}
+        workflows = {path.name for path in workflow_paths()}
         named = [option for option in options if option.endswith(".yml")]
         self.assertTrue(named, "The workflow dropdown offers no workflow.")
         for option in named:

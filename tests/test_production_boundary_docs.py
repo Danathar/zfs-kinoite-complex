@@ -28,6 +28,8 @@ import re
 import unittest
 from pathlib import Path
 
+from tests.test_docs_consistency import workflow_paths
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW_DIR = REPO_ROOT / ".github" / "workflows"
 DOCS_DIR = REPO_ROOT / "docs"
@@ -454,7 +456,7 @@ class ReviewChecklistTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.checklist = _section(BOUNDARY_PROPOSAL, "## Review checklist")
-        cls.workflows = sorted(WORKFLOW_DIR.glob("*.yml"))
+        cls.workflows = workflow_paths()
 
     def test_the_scan_covers_every_workflow(self) -> None:
         self.assertGreaterEqual(len(self.workflows), 7)

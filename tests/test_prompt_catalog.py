@@ -67,6 +67,7 @@ CI_TOOLS = REPO_ROOT / "ci_tools"
 BUILD_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "build.yml"
 LOCK_FILE = REPO_ROOT / "ci" / "inputs.lock.json"
 DEFAULTS_FILE = REPO_ROOT / "ci" / "defaults.json"
+PROMOTE_STABLE = CI_TOOLS / "promote_stable.py"
 MANIFEST_WRITER = CI_TOOLS / "write_build_inputs_manifest.py"
 AGENTS = REPO_ROOT / "AGENTS.md"
 
@@ -141,6 +142,35 @@ def ci_tool_error_messages() -> list[str]:
                     for part in node.values
                 )
                 messages.append(collapse(rendered.replace("\x00", " ")))
+    return messages
+
+
+def raised_ci_tool_errors(path: Path) -> list[str]:
+    """The message of every `raise CiToolError(...)` in one module, gaps for values.
+
+    Only the first argument of the raise, rendered the way
+    `ci_tool_error_messages` renders a string, so the result can be matched
+    with `message_pattern` against a row the runbook quotes.
+    """
+
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    messages = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Raise) and isinstance(node.exc, ast.Call)):
+            continue
+        call = node.exc
+        if not (isinstance(call.func, ast.Name) and call.func.id == "CiToolError" and call.args):
+            continue
+        arg = call.args[0]
+        if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+            messages.append(collapse(arg.value))
+        elif isinstance(arg, ast.JoinedStr):
+            rendered = "".join(
+                part.value if isinstance(part, ast.Constant) else " " for part in arg.values
+            )
+            messages.append(collapse(rendered))
+        else:
+            raise TypeError(f"{path.name}: a CiToolError message is not a string literal")
     return messages
 
 
@@ -437,6 +467,63 @@ class DiagnoseGuardTableTests(unittest.TestCase):
             any("org.zfs-kinoite-complex.zfs-version=" in message for message in self.messages),
             "the kmod-zfs row explains the refusal in terms of a label the code no longer names",
         )
+
+
+class DiagnosePromotionRefusalTests(unittest.TestCase):
+    """The reverse join, for the one module that moves `:latest`.
+
+    `DiagnoseGuardTableTests` checks that every row the runbook quotes is a
+    message the code still raises. Nothing checked the other direction, so a
+    new refusal in `promote_stable.py` could ship with no row at all. That is
+    the module whose refusals carry the most consequence: some mean `:latest`
+    has already moved, some mean it never will on this run, and one means a
+    re-run of an older build was stopped from moving it backwards. A reader
+    who finds no row for the message on a red promote job has to guess which.
+    """
+
+    def setUp(self) -> None:
+        text = DIAGNOSE.read_text(encoding="utf-8")
+        rows = table_rows(section(text, "3. Match the message to the guard"))
+        self.patterns = [
+            message_pattern(quoted) for row in rows[1:] for quoted in BACKTICKED_RE.findall(row[0])
+        ]
+        self.refusals = raised_ci_tool_errors(PROMOTE_STABLE)
+
+    def test_the_promote_module_has_refusals_to_check(self) -> None:
+        # The digest mismatch, the missing key, the run-number guard, the
+        # backwards-promotion refusal, and the missing tag list.
+        self.assertGreaterEqual(len(self.refusals), 5)
+        self.assertTrue(any(r.startswith("Refusing to promote run") for r in self.refusals))
+
+    def test_every_promotion_refusal_has_a_row_in_the_guard_table(self) -> None:
+        for refusal in self.refusals:
+            with self.subTest(refusal=refusal):
+                self.assertTrue(
+                    any(pattern.search(refusal) for pattern in self.patterns),
+                    f"promote_stable.py raises {refusal!r} but step 3 of "
+                    "diagnose-build-failure.prompt.md has no row for it",
+                )
+
+    def test_the_backwards_refusal_row_says_no_tag_moved(self) -> None:
+        text = DIAGNOSE.read_text(encoding="utf-8")
+        row = next(
+            cells
+            for cells in table_rows(section(text, "3. Match the message to the guard"))
+            if "`Refusing to promote run" in cells[0]
+        )
+        # The check runs before either copy; the row must not read like the
+        # digest-mismatch row, whose copy has already happened.
+        self.assertIn("no tag moved", row[1])
+        source = PROMOTE_STABLE.read_text(encoding="utf-8")
+        main_body = source[source.index("def main()") :]
+        self.assertLess(
+            main_body.index("refuse_older_than_published("),
+            main_body.index("_copy_and_verify_digest("),
+            "the row says no tag moved, which holds only while the refusal precedes the first copy",
+        )
+        # Getting past the refusal by deleting the newer audit tags is the
+        # tempting wrong fix; the row has to rule it out by name.
+        self.assertIn("Never delete `stable-*` tags", row[2])
 
 
 class DiagnoseWorkflowClaimTests(unittest.TestCase):

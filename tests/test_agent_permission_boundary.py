@@ -1021,6 +1021,10 @@ class DiagnoseGuardTableTests(unittest.TestCase):
         "SIGNING_SECRET is empty": False,  # wrong trigger context, not a defect
         "Missing required verification key file": True,  # a repository problem
         "Replay lock file not found": True,  # pass the lock file
+        # Correct refusal of a re-run that would move `:latest` backwards.
+        "Refusing to promote run": False,
+        "Missing tag list": False,  # transient registry failure
+        "GITHUB_RUN_NUMBER is not a run number": True,  # the workflow's environment
     }
 
     @classmethod

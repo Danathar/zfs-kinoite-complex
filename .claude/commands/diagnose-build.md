@@ -8,7 +8,7 @@ That file is the procedure; do not restate it here. In particular:
 
 - Read the failing step's stderr line before forming a theory. A known refusal
   exits 1 with one line, and that line is the diagnosis.
-- Match the message against the guard table before proposing anything. Three of
+- Match the message against the guard table before proposing anything. Five of
   the entries have no fix in this repository.
 - `unexpected EOF` during a blob transfer is a registry or CDN failure, not a
   repository failure. Say so and leave the re-run to the maintainer — a re-run

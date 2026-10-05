@@ -1208,6 +1208,7 @@ class PromotionRowTests(unittest.TestCase):
         with (
             patch.dict(os.environ, PROMOTE_ENV, clear=True),
             patch("ci_tools.promote_stable.skopeo_inspect_digest", return_value="sha256:abc"),
+            patch("ci_tools.promote_stable.list_repository_tags", return_value=[]),
             patch("ci_tools.promote_stable.run_cmd", side_effect=note_verify),
             patch(
                 "ci_tools.promote_stable.skopeo_copy",
@@ -1224,6 +1225,7 @@ class PromotionRowTests(unittest.TestCase):
         with (
             patch.dict(os.environ, PROMOTE_ENV, clear=True),
             patch("ci_tools.promote_stable.skopeo_inspect_digest", return_value="sha256:abc"),
+            patch("ci_tools.promote_stable.list_repository_tags", return_value=[]),
             patch("ci_tools.promote_stable.run_cmd"),
             patch(
                 "ci_tools.promote_stable.skopeo_copy",
@@ -1246,6 +1248,7 @@ class PromotionRowTests(unittest.TestCase):
         with (
             patch.dict(os.environ, PROMOTE_ENV, clear=True),
             patch("ci_tools.promote_stable.skopeo_inspect_digest", return_value="sha256:abc"),
+            patch("ci_tools.promote_stable.list_repository_tags", return_value=[]),
             patch(
                 "ci_tools.promote_stable.run_cmd",
                 side_effect=CiToolError("cosign verify failed"),
@@ -1265,6 +1268,7 @@ class PromotionRowTests(unittest.TestCase):
                 clear=True,
             ),
             patch("ci_tools.promote_stable.skopeo_inspect_digest", return_value="sha256:abc"),
+            patch("ci_tools.promote_stable.list_repository_tags", return_value=[]),
             patch("ci_tools.promote_stable.skopeo_copy") as skopeo_copy,
             self.assertRaisesRegex(CiToolError, "Missing required verification key file"),
         ):

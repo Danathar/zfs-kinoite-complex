@@ -80,7 +80,7 @@ class BuildContainerSelectionTests(unittest.TestCase):
         # `container:` starts before any step runs, so a guard would execute
         # inside the container it was meant to gate. The only safe form is no
         # override at all.
-        for name in sorted(p.name for p in WORKFLOW_DIR.glob("*.yml")):
+        for name in sorted(p.name for p in [*WORKFLOW_DIR.glob("*.yml"), *WORKFLOW_DIR.glob("*.yaml")]):
             text = (WORKFLOW_DIR / name).read_text(encoding="utf-8")
             self.assertNotIn(
                 "build_container_image:",

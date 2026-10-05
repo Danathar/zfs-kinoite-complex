@@ -62,6 +62,8 @@ import sys
 import unittest
 from pathlib import Path
 
+from tests.test_docs_consistency import workflow_paths
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 GUIDE = REPO_ROOT / "docs" / "code-reading-guide.md"
 WORKFLOW_DIR = REPO_ROOT / ".github" / "workflows"
@@ -316,7 +318,7 @@ def image_building_workflows() -> list[Path]:
 
     return sorted(
         path
-        for path in WORKFLOW_DIR.glob("*.yml")
+        for path in workflow_paths()
         if "./.github/actions/build-native-image" in path.read_text(encoding="utf-8")
     )
 

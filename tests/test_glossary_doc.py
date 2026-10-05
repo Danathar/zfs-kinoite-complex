@@ -76,6 +76,7 @@ from ci_tools.tagging_context import (
     build_candidate_tag,
     export_registry_context_values,
 )
+from tests.test_docs_consistency import workflow_paths
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DOC = REPO_ROOT / "docs" / "glossary.md"
@@ -368,7 +369,7 @@ def workflow_variables() -> set[str]:
     """
 
     found = set()
-    for path in sorted([*WORKFLOW_DIR.glob("*.yml"), *ACTION_DIR.glob("*/action.yml")]):
+    for path in sorted([*workflow_paths(), *ACTION_DIR.glob("*/action.yml")]):
         text = strip_yaml_comments(path.read_text(encoding="utf-8"))
         for pattern in WORKFLOW_VARIABLE_RES:
             found.update(pattern.findall(text))
@@ -769,7 +770,7 @@ class PipelineClaimTests(unittest.TestCase):
             and re.search(r"^on:", path.read_text(encoding="utf-8"), re.MULTILINE)
         }
         in_workflow_dir = {
-            path.relative_to(REPO_ROOT).as_posix() for path in sorted(WORKFLOW_DIR.glob("*.yml"))
+            path.relative_to(REPO_ROOT).as_posix() for path in workflow_paths()
         }
         self.assertEqual(triggered, in_workflow_dir)
 

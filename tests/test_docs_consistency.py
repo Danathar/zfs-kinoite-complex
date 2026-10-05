@@ -32,6 +32,17 @@ QUALITY = DOCS_DIR / "quality.md"
 
 # Markdown inline links. Bare `<http://...>` autolinks and reference-style
 # definitions are not used in this tree, so this is the whole surface.
+def workflow_paths() -> list[Path]:
+    """Every workflow GitHub runs: each `.yml` and `.yaml` file in WORKFLOW_DIR.
+
+    A scan that globbed one extension would not narrow its check, it would
+    exempt every workflow spelled the other way. Scans over the workflows read
+    their list from here.
+    """
+
+    return sorted([*WORKFLOW_DIR.glob("*.yml"), *WORKFLOW_DIR.glob("*.yaml")])
+
+
 LINK_RE = re.compile(r"\]\(([^)\s]+)\)")
 
 
@@ -200,9 +211,7 @@ class WorkflowCoverageTests(unittest.TestCase):
         prose = "\n".join(doc.read_text(encoding="utf-8") for doc in tracked_markdown())
         undocumented = [
             path.name
-            for path in sorted(
-                list(WORKFLOW_DIR.glob("*.yml")) + list(WORKFLOW_DIR.glob("*.yaml"))
-            )
+            for path in workflow_paths()
             if path.name not in prose
         ]
         self.assertEqual(undocumented, [], "workflows named in no document")

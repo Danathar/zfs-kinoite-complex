@@ -31,6 +31,8 @@ import re
 import unittest
 from pathlib import Path
 
+from tests.test_docs_consistency import workflow_paths
+
 try:
     import yaml
 except ImportError:  # pragma: no cover - exercised only where PyYAML is absent
@@ -168,7 +170,7 @@ def default_token_jobs(text: str) -> list[str]:
 
 
 def workflow_files() -> list[Path]:
-    return sorted(p for p in WORKFLOWS.iterdir() if p.suffix in {".yml", ".yaml"})
+    return workflow_paths()
 
 
 class PolicyMatchesWorkflowsTests(unittest.TestCase):

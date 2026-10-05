@@ -45,7 +45,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 
 from tests.check_coverage import main as coverage_gate_main
-from tests.test_docs_consistency import REPO_ROOT
+from tests.test_docs_consistency import REPO_ROOT, workflow_paths
 
 DOC_PATH = REPO_ROOT / "docs" / "metrics.md"
 SNAPSHOT_DIR = REPO_ROOT / "docs" / "metrics"
@@ -602,7 +602,7 @@ class CoverageCommandTests(unittest.TestCase):
         # gate, so only a line that could run is an offender.
         offenders = sorted(
             path.relative_to(REPO_ROOT).as_posix()
-            for path in WORKFLOW_DIR.glob("*.yml")
+            for path in workflow_paths()
             if any(
                 "--cov-fail-under" in line and not line.lstrip().startswith("#")
                 for line in path.read_text(encoding="utf-8").splitlines()
@@ -970,7 +970,7 @@ class DatedFigureTests(unittest.TestCase):
         only way the numbers are produced.
         """
 
-        for path in sorted(WORKFLOW_DIR.glob("*.yml")):
+        for path in workflow_paths():
             with self.subTest(workflow=path.name):
                 text = path.read_text(encoding="utf-8")
                 # Covers the dated snapshots under docs/metrics/ too: each is

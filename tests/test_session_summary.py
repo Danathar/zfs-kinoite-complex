@@ -45,6 +45,8 @@ import re
 import unittest
 from pathlib import Path
 
+from tests.test_docs_consistency import workflow_paths
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW_DIR = REPO_ROOT / ".github" / "workflows"
 DOCS_DIR = REPO_ROOT / "docs"
@@ -134,7 +136,7 @@ def sequence(lines: list[str], key: str) -> list[str]:
 def job_names() -> dict[str, Path]:
     """Every job `name:` in .github/workflows/, mapped to the workflow that defines it."""
     found: dict[str, Path] = {}
-    for workflow in sorted(WORKFLOW_DIR.glob("*.yml")) + sorted(WORKFLOW_DIR.glob("*.yaml")):
+    for workflow in workflow_paths():
         for line in workflow.read_text(encoding="utf-8").splitlines():
             match = JOB_NAME_RE.match(line)
             if match:

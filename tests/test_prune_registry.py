@@ -19,6 +19,7 @@ from ci_tools.tagging_context import (
     build_branch_metadata,
     build_candidate_tag,
 )
+from tests.test_docs_consistency import workflow_paths
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PUBLISH_ACTION = REPO_ROOT / ".github" / "actions" / "publish-native-image" / "action.yml"
@@ -154,9 +155,8 @@ class ProducerTagContract(unittest.TestCase):
     def test_publish_is_only_ever_given_a_candidate_or_branch_tag(self) -> None:
         # The two producers below are the whole input to the publish action;
         # a third would be a tag family nothing here builds.
-        workflows = REPO_ROOT / ".github" / "workflows"
         passed: set[str] = set()
-        for workflow in sorted(workflows.glob("*.yml")):
+        for workflow in workflow_paths():
             lines = workflow.read_text().splitlines()
             for i, line in enumerate(lines):
                 if line.strip() != "uses: ./.github/actions/publish-native-image":

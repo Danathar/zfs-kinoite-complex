@@ -89,6 +89,27 @@ def manifest_entries() -> list[str]:
     return entries
 
 
+def manifest_header() -> str:
+    """Return the manifest's leading comment block, `#` markers and all."""
+
+    lines = []
+    for line in MANIFEST.read_text(encoding="utf-8").splitlines():
+        if not line.startswith("#"):
+            break
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def containerfile_code() -> str:
+    """Return the Containerfile with its comment lines dropped."""
+
+    return "\n".join(
+        line
+        for line in CONTAINERFILE.read_text(encoding="utf-8").splitlines()
+        if not line.lstrip().startswith("#")
+    )
+
+
 def run_check(payload: Path, manifest: Path) -> subprocess.CompletedProcess[str]:
     """Run the shipped check script against a fixture payload tree and manifest.
 
@@ -128,8 +149,9 @@ class PremiseTests(unittest.TestCase):
         self.assertIn(PAYLOAD_COPY, CONTAINERFILE.read_text(encoding="utf-8"))
 
     def test_the_containerfile_mounts_the_payload_for_inspection(self) -> None:
-        # Without the mount the check cannot see anything, and build-image.sh would
-        # fail every build rather than pass a build it did not check.
+        # Without the mount the check cannot see anything, and
+        # check-brew-payload-inventory.sh would fail every build rather than pass a
+        # build it did not check.
         self.assertIn(
             "--mount=type=bind,from=brew,source=/system_files,target=/brew-payload",
             CONTAINERFILE.read_text(encoding="utf-8"),
@@ -172,6 +194,63 @@ class ManifestTests(unittest.TestCase):
 
     def test_the_unit_the_staging_check_reads_is_listed(self) -> None:
         self.assertIn("usr/lib/systemd/system/brew-setup.service", manifest_entries())
+
+
+class ManifestHeaderTests(unittest.TestCase):
+    """The comment at the top of the manifest says what checks it and when.
+
+    It is the first thing a reviewer of a DEFAULT_BREW_IMAGE bump reads. It went on
+    naming build-image.sh as the checker after the check moved into its own script
+    above the COPY (#356), and nothing here noticed, because no test read it.
+    """
+
+    def test_the_header_names_the_script_that_compares_the_list(self) -> None:
+        self.assertIn(CHECK_SCRIPT.relative_to(REPO_ROOT).as_posix(), manifest_header())
+
+    def test_every_repository_path_the_header_names_exists(self) -> None:
+        paths = re.findall(r"\b(?:build_files|ci)/[\w.-]+(?:/[\w.-]+)*", manifest_header())
+        self.assertTrue(paths, "the header names no repository path")
+        for relative in paths:
+            self.assertTrue((REPO_ROOT / relative).exists(), relative)
+
+    def test_every_function_the_header_names_is_defined_in_the_script_it_names(
+        self,
+    ) -> None:
+        # The stale text credited `build-image.sh's check_brew_payload_inventory()`.
+        # Any function named here has to live in the check script the header names.
+        script = CHECK_SCRIPT.read_text(encoding="utf-8")
+        for function in re.findall(r"\b(\w+)\(\)", manifest_header()):
+            self.assertIn(f"\n{function}() {{", script, function)
+
+    def test_the_header_says_the_check_runs_above_the_copy_it_quotes(self) -> None:
+        # The header places the check "above `COPY --from=brew /system_files /`". That
+        # quoted line has to be the real one, and the order has to hold.
+        header = manifest_header()
+        self.assertIn(f"above `{PAYLOAD_COPY}`", header)
+        code = containerfile_code()
+        self.assertIn(PAYLOAD_COPY, code)
+        self.assertLess(code.index(CHECK_INVOCATION), code.index(PAYLOAD_COPY))
+
+    def test_the_header_does_not_credit_a_script_that_runs_after_the_copy(
+        self,
+    ) -> None:
+        # build-image.sh runs after the COPY, on a filesystem the payload already
+        # owns. Naming it as the checker describes the arrangement #356 removed.
+        code = containerfile_code()
+        self.assertLess(code.index(PAYLOAD_COPY), code.index("/ctx/build-image.sh"))
+        self.assertNotIn("build-image.sh", manifest_header())
+
+    def test_a_payload_with_the_same_paths_and_new_bytes_passes(self) -> None:
+        # The header says a digest bump with the same paths passes without touching
+        # the manifest. The check compares names, not contents.
+        self.assertIn("same paths passes", " ".join(manifest_header().split()))
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            payload = fixture_payload(root, PAYLOAD_FILES)
+            for relative in PAYLOAD_FILES:
+                (payload / relative).write_bytes(b"a different release\n" * 64)
+            result = run_check(payload, MANIFEST)
+            self.assertEqual(result.returncode, 0, result.stderr)
 
 
 class InventoryCheckTests(unittest.TestCase):

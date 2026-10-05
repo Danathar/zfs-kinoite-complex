@@ -451,6 +451,9 @@ class PublishedTagShapeTests(unittest.TestCase):
             patch("ci_tools.promote_stable.skopeo_copy", side_effect=fake_copy),
             patch("ci_tools.promote_stable.skopeo_inspect_digest", side_effect=fake_digest),
             patch("ci_tools.promote_stable.verify_candidate_signature"),
+            patch("ci_tools.promote_stable.list_repository_tags", return_value=[]),
+            # `<run>` is the doc's placeholder, not a number the guard can compare.
+            patch("ci_tools.promote_stable.refuse_older_than_published"),
         ):
             promote_main()
 

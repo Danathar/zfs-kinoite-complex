@@ -124,6 +124,7 @@ class ProducerTagContract(unittest.TestCase):
             mock.patch.object(promote_stable, "skopeo_inspect_digest", return_value="sha256:abc"),
             mock.patch.object(promote_stable, "skopeo_copy") as skopeo_copy,
             mock.patch.object(promote_stable, "run_cmd"),
+            mock.patch.object(promote_stable, "list_repository_tags", return_value=[]),
             redirect_stdout(io.StringIO()),
         ):
             promote_stable.main()

@@ -68,6 +68,7 @@ BUILD_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "build.yml"
 LOCK_FILE = REPO_ROOT / "ci" / "inputs.lock.json"
 DEFAULTS_FILE = REPO_ROOT / "ci" / "defaults.json"
 PROMOTE_STABLE = CI_TOOLS / "promote_stable.py"
+CHECK_AKMODS_CACHE = CI_TOOLS / "check_akmods_cache.py"
 MANIFEST_WRITER = CI_TOOLS / "write_build_inputs_manifest.py"
 AGENTS = REPO_ROOT / "AGENTS.md"
 
@@ -150,7 +151,9 @@ def raised_ci_tool_errors(path: Path) -> list[str]:
 
     Only the first argument of the raise, rendered the way
     `ci_tool_error_messages` renders a string, so the result can be matched
-    with `message_pattern` against a row the runbook quotes.
+    with `message_pattern` against a row the runbook quotes. A raise of
+    `CiToolError(str(exc))` is skipped: it passes on another error's text and
+    has no message of its own for a row to quote.
     """
 
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -162,6 +165,14 @@ def raised_ci_tool_errors(path: Path) -> list[str]:
         if not (isinstance(call.func, ast.Name) and call.func.id == "CiToolError" and call.args):
             continue
         arg = call.args[0]
+        if (
+            isinstance(arg, ast.Call)
+            and isinstance(arg.func, ast.Name)
+            and arg.func.id == "str"
+            and len(arg.args) == 1
+            and isinstance(arg.args[0], ast.Name)
+        ):
+            continue
         if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
             messages.append(collapse(arg.value))
         elif isinstance(arg, ast.JoinedStr):
@@ -524,6 +535,85 @@ class DiagnosePromotionRefusalTests(unittest.TestCase):
         # Getting past the refusal by deleting the newer audit tags is the
         # tempting wrong fix; the row has to rule it out by name.
         self.assertIn("Never delete `stable-*` tags", row[2])
+
+
+class DiagnoseAkmodsCacheRefusalTests(unittest.TestCase):
+    """The same reverse join, for the check that guards the akmods cache.
+
+    Step 3 quotes the kmod-zfs refusal from `check_akmods_cache.py`, so a
+    reader matching a red "Verify the rebuilt cache" step looks there first.
+    The module's two other refusals -- strict mode without a pinned digest,
+    and a pinned ref that is not a digest in this repository's cache -- had
+    no row, and both have the same tempting wrong fix: let the check read the
+    shared tag. That is the fallback the refusals exist to forbid.
+    """
+
+    def setUp(self) -> None:
+        text = DIAGNOSE.read_text(encoding="utf-8")
+        self.rows = table_rows(section(text, "3. Match the message to the guard"))
+        self.patterns = [
+            message_pattern(quoted)
+            for row in self.rows[1:]
+            for quoted in BACKTICKED_RE.findall(row[0])
+        ]
+        self.refusals = raised_ci_tool_errors(CHECK_AKMODS_CACHE)
+
+    def _row(self, prefix: str) -> list[str]:
+        return next(cells for cells in self.rows if f"`{prefix}" in cells[0])
+
+    def test_the_cache_module_has_refusals_to_check(self) -> None:
+        # The missing pin, the ref that is not a cache digest, the missing
+        # digest, and the kmod-zfs mismatch. The `str(exc)` re-raise of an
+        # unpack failure carries no text of its own and is not counted.
+        self.assertGreaterEqual(len(self.refusals), 4)
+        self.assertTrue(any(r.startswith("REQUIRE_MATCH=true needs") for r in self.refusals))
+        self.assertTrue(
+            any(r.startswith("Refusing to check akmods cache ref") for r in self.refusals)
+        )
+
+    def test_every_cache_refusal_has_a_row_in_the_guard_table(self) -> None:
+        for refusal in self.refusals:
+            with self.subTest(refusal=refusal):
+                self.assertTrue(
+                    any(pattern.search(refusal) for pattern in self.patterns),
+                    f"check_akmods_cache.py raises {refusal!r} but step 3 of "
+                    "diagnose-build-failure.prompt.md has no row for it",
+                )
+
+    def test_the_pin_rows_forbid_falling_back_to_the_shared_tag(self) -> None:
+        for prefix in ("REQUIRE_MATCH=true needs", "Refusing to check akmods cache ref"):
+            with self.subTest(row=prefix):
+                row = self._row(prefix)
+                self.assertIn("nothing has been built", row[1])
+                self.assertIn("A repository problem", row[2])
+                self.assertIn("Do **not**", row[2])
+                self.assertIn("AGENTS.md section 0 rule 1", row[2])
+
+    def test_the_missing_pin_row_names_the_output_the_action_really_passes(self) -> None:
+        row = self._row("REQUIRE_MATCH=true needs")
+        action = (
+            REPO_ROOT / ".github" / "actions" / "prepare-main-akmods" / "action.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("`steps.pin_akmods.outputs.akmods_image_pinned`", row[2])
+        self.assertRegex(
+            action,
+            r"(?m)^\s+AKMODS_IMAGE_PINNED: \$\{\{ steps\.pin_akmods\.outputs\.akmods_image_pinned \}\}$",
+        )
+        self.assertRegex(action, r"(?m)^\s+REQUIRE_MATCH: \"true\"$")
+        self.assertIn(
+            '"akmods_image_pinned":', (CI_TOOLS / "pin_akmods_cache.py").read_text(encoding="utf-8")
+        )
+
+    def test_the_bad_ref_row_says_nothing_was_read_because_the_check_refuses_first(self) -> None:
+        row = self._row("Refusing to check akmods cache ref")
+        self.assertIn("Nothing was read from the registry", row[1])
+        source = CHECK_AKMODS_CACHE.read_text(encoding="utf-8")
+        body = source[source.index("def inspect_akmods_cache(") :]
+        self.assertLess(
+            body.index("_require_cache_digest_ref("),
+            body.index("skopeo_inspect_json"),
+            "the row says nothing was read, which holds only while the ref check runs first",
+        )
 
 
 class DiagnoseWorkflowClaimTests(unittest.TestCase):

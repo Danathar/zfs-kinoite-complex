@@ -35,6 +35,7 @@ tests in this tree do.
 
 from __future__ import annotations
 
+import ast
 import json
 import re
 import unittest
@@ -730,6 +731,44 @@ class RechunkBandTests(unittest.TestCase):
         self.assertIn("preserve_digests=True", read("ci_tools/promote_stable.py"))
 
 
+# Each bare call statement in promote_stable.main(), as (call, the phrase its
+# list item must contain). The two copies are told apart by destination.
+PROMOTION_STEP_PHRASES = [
+    ("verify_candidate_signature", "re-verifies that digest's cosign signature"),
+    ("refuse_older_than_published", "higher run number than this run's"),
+    ("_copy_and_verify_digest:audit_ref", "copies that digest to `stable-<run>-<sha>`"),
+    ("_copy_and_verify_digest:stable_ref", "copies that digest to `latest`"),
+]
+
+
+def promotion_statement_calls() -> list[str]:
+    """
+    Return the bare call statements of `promote_stable.main()`, in order.
+
+    `print` is left out: it reports, it does not act. A copy is named with
+    the variable it copies to, so swapping the two copies is a change here.
+    """
+    tree = ast.parse(read("ci_tools/promote_stable.py"))
+    main = next(
+        node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "main"
+    )
+    calls = []
+    for statement in main.body:
+        if not (isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Call)):
+            continue
+        call = statement.value
+        name = call.func.id if isinstance(call.func, ast.Name) else ast.unparse(call.func)
+        if name == "print":
+            continue
+        destination = next(
+            (kw.value for kw in call.keywords if kw.arg == "destination_ref"), None
+        )
+        if isinstance(destination, ast.Name):
+            name = f"{name}:{destination.id}"
+        calls.append(name)
+    return calls
+
+
 class PublicationAndPromotionTests(unittest.TestCase):
     """Section "5. Promotion And Signing" lists both step sequences."""
 
@@ -741,9 +780,36 @@ class PublicationAndPromotionTests(unittest.TestCase):
         self.assertIn("unsigned-<run_id>", items[0])
         self.assertIn("Sign transient image digest", action)
 
+    def test_the_promotion_list_names_every_step_main_takes_in_order(self) -> None:
+        """
+        Join the promotion list to the statements `promote_stable.main()` runs.
+
+        Every step after the digest lookup is a bare call statement in
+        `main()`: it returns nothing, and either raises or moves a tag. The
+        list must give one item per such call, in the same order, so a guard
+        added to `main()` cannot go unmentioned here. #361 added the refusal
+        to move `latest` backwards while this test still pinned four items,
+        which made the list impossible to correct.
+        """
+        items = numbered_list_after("It:\n")
+        self.assertIn("resolves the candidate tag digest", items[0])
+        self.assertIn("skopeo_inspect_digest(candidate_by_tag", read("ci_tools/promote_stable.py"))
+        self.assertEqual(
+            len(items[1:]),
+            len(PROMOTION_STEP_PHRASES),
+            "one list item per step after the digest lookup",
+        )
+        self.assertEqual(promotion_statement_calls(), [call for call, _ in PROMOTION_STEP_PHRASES])
+        for item, (call, phrase) in zip(items[1:], PROMOTION_STEP_PHRASES):
+            self.assertIn(phrase, item, f"the item for {call} should say {phrase!r}")
+
+    def test_a_refused_promotion_is_documented_as_moving_no_tag(self) -> None:
+        text = re.sub(r"\s+", " ", doc())
+        self.assertIn("If this check refuses, neither tag moves.", text)
+        self.assertIn("If verification fails, neither tag moves.", text)
+
     def test_promotion_re_verifies_the_signature_before_moving_a_tag(self) -> None:
         items = numbered_list_after("It:\n")
-        self.assertEqual(len(items), 4)
         self.assertIn("re-verifies that digest's cosign signature", items[1])
         source = read("ci_tools/promote_stable.py")
         verify = source.index("verify_candidate_signature(")

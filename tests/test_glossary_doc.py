@@ -665,7 +665,7 @@ class CheckedInValueTests(unittest.TestCase):
         self.assertIn("not wired as a formal workflow-dispatch input", definition)
         offenders = [
             path.relative_to(REPO_ROOT)
-            for path in sorted(GITHUB_DIR.rglob("*.yml"))
+            for path in sorted([*GITHUB_DIR.rglob("*.yml"), *GITHUB_DIR.rglob("*.yaml")])
             if "DEFAULT_AKMODS_REF" in strip_yaml_comments(path.read_text(encoding="utf-8"))
         ]
         self.assertEqual(offenders, [], f"DEFAULT_AKMODS_REF is wired in {offenders}")

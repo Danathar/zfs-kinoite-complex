@@ -593,21 +593,23 @@ class ReplayClaimTests(unittest.TestCase):
     """
     "Why A Pin Still Exists At All": what a lock-file replay does with the akmods ref.
 
-    The document tells a maintainer that replaying `ci/inputs.lock.json` will not reproduce
-    the original upstream commit unless they set `AKMODS_UPSTREAM_REF` themselves. Both
-    halves are executed here against the committed lock file's shape.
+    The document tells a maintainer that replaying `ci/inputs.lock.json` resolves the
+    current tracking ref unless something pins a commit, and that an `akmods_upstream_ref`
+    field added to the lock file is used ahead of every other source. Both halves are
+    executed here against the committed lock file's shape.
     """
 
     def setUp(self) -> None:
         self.claim = " ".join(_section(DOC_TEXT, "## Why A Pin Still Exists At All"))
         self.lock = json.loads(LOCK_FILE.read_text(encoding="utf-8"))
 
-    def _replay(self, **env: str) -> str:
+    def _replay(self, lock_overrides: dict[str, str] | None = None, **env: str) -> str:
         with tempfile.TemporaryDirectory() as temp_dir:
             lock_path = Path(temp_dir) / "inputs.lock.json"
             replayed = dict(self.lock)
             replayed["base_image"] = "quay.io/example/kinoite:44"
             replayed["build_container"] = ""
+            replayed.update(lock_overrides or {})
             lock_path.write_text(json.dumps(replayed), encoding="utf-8")
             base_env = _wiped_env(
                 USE_INPUT_LOCK="true",
@@ -631,8 +633,35 @@ class ReplayClaimTests(unittest.TestCase):
     def test_a_replay_without_an_explicit_ref_falls_back_to_the_tracking_ref(self) -> None:
         self.assertEqual(self._replay(), TRACK_SHA)
 
-    def test_setting_the_ref_explicitly_replays_that_commit(self) -> None:
-        self.assertEqual(self._replay(AKMODS_UPSTREAM_REF=ENV_SHA), ENV_SHA)
+    def test_a_lock_file_field_wins_over_every_other_source(self) -> None:
+        self.assertIn("add an `akmods_upstream_ref` field to the lock file", self.claim)
+        pinned = dict(load_repo_defaults(), AKMODS_UPSTREAM_REF=PIN_SHA)
+        lock_sha = "d" * 40
+        with patch("ci_tools.resolve_build_inputs.load_repo_defaults", return_value=pinned):
+            replayed = self._replay({"akmods_upstream_ref": lock_sha}, AKMODS_UPSTREAM_REF=ENV_SHA)
+        self.assertEqual(replayed, lock_sha)
+
+    def test_a_lock_file_field_does_not_rescue_a_tracking_ref_that_no_longer_resolves(self) -> None:
+        self.assertIn("a lock field does not rescue a replay whose tracking ref no longer resolves", self.claim)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            lock_path = Path(temp_dir) / "inputs.lock.json"
+            replayed = dict(self.lock, base_image="quay.io/example/kinoite:44", build_container="")
+            replayed["akmods_upstream_ref"] = "d" * 40
+            lock_path.write_text(json.dumps(replayed), encoding="utf-8")
+            env = _wiped_env(
+                USE_INPUT_LOCK="true",
+                LOCK_FILE=str(lock_path),
+                BUILD_CONTAINER_REF="ghcr.io/example/devcontainer@sha256:" + "1" * 64,
+            )
+            with (
+                patch.dict(os.environ, env, clear=False),
+                patch(
+                    "ci_tools.resolve_build_inputs.git_ls_remote_resolve",
+                    side_effect=CiToolError("tracking ref is gone"),
+                ),
+                self.assertRaisesRegex(CiToolError, "tracking ref is gone"),
+            ):
+                resolve_configured_inputs()
 
 
 class ValidationInstructionTests(unittest.TestCase):

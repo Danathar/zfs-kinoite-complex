@@ -208,6 +208,24 @@ Every file in `.github/workflows/` has an entry here.
   [`SECURITY-AI.md`](./SECURITY-AI.md). Whether the credentials are set is not
   visible without admin rights; the run summary is the evidence.
 
+### `agent-audit.yml` — "Agent audit trail"
+
+- **Means:** a monthly read-back of the pull requests agents wrote. Its job
+  "Read back merged agent pull requests" lists every one merged in the last
+  31 days in the run summary: who opened and merged it, its signature line,
+  the issue it closes, its sign-offs, and whether the labeler marked it
+  safety-critical (Tier 3). It writes nothing else.
+- **Red means a record is missing:** a pull request the Hive app opened with
+  no `— hive:` signature line, or a commit on an agent pull request with no
+  `Signed-off-by:` trailer. Merge commits are exempt. Misses merged before
+  2026-10-08 are listed but do not fail it.
+- **First:** open the run summary. Each finding names the pull request and
+  the commits. Merged history is not rewritten to fix one. Say on the pull
+  request what the record lacks, and raise it with whoever runs that agent.
+- **Detail:** the header of `.github/workflows/agent-audit.yml`. What each
+  part of the record means:
+  [`agent-tasks/README.md`](./agent-tasks/README.md).
+
 ## Sticky akmods failure issues
 
 - **What they look like:** author `app/github-actions`, label `akmods-failure`,

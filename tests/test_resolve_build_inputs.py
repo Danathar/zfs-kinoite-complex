@@ -314,8 +314,9 @@ class ResolveDefaultAkmodsRefTests(unittest.TestCase):
 class LockFileAkmodsRefInvariantTests(unittest.TestCase):
     """
     The checked-in ci/inputs.lock.json must not carry its own akmods_upstream_ref.
-    ci/defaults.json is the one source of truth for the pinned akmods commit, and
-    a divergent value in the lock file would silently win during replay runs.
+    The resolver uses a lock file's akmods_upstream_ref ahead of every other
+    source, so a value left in the template would silently override
+    ci/defaults.json on every later replay.
     """
 
     def test_repo_lock_file_does_not_pin_akmods_upstream_ref(self) -> None:

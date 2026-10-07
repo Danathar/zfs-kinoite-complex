@@ -1025,6 +1025,8 @@ class DiagnoseGuardTableTests(unittest.TestCase):
         "Refusing to promote run": False,
         "Missing tag list": False,  # transient registry failure
         "GITHUB_RUN_NUMBER is not a run number": True,  # the workflow's environment
+        "REQUIRE_MATCH=true needs AKMODS_IMAGE_PINNED": True,  # the action's wiring
+        "Refusing to check akmods cache ref": True,  # whatever produced the ref
     }
 
     @classmethod

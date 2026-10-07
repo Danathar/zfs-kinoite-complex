@@ -733,8 +733,8 @@ class ReplayLockFileTests(unittest.TestCase):
         self.assertIn("REPLACE_ME", LOCK_FILE.read_text(encoding="utf-8"))
 
     def test_the_akmods_ref_is_still_sourced_from_defaults_not_the_lock(self) -> None:
-        # "akmods_upstream_ref is deliberately not in the lock file. It comes
-        # from ci/defaults.json so there is one source of truth."
+        # "akmods_upstream_ref is not in the checked-in lock file, and this
+        # table does not ask you to add it."
         self.assertNotIn("akmods_upstream_ref", self.lock)
         self.assertIn("AKMODS_UPSTREAM_REF", self.defaults)
 

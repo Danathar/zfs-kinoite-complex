@@ -10,10 +10,14 @@ behavior is attributable to something other than those inputs.
 
 **This is a partial replay, not an exact one, and the difference matters.** The
 lock file pins the base image, the build container, the brew payload image and
-the ZFS version. It does not pin the akmods source: `AKMODS_UPSTREAM_REF` is empty by default, so
+the ZFS version. It does not pin the ZFS kernel modules. Those come from the
+shared akmods cache image, and the cache check reuses whatever cache matches
+the kernel release and ZFS version, whichever akmods commit built it. The
+akmods source commit matters only when the cache is rebuilt, and it is not
+pinned by default either: `AKMODS_UPSTREAM_REF` is empty, so
 `_resolve_default_akmods_ref()` resolves the tracked `main` ref afresh on every
-run. If upstream advanced since the run you are reproducing, the replay builds
-different source. Say so in the result rather than concluding from a
+run. Either way the replay can ship modules built from different source than
+the run you are reproducing. Say so in the result rather than concluding from a
 non-reproduction that the cause was not in the inputs.
 
 Read this before starting: replay mode is reachable **only** from a manual
@@ -65,8 +69,27 @@ have moved since the run being replayed — and that payload is copied wholesale
 into the final image's root, so an unpinned one is a real difference between
 the replay and the run it is reproducing.
 
-`akmods_upstream_ref` is deliberately not in the lock file. It comes from
-`ci/defaults.json` so there is one source of truth.
+`akmods_upstream_ref` is not in the checked-in lock file, and this table does
+not ask you to add it. The resolver does read it: a lock that carries
+`akmods_upstream_ref` uses that commit ahead of every other source
+(`resolve_configured_inputs()` in `ci_tools/resolve_build_inputs.py`). The
+template stays without it because a value left there would override
+`ci/defaults.json` on every later replay. Copying `inputs.akmods_upstream_ref`
+into a filled-in lock would not make the replay exact, for two reasons:
+
+- It is the commit that run *resolved*, not necessarily the one that built its
+  modules. On a cache-reuse run the modules came from an earlier cache build.
+  The accurate record is the `org.zfs-kinoite-complex.akmods-image` label on the
+  published image; see the warning in
+  [`akmods-fork-maintenance.md`](../../docs/akmods-fork-maintenance.md).
+- A replay that reuses the shared cache never builds from the commit at all.
+  `ci_tools/check_akmods_cache.py` decides reuse from the kernel release, the
+  ZFS version and the signature.
+
+The input a replay really leaves unpinned is the akmods cache image. Pinning it
+would change the cache check, which
+[`risk-tiers.md`](../../docs/risk-tiers.md) lists as Tier 3, so it is a
+maintainer decision, not a lock-file edit.
 
 ## 3. Expect the build-container guard to fire
 

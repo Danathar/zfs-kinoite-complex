@@ -46,7 +46,7 @@ Every build records the resolved commit SHA in two places:
 
 ## Why A Pin Still Exists At All
 
-- **Reproducibility of a specific run.** Use `ci/inputs.lock.json` replay mode to restore a prior run's base image, build container, and OpenZFS version. Note the lock file does *not* carry the akmods commit — set `AKMODS_UPSTREAM_REF` explicitly to replay a specific upstream commit, or the replay will resolve the current tracking ref instead.
+- **Reproducibility of a specific run.** Use `ci/inputs.lock.json` replay mode to restore a prior run's base image, build container, and OpenZFS version. Note the lock file does *not* carry the akmods commit, so the replay resolves the current tracking ref unless something pins one. `build.yml` has no dispatch input for it and sets no `AKMODS_UPSTREAM_REF` environment variable, so in CI a pin means a commit on the replay branch: either set `AKMODS_UPSTREAM_REF` in [`ci/defaults.json`](../ci/defaults.json), or add an `akmods_upstream_ref` field to the lock file, which the resolver uses ahead of every other source. Neither makes the replay exact. A pinned commit is built only if the replay rebuilds the shared akmods cache, and the commit a run recorded may not be the one that built its modules (see the warning above). [`replay-a-build.prompt.md`](../.github/prompts/replay-a-build.prompt.md) has the details.
 - **Debugging.** Pinning short-term isolates the akmods side while you chase a build failure.
 - **Emergency freeze.** If upstream lands a change you actively do not trust, setting the `ci/defaults.json` pin freezes the repo to the last known-good SHA until you choose to unfreeze it.
 

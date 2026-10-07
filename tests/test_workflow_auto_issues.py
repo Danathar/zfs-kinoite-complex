@@ -258,9 +258,17 @@ class TrackStepTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(self._calls(), [])
 
-    def test_a_dispatched_run_on_main_is_tracked(self) -> None:
-        self._run(conclusion="failure", event="workflow_dispatch")
-        self.assertEqual([call[:2] for call in self._writes()], [["issue", "create"]])
+    def test_a_dispatched_run_neither_opens_nor_closes(self) -> None:
+        # Prune registry's schedule is a dry run and a dispatch can delete: a green dispatch (or
+        # dry run) is not evidence about the other mode, and a person dispatching is watching.
+        issues = [{"number": 7, "title": TITLE, "author": BOT}]
+        for conclusion in ("failure", "success"):
+            with self.subTest(conclusion=conclusion):
+                result = self._run(
+                    conclusion=conclusion, event="workflow_dispatch", open_issues=issues
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(self._calls(), [])
 
     def test_a_failed_issue_listing_fails_the_step_instead_of_filing_a_duplicate(self) -> None:
         result = self._run(conclusion="failure", list_rc=1)

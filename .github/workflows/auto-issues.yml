@@ -33,8 +33,14 @@ name: Auto issues
 # same title, and a failure must never be reported into an issue someone else
 # controls. Issues are listed rather than searched because the search index
 # lags. A further failure comments on the open issue instead of filing another.
-# The next passing scheduled or dispatched run on the default branch closes it,
-# the same way akmods-failure-triage.yml closes its sticky issue on a green build.
+# The next passing scheduled run on the default branch closes it, the same way
+# akmods-failure-triage.yml closes its sticky issue on a green build.
+#
+# Only scheduled runs count, in both directions. A person who dispatches a run
+# is watching it. And a dispatched run need not check what the scheduled one
+# does: Prune registry's schedule is always a dry run, while a dispatch with
+# `delete: true` deletes. Letting a green dry run close an issue opened by a
+# failed delete would claim a fix nobody made.
 #
 # It applies no label. ai-fix.yml acts on a label, and a failure report is not
 # a request for an agent to change anything.
@@ -89,13 +95,10 @@ jobs:
             echo "$WORKFLOW ran on $HEAD_REPO@$HEAD_BRANCH, not $REPO@$DEFAULT_BRANCH; nothing to track."
             exit 0
           fi
-          case "$EVENT" in
-            schedule|workflow_dispatch) ;;
-            *)
-              echo "$WORKFLOW ran on a $EVENT event; only scheduled and dispatched runs are tracked."
-              exit 0
-              ;;
-          esac
+          if [ "$EVENT" != "schedule" ]; then
+            echo "$WORKFLOW ran on a $EVENT event; only scheduled runs are tracked."
+            exit 0
+          fi
 
           # A cancelled or skipped run is neither a pass nor a failure. Closing
           # on one would hide a failure nobody has fixed.
@@ -138,7 +141,7 @@ jobs:
                 "" \
                 "Open the run and read the failed step's log. docs/ai-ops-runbook.md says what this workflow checks and what a failure in it means." \
                 "" \
-                "\`.github/workflows/auto-issues.yml\` opened this issue. It comments here on each further failure, and closes the issue when the next scheduled or dispatched run on \`$DEFAULT_BRANCH\` passes." \
+                "\`.github/workflows/auto-issues.yml\` opened this issue. It comments here on each further scheduled failure, and closes the issue when the next scheduled run on \`$DEFAULT_BRANCH\` passes. A run you dispatch by hand neither opens nor closes it." \
                 | gh issue create --repo "$REPO" --title "$title" --body-file -
               echo "$WORKFLOW failed; opened a tracking issue."
             fi

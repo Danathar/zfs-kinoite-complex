@@ -229,6 +229,10 @@ jobs:
               `main`, never force-push a shared branch, never merge, never
               approve, never move or delete a registry tag, and never dispatch
               build.yml -- its promote_to_stable input defaults to true.
+            - End every commit message with a `Signed-off-by:` trailer
+              naming the commit's author (`git commit -s`). The monthly
+              agent-audit.yml check fails any `ai-fix/*` pull request
+              with a non-merge commit that lacks one.
             - Never weaken a fail-closed check to make something pass. This
               codebase deliberately fails when ZFS does not match the primary
               kernel, when a signature cannot be verified, when a digest does

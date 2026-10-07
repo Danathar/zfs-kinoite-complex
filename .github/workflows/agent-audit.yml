@@ -105,13 +105,24 @@ jobs:
             exit 2
           fi
 
+          # A signature counts only as the body's last non-blank line, in the
+          # documented shape: `— hive: ` and then `key=value` fields. A body
+          # that quotes the line in its text is not signed by it. The first
+          # field is not pinned to `agent=`: the omp-backed runs sign
+          # `— hive: backend=omp model=...` with no role. Both jq programs
+          # below read the signature through this one definition.
+          signature_def='def signature:
+            (.body // "") | split("\n") | map(sub("\\s+$"; "")) | map(select(length > 0)) | (last // "")
+            | if test("^— hive: [a-z_]+=") then . else null end;'
+
           # The Hive app's login as `gh` spells it. The signature clause is
           # what catches the omp-backed runs, which open pull requests under
           # the maintainer's login. Renovate is a bot but not an agent in this
           # sense, so the app is matched by login, not by is_bot.
-          jq -c '[.[] | select(
+          jq -c "${signature_def}"'
+            [.[] | select(
                 .author.login == "app/danathar-atomic-hive"
-                or ((.body // "") | test("(^|\n)— hive:"))
+                or (signature != null)
                 or (.headRefName | startswith("ai-fix/")))]' merged.json > agents.json
 
           # Commits and closing issues are fetched one pull request at a time:
@@ -142,11 +153,9 @@ jobs:
           enforce_from="2026-10-08"
 
           jq --arg since "${SINCE}" --arg enforce "${enforce_from}" --arg total "${total}" \
-            --slurpfile details details.json --slurpfile parents parents.json '
+            --slurpfile details details.json --slurpfile parents parents.json "${signature_def}"'
             def ismerge: ($parents[0][.oid] // 1) > 1;
             def signed: .messageBody | test("(^|\n)Signed-off-by: ");
-            def signature:
-              (.body // "") | split("\n") | map(select(startswith("— hive:"))) | first;
             def row:
               . as $pr
               | ($details[0][$pr.number | tostring]) as $d

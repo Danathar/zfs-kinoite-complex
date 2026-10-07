@@ -72,7 +72,11 @@ the replay and the run it is reproducing.
 `akmods_upstream_ref` is not in the checked-in lock file, and this table does
 not ask you to add it. The resolver does read it: a lock that carries
 `akmods_upstream_ref` uses that commit ahead of every other source
-(`resolve_configured_inputs()` in `ci_tools/resolve_build_inputs.py`). The
+(`resolve_configured_inputs()` in `ci_tools/resolve_build_inputs.py`). It does
+not stand in for the fallback, though: the resolver works out the configured ref
+(`_resolve_default_akmods_ref()`) before it opens the lock, so a replay whose
+tracking ref has been deleted, or whose `git ls-remote` fails, still stops there
+even when the lock carries a commit. The
 template stays without it because a value left there would override
 `ci/defaults.json` on every later replay. Copying `inputs.akmods_upstream_ref`
 into a filled-in lock would not make the replay exact, for two reasons:

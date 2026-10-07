@@ -641,6 +641,28 @@ class ReplayClaimTests(unittest.TestCase):
             replayed = self._replay({"akmods_upstream_ref": lock_sha}, AKMODS_UPSTREAM_REF=ENV_SHA)
         self.assertEqual(replayed, lock_sha)
 
+    def test_a_lock_file_field_does_not_rescue_a_tracking_ref_that_no_longer_resolves(self) -> None:
+        self.assertIn("a lock field does not rescue a replay whose tracking ref no longer resolves", self.claim)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            lock_path = Path(temp_dir) / "inputs.lock.json"
+            replayed = dict(self.lock, base_image="quay.io/example/kinoite:44", build_container="")
+            replayed["akmods_upstream_ref"] = "d" * 40
+            lock_path.write_text(json.dumps(replayed), encoding="utf-8")
+            env = _wiped_env(
+                USE_INPUT_LOCK="true",
+                LOCK_FILE=str(lock_path),
+                BUILD_CONTAINER_REF="ghcr.io/example/devcontainer@sha256:" + "1" * 64,
+            )
+            with (
+                patch.dict(os.environ, env, clear=False),
+                patch(
+                    "ci_tools.resolve_build_inputs.git_ls_remote_resolve",
+                    side_effect=CiToolError("tracking ref is gone"),
+                ),
+                self.assertRaisesRegex(CiToolError, "tracking ref is gone"),
+            ):
+                resolve_configured_inputs()
+
 
 class ValidationInstructionTests(unittest.TestCase):
     """The two things the document tells a maintainer to run still exist under those names."""

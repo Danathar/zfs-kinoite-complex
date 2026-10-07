@@ -635,6 +635,7 @@ class ReplayClaimTests(unittest.TestCase):
 
     def test_a_lock_file_field_wins_over_every_other_source(self) -> None:
         self.assertIn("add an `akmods_upstream_ref` field to the lock file", self.claim)
+        self.assertIn("which the resolver uses ahead of every other source", self.claim)
         pinned = dict(load_repo_defaults(), AKMODS_UPSTREAM_REF=PIN_SHA)
         lock_sha = "d" * 40
         with patch("ci_tools.resolve_build_inputs.load_repo_defaults", return_value=pinned):
@@ -662,6 +663,43 @@ class ReplayClaimTests(unittest.TestCase):
                 self.assertRaisesRegex(CiToolError, "tracking ref is gone"),
             ):
                 resolve_configured_inputs()
+
+    def test_build_yml_gives_a_replay_no_other_way_to_pin_the_ref(self) -> None:
+        """
+        "`build.yml` has no dispatch input for it and sets no `AKMODS_UPSTREAM_REF`
+        environment variable, so in CI a pin means a commit on the replay branch."
+
+        That is why the document sends the maintainer to `ci/defaults.json` or the lock
+        file. A dispatch input or a workflow-level env value would be a third, one-click
+        way to pin the ref, and the sentence would then steer people away from it.
+        """
+
+        self.assertIn(
+            "`build.yml` has no dispatch input for it and sets no `AKMODS_UPSTREAM_REF` "
+            "environment variable, so in CI a pin means a commit on the replay branch",
+            self.claim,
+        )
+        workflow = BUILD_WORKFLOW.read_text(encoding="utf-8")
+        lines = workflow.splitlines()
+        start = next(i for i, line in enumerate(lines) if line.strip() == "workflow_dispatch:")
+        dispatch_inputs = []
+        for line in lines[start + 1 :]:
+            if line.strip() and not line.startswith("    "):
+                break
+            match = re.match(r"^      ([A-Za-z0-9_]+):\s*$", line)
+            if match:
+                dispatch_inputs.append(match.group(1))
+        self.assertIn("use_input_lock", dispatch_inputs, "the dispatch-input reader found nothing")
+        self.assertEqual(
+            [name for name in dispatch_inputs if "akmods" in name and "ref" in name],
+            [],
+            "build.yml now takes the akmods ref as a dispatch input",
+        )
+        self.assertNotRegex(
+            workflow,
+            r"(?m)^\s*AKMODS_UPSTREAM_REF\s*:",
+            "build.yml now sets AKMODS_UPSTREAM_REF itself",
+        )
 
 
 class ValidationInstructionTests(unittest.TestCase):

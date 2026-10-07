@@ -751,6 +751,131 @@ class ReplayLockFileTests(unittest.TestCase):
         self.assertIn("DEFAULT_BUILD_CONTAINER_IMAGE", self.defaults)
 
 
+class ReplayAkmodsCaveatTests(unittest.TestCase):
+    """
+    The opening caveat and section 2's akmods paragraph: why a replay stays partial.
+
+    Both explain the gap by naming code -- two resolver functions, the order they
+    run in, the label that records which cache a build consumed, what the cache
+    check compares, and the tier that check sits in. None of those names was read
+    by any test, so a renamed function, a swapped label or a reordered resolver
+    left the paragraph telling an operator something the code no longer does.
+    The resolver's behaviour itself is run in
+    tests/test_akmods_fork_maintenance_doc.py (ReplayClaimTests); this class
+    holds the prompt's own sentences to the same code.
+    """
+
+    def setUp(self) -> None:
+        text = REPLAY.read_text(encoding="utf-8")
+        self.caveat = collapse(text.split("\n## 1.", 1)[0])
+        self.lock_section = collapse(section(text, "2."))
+        self.both = f"{self.caveat} {self.lock_section}"
+
+    def resolver_body(self) -> ast.FunctionDef:
+        tree = ast.parse((CI_TOOLS / "resolve_build_inputs.py").read_text(encoding="utf-8"))
+        return next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "resolve_configured_inputs"
+        )
+
+    def test_every_function_named_is_defined_in_ci_tools(self) -> None:
+        named = re.findall(r"`([A-Za-z_][A-Za-z0-9_]*)\(\)`", self.both)
+        self.assertIn("resolve_configured_inputs", named)
+        self.assertIn("_resolve_default_akmods_ref", named)
+        defined: dict[str, str] = {}
+        for path in sorted(CI_TOOLS.glob("*.py")):
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+                if isinstance(node, ast.FunctionDef):
+                    defined.setdefault(node.name, path.relative_to(REPO_ROOT).as_posix())
+        for name in named:
+            with self.subTest(function=name):
+                self.assertIn(name, defined, f"the replay runbook names {name}(), which ci_tools/ does not define")
+        # "(`resolve_configured_inputs()` in `ci_tools/resolve_build_inputs.py`)"
+        for name, path in re.findall(r"`([A-Za-z_][A-Za-z0-9_]*)\(\)` in `(ci_tools/[a-z_]+\.py)`", self.both):
+            with self.subTest(function=name, path=path):
+                self.assertEqual(defined.get(name), path)
+
+    def test_the_configured_ref_is_resolved_before_the_lock_is_opened(self) -> None:
+        # "the resolver works out the configured ref (`_resolve_default_akmods_ref()`)
+        # before it opens the lock, so a replay whose tracking ref has been deleted
+        # ... still stops there even when the lock carries a commit."
+        self.assertIn("(`_resolve_default_akmods_ref()`) before it opens the lock", self.lock_section)
+        self.assertIn("still stops there even when the lock carries a commit", self.lock_section)
+        calls = {
+            node.func.id: node.lineno
+            for node in ast.walk(self.resolver_body())
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        }
+        self.assertIn("_resolve_default_akmods_ref", calls)
+        self.assertIn("_load_lock_file", calls)
+        self.assertLess(calls["_resolve_default_akmods_ref"], calls["_load_lock_file"])
+
+    def test_a_lock_value_is_used_ahead_of_the_configured_ref(self) -> None:
+        # "a lock that carries `akmods_upstream_ref` uses that commit ahead of
+        # every other source": the lock's value is read first and the configured
+        # ref only fills it when it is empty.
+        self.assertIn(
+            "a lock that carries `akmods_upstream_ref` uses that commit ahead of every other source",
+            self.lock_section,
+        )
+        source = ast.unparse(self.resolver_body())
+        self.assertIn("akmods_upstream_ref = str(lock_data.get('akmods_upstream_ref') or '')", source)
+        self.assertIn("if not akmods_upstream_ref:\n            akmods_upstream_ref = default_akmods_ref", source)
+
+    def test_the_label_named_as_the_accurate_record_carries_the_consumed_cache(self) -> None:
+        match = re.search(r"The accurate record is the `([^`]+)` label", self.lock_section)
+        self.assertIsNotNone(match, "the runbook no longer names the label that records the cache")
+        action = (REPO_ROOT / ".github" / "actions" / "build-native-image" / "action.yml").read_text(
+            encoding="utf-8"
+        )
+        labels = dict(re.findall(r'--label "([a-z0-9.-]+)=\$\{([A-Z_]+)\}"', action))
+        self.assertEqual(
+            labels.get(match.group(1)),
+            "AKMODS_IMAGE",
+            f"{match.group(1)} is not the label the build writes from the akmods cache image",
+        )
+
+    def test_the_cache_check_never_looks_at_the_akmods_commit(self) -> None:
+        # "the cache check reuses whatever cache matches the kernel release and ZFS
+        # version, whichever akmods commit built it" and "decides reuse from the
+        # kernel release, the ZFS version and the signature". If the check started
+        # comparing the commit, a pinned ref would make a replay exact and both
+        # sentences would be telling the operator not to bother.
+        self.assertIn(
+            "reuses whatever cache matches the kernel release and ZFS version, whichever akmods commit built it",
+            self.caveat,
+        )
+        self.assertIn(
+            "`ci_tools/check_akmods_cache.py` decides reuse from the kernel release, the ZFS version and the signature.",
+            self.lock_section,
+        )
+        source = CHECK_AKMODS_CACHE.read_text(encoding="utf-8")
+        for name in ("akmods_upstream_ref", "AKMODS_UPSTREAM_REF", "akmods-ref"):
+            with self.subTest(name=name):
+                self.assertNotIn(name, source)
+
+    def test_the_tier_cited_for_the_cache_check_is_the_one_risk_tiers_gives_it(self) -> None:
+        cited = re.search(r"\[`risk-tiers\.md`\]\([^)]*\) lists as Tier (\d)", self.lock_section)
+        self.assertIsNotNone(cited, "the runbook no longer cites a tier for the cache check")
+        tier = None
+        for line in (REPO_ROOT / "docs" / "risk-tiers.md").read_text(encoding="utf-8").splitlines():
+            heading = re.match(r"### Tier (\d)\b", line)
+            if heading:
+                tier = heading.group(1)
+            elif line.strip() == f"- `{CHECK_AKMODS_CACHE.relative_to(REPO_ROOT).as_posix()}`":
+                break
+        else:
+            self.fail("docs/risk-tiers.md no longer lists ci_tools/check_akmods_cache.py")
+        self.assertEqual(cited.group(1), tier)
+
+    def test_the_lock_template_points_at_this_runbook_for_the_reason(self) -> None:
+        # The template's description defers the "why not exact" to this file.
+        description = json.loads(LOCK_FILE.read_text(encoding="utf-8"))["description"]
+        self.assertIn("The resolver does honour an akmods_upstream_ref field if one is added", description)
+        self.assertIn(REPLAY.relative_to(REPO_ROOT).as_posix(), description)
+
+
 class ReplayDispatchTests(unittest.TestCase):
     """Sections 4 and 5 describe what dispatching build.yml costs."""
 

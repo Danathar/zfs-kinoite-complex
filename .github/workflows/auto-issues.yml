@@ -59,10 +59,14 @@ on:
       - completed
 
 # Two completions of the same workflow must not both find no issue open and
-# file two.
+# file two, so they run one at a time. `queue: max` keeps every waiting run:
+# with the default `queue: single`, a third completion cancels the one already
+# pending, before its step can check EVENT, so a dispatched run could replace
+# a scheduled failure and no issue would be opened.
 concurrency:
   group: auto-issues-${{ github.event.workflow_run.name }}
   cancel-in-progress: false
+  queue: max
 
 jobs:
   track:

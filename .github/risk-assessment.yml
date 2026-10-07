@@ -1,0 +1,26 @@
+# Risk assessment for changes to this repository.
+#
+# Source of truth is AGENTS.md section 0 and docs/risk-tiers.md; this file only
+# names the paths so tooling can find them. If it disagrees with those pages,
+# the pages win.
+
+version: 1
+
+# Paths on the build, promotion and signing path. A bad change here can reach a
+# booted machine through `bootc upgrade`, so every change needs an explicit
+# statement of what could reach a machine if it is wrong.
+safety_critical:
+  - .github/workflows/build.yml
+  - .github/actions/publish-native-image
+  - ci_tools/sign_image.py
+  - ci_tools/promote_stable.py
+  - ci_tools/check_akmods_cache.py
+  - containerfiles/zfs-akmods/install_zfs_from_akmods_cache.py
+  - files/scripts/configure_signing_policy.py
+
+# Rules that apply to every change, human or agent.
+rules:
+  - Never weaken a fail-closed check to make something pass.
+  - Do not push, promote, tag or delete published artifacts without the maintainer.
+  - Surface pool-feature rollback risk for any ZFS version or kernel change.
+  - A green pipeline proves the build completed, not that the image is safe to boot.

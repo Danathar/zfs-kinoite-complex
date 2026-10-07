@@ -21,11 +21,15 @@ from __future__ import annotations
 
 import re
 import subprocess
+import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW_DIR = REPO_ROOT / ".github" / "workflows"
+ACTION_DIR = REPO_ROOT / ".github" / "actions"
 DOCS_DIR = REPO_ROOT / "docs"
 DOC_MAP = DOCS_DIR / "documentation-guide.md"
 QUALITY = DOCS_DIR / "quality.md"
@@ -41,6 +45,18 @@ def workflow_paths() -> list[Path]:
     """
 
     return sorted([*WORKFLOW_DIR.glob("*.yml"), *WORKFLOW_DIR.glob("*.yaml")])
+
+
+def action_paths() -> list[Path]:
+    """Every local composite action: each `action.yml` and `action.yaml` under ACTION_DIR.
+
+    GitHub loads an action from either spelling, so the same rule as
+    workflow_paths() applies: a scan that globbed `action.yml` alone would
+    exempt an action written as `action.yaml`. Scans over the actions read
+    their list from here.
+    """
+
+    return sorted([*ACTION_DIR.glob("*/action.yml"), *ACTION_DIR.glob("*/action.yaml")])
 
 
 LINK_RE = re.compile(r"\]\(([^)\s]+)\)")
@@ -224,6 +240,119 @@ class WorkflowCoverageTests(unittest.TestCase):
         for workflow in ("build.yml", "build-pr.yml", "build-branch.yml", "test.yml"):
             with self.subTest(workflow=workflow):
                 self.assertIn(workflow, quality)
+
+
+# A glob or rglob call whose quoted pattern ends in `.yml`, the one spelling.
+ONE_SPELLING_GLOB_RE = re.compile(r"\.r?glob\(\s*\"([^\"]*\.yml)\"\s*\)")
+
+# Scans that read `.yml` alone on purpose, each with the test that guards the other spelling.
+ONE_SPELLING_ALLOWED = {
+    # test_no_template_uses_the_yaml_extension_github_ignores fails on any `.yaml` form.
+    ("tests/test_issue_templates.py", "*.yml"),
+}
+
+
+def single_spelling_globs(text: str) -> list[tuple[int, str]]:
+    """Each `.yml` glob pattern in `text`, by line number, whose `.yaml` partner is not quoted
+    on the same line."""
+
+    found = []
+    for number, line in enumerate(text.splitlines(), 1):
+        for pattern in ONE_SPELLING_GLOB_RE.findall(line):
+            if f'"{pattern[: -len(".yml")]}.yaml"' not in line:
+                found.append((number, pattern))
+    return found
+
+
+def tree_single_spelling_globs() -> dict[tuple[str, str], list[int]]:
+    """single_spelling_globs() over every Python file under tests/, keyed by (path, pattern)."""
+
+    found: dict[tuple[str, str], list[int]] = {}
+    for path in sorted((REPO_ROOT / "tests").rglob("*.py")):
+        relative = path.relative_to(REPO_ROOT).as_posix()
+        for number, pattern in single_spelling_globs(path.read_text(encoding="utf-8")):
+            found.setdefault((relative, pattern), []).append(number)
+    return found
+
+
+class YamlSpellingTests(unittest.TestCase):
+    """
+    GitHub runs a workflow, and loads a composite action, from either `.yml` or `.yaml`.
+    Every scan over them reads its list from workflow_paths() or action_paths(), so those
+    two helpers decide what the scans can see, and a helper that dropped one spelling would
+    exempt every file written that way from every scan at once.
+    """
+
+    def _listing(self, helper, attribute: str, files: list[str]) -> list[str]:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name in files:
+                (root / name).parent.mkdir(parents=True, exist_ok=True)
+                (root / name).write_text("name: x\n", encoding="utf-8")
+            with mock.patch.object(sys.modules[__name__], attribute, root):
+                return [path.relative_to(root).as_posix() for path in helper()]
+
+    def test_workflow_paths_lists_both_spellings_and_nothing_else(self) -> None:
+        listed = self._listing(
+            workflow_paths, "WORKFLOW_DIR", ["a.yml", "b.yaml", "notes.md", "nested/c.yml"]
+        )
+        self.assertEqual(listed, ["a.yml", "b.yaml"])
+
+    def test_action_paths_lists_both_spellings_and_nothing_else(self) -> None:
+        listed = self._listing(
+            action_paths,
+            "ACTION_DIR",
+            [
+                "one/action.yml",
+                "two/action.yaml",
+                "three/other.yml",
+                "action.yml",
+                "four/deep/action.yml",
+                "five/action.yhtml",
+            ],
+        )
+        self.assertEqual(listed, ["one/action.yml", "two/action.yaml"])
+
+    def test_the_real_actions_are_all_listed(self) -> None:
+        actions = action_paths()
+        self.assertGreater(len(actions), 1)
+        self.assertEqual(
+            {path.parent for path in actions},
+            {path for path in ACTION_DIR.iterdir() if path.is_dir()},
+            "a directory under .github/actions has no action.yml or action.yaml",
+        )
+
+    def test_the_detector_flags_only_a_glob_left_without_its_partner(self) -> None:
+        def call(verb: str, pattern: str) -> str:
+            return f'DIR.{verb}("{pattern}")'
+
+        flagged = {
+            call("glob", "*.yml"): [(1, "*.yml")],
+            call("rglob", "*/action.yml"): [(1, "*/action.yml")],
+            # The partner has to be a quoted pattern, not the word in a comment.
+            call("glob", "*.yml") + "  # *.yaml is rare": [(1, "*.yml")],
+            f'[*{call("glob", "*.yml")}, *{call("glob", "*.yaml")}]': [],
+            f'[*{call("glob", "*/action.yml")}, *{call("glob", "*/action.yaml")}]': [],
+            call("glob", "*.md"): [],
+            call("glob", "*.yaml"): [],
+        }
+        for line, expected in flagged.items():
+            with self.subTest(line=line):
+                self.assertEqual(single_spelling_globs(line), expected)
+        self.assertEqual(single_spelling_globs("x = 1\n" + call("glob", "*.yml")), [(2, "*.yml")])
+
+    def test_no_test_globs_a_single_yaml_spelling(self) -> None:
+        offenders = sorted(set(tree_single_spelling_globs()) - ONE_SPELLING_ALLOWED)
+        self.assertEqual(
+            offenders,
+            [],
+            "these scans read one YAML spelling; use workflow_paths() or action_paths()",
+        )
+
+    def test_the_single_spelling_allowance_is_still_needed(self) -> None:
+        # An allowance whose glob is gone would quietly excuse the next one written there.
+        stale = sorted(ONE_SPELLING_ALLOWED - set(tree_single_spelling_globs()))
+        self.assertEqual(stale, [], f"allowed, but no longer in the tree: {stale}")
 
 
 if __name__ == "__main__":

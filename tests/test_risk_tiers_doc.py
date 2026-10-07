@@ -75,6 +75,7 @@ UNCLASSIFIED = {
     ".github/ISSUE_TEMPLATE/build-failure.yml": "issue form; no label covers ISSUE_TEMPLATE",
     ".github/ISSUE_TEMPLATE/config.yml": "issue chooser config",
     ".github/ISSUE_TEMPLATE/coverage-gap.yml": "issue form; no label covers ISSUE_TEMPLATE",
+    ".github/risk-assessment.yml": "names the Tier 3 paths for tooling; the tier pages are its source of truth",
     "ruff.toml": "lint configuration the CI unit job runs under",
 }
 

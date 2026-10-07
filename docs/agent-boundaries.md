@@ -31,7 +31,7 @@ much review a change needs is [`risk-tiers.md`](./risk-tiers.md).
 | [`.github/policies/workflow-permissions.json`](../.github/policies/workflow-permissions.json) | A workflow's `GITHUB_TOKEN` gaining a scope the policy file does not grant. `tests/test_workflow_permissions_policy.py` fails until the same pull request changes both files. | every agent | [SECURITY-AI.md](./SECURITY-AI.md#what-an-agent-may-do-unattended) |
 | The `preflight` job in [`ai-fix.yml`](../.github/workflows/ai-fix.yml) | An agent started by a bot, from a fork, or with no credentials. The agent job it starts has no `packages: write` and no `SIGNING_SECRET`. | the agent `ai-fix.yml` starts | [multi-agent.md](./multi-agent.md#how-work-reaches-an-agent) |
 | The `ai-fix/**` exclusion in [`build-branch.yml`](../.github/workflows/build-branch.yml) | An `ai-fix/*` branch publishing a branch image. `build.yml` runs only on `main`, and `build-pr.yml` stops before any push or signing step. | the agent `ai-fix.yml` starts | [SECURITY-AI.md](./SECURITY-AI.md#what-an-agent-branch-can-actually-cause-here) |
-| [`.claude/settings.json`](../.claude/settings.json) | Reading `cosign.key`, `.env`, a PEM file or an SSH private key. Signing, registry pushes and deletes, merging, dispatching a workflow, releases, secrets, labels, the force-push and delete spellings a prefix rule can see, `git reset --hard`, `git clean`, and destructive `zpool` and `zfs` commands. It asks before an ordinary push, commit or pull request. | Claude Code sessions only | [SECURITY-AI.md](./SECURITY-AI.md#what-an-agent-may-do-unattended) |
+| [`.claude/settings.json`](../.claude/settings.json) | Reading `cosign.key`, `.env`, a `.pem` or `.p12` file, or an SSH private key named `id_rsa` or `id_ed25519`; a key under any other name is not denied. Signing, registry pushes and deletes, merging, dispatching a workflow, releases, secrets, labels, the force-push and delete spellings a prefix rule can see, `git reset --hard`, `git clean`, and destructive `zpool` and `zfs` commands. It asks before an ordinary push, commit or pull request. | Claude Code sessions only | [SECURITY-AI.md](./SECURITY-AI.md#what-an-agent-may-do-unattended) |
 | [`.claude/hooks/gate-git-diff.sh`](../.claude/hooks/gate-git-diff.sh) | An allow-listed command, such as `git diff` or `gh pr view --jq`, spelled so it reads or writes a file the deny rules protect, or prints the environment. | Claude Code sessions only | [SECURITY-AI.md](./SECURITY-AI.md#what-an-agent-may-do-unattended) |
 | [`tests/run_tests.py`](../tests/run_tests.py) | The one test command that runs with no prompt importing code outside `tests/` or code git does not track, or writing to a path it names. | Claude Code sessions only | [SECURITY-AI.md](./SECURITY-AI.md#every-deny-row-is-conditional-on-what-may-be-imported) |
 
@@ -40,8 +40,8 @@ Code's format, and an agent on another backend does not read them. The runner
 is a gate only because the settings file allows it and not `pytest` itself.
 The gates that hold for every agent are the ones on GitHub's side.
 
-The first two rows stop a merge, not a publish. `build.yml` does not run the
-unit suite, so the daily build signs and promotes whatever is on `main`.
+The first three rows stop a merge, not a publish. The permissions-policy test
+runs inside `Python Unit Tests`, and `build.yml` runs neither, so the daily build signs and promotes whatever is on `main`.
 [`quality.md`](./quality.md#the-first-three-block-a-merge-not-a-publish) says
 what does stop a publish.
 

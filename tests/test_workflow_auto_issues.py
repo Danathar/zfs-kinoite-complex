@@ -94,7 +94,7 @@ class WatchedWorkflowsTests(unittest.TestCase):
         self.watched = set(_triggers(_load(WORKFLOW_PATH))["workflow_run"]["workflows"])
         self.names = {}
         self.scheduled = set()
-        for path in sorted(WORKFLOW_DIR.glob("*.yml")):
+        for path in sorted([*WORKFLOW_DIR.glob("*.yml"), *WORKFLOW_DIR.glob("*.yaml")]):
             workflow = _load(path)
             self.names[workflow["name"]] = path.name
             if "schedule" in _triggers(workflow):

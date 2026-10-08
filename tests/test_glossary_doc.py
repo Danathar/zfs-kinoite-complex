@@ -76,7 +76,7 @@ from ci_tools.tagging_context import (
     build_candidate_tag,
     export_registry_context_values,
 )
-from tests.test_docs_consistency import workflow_paths
+from tests.test_docs_consistency import action_paths, workflow_paths
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DOC = REPO_ROOT / "docs" / "glossary.md"
@@ -369,7 +369,7 @@ def workflow_variables() -> set[str]:
     """
 
     found = set()
-    for path in sorted([*workflow_paths(), *ACTION_DIR.glob("*/action.yml")]):
+    for path in sorted([*workflow_paths(), *action_paths()]):
         text = strip_yaml_comments(path.read_text(encoding="utf-8"))
         for pattern in WORKFLOW_VARIABLE_RES:
             found.update(pattern.findall(text))
@@ -777,7 +777,7 @@ class PipelineClaimTests(unittest.TestCase):
     def test_every_local_action_is_the_composite_kind_the_entry_describes(self) -> None:
         definition = definition_of(doc_text(), "composite action")
         self.assertIn("without moving logic out of version control", definition)
-        actions = sorted(ACTION_DIR.glob("*/action.yml"))
+        actions = action_paths()
         self.assertGreater(len(actions), 1)
         for action in actions:
             text = strip_yaml_comments(action.read_text(encoding="utf-8"))
@@ -818,7 +818,7 @@ class CommandGlossaryTests(unittest.TestCase):
         self.assertIn("used by the GitHub Action in this repo", definition_of(doc_text(), "buildah"))
         runners = [
             action.parent.name
-            for action in sorted(ACTION_DIR.glob("*/action.yml"))
+            for action in action_paths()
             if re.search(
                 r"^\s*buildah build",
                 strip_yaml_comments(action.read_text(encoding="utf-8")),

@@ -43,7 +43,7 @@ SLUG = "Danathar/zfs-kinoite-complex"
 # The workflows the page names as the ones that run on a schedule. If another
 # one gains a `schedule:` trigger, the page's sentence is wrong and the person
 # who added it should read it.
-SCHEDULED = ("build.yml", "nightly-compliance.yml", "prune-registry.yml")
+SCHEDULED = ("agent-audit.yml", "build.yml", "nightly-compliance.yml", "prune-registry.yml")
 
 # `gh` subcommands the page may use. Every command on it is a look, not a change.
 READERS = {("pr", "list"), ("issue", "list"), ("label", "list")}

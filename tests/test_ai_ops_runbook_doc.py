@@ -102,6 +102,7 @@ EXPECTED_QUOTED = {
         "Akmods Failure Triage",
         "Manage sticky akmods failure issue",
     ],
+    "auto-issues.yml": ["Auto issues", "Open, update or close the tracking issue"],
     "ai-fix.yml": ["AI fix", "Check credentials and target", "Run the agent"],
 }
 

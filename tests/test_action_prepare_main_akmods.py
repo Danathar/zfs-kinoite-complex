@@ -36,18 +36,26 @@ nothing installed, matching tests/test_action_rechunk_native_image.py.
 
 from __future__ import annotations
 
+import dataclasses
+import io
+import json
+import os
 import re
 import subprocess
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 try:
     import yaml
 except ImportError:  # pragma: no cover - exercised only where PyYAML is absent
     yaml = None
 
+import ci_tools.write_build_inputs_manifest as manifest_writer
 from ci_tools.cli import command_map
+from ci_tools.resolve_build_inputs import ResolvedBuildInputs, write_resolved_build_outputs
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ACTION_PATH = REPO_ROOT / ".github" / "actions" / "prepare-main-akmods" / "action.yml"
@@ -736,6 +744,109 @@ class StepWiringTests(unittest.TestCase):
 
         env = _run_step("Resolve build inputs for this run").only_call.env
         self.assertEqual(env["GITHUB_TOKEN"], INPUTS["registry_token"])
+
+
+# The one input the build-inputs record names differently from the `resolve` step's output.
+MANIFEST_ALIASES = {"fedora_version": "version"}
+
+# What the runner itself exports to every step, which the record also reads.
+RUNNER_ENV = {
+    "GITHUB_REPOSITORY": "Danathar/zfs-kinoite-complex",
+    "GITHUB_WORKFLOW": "Build And Promote Main Image",
+    "GITHUB_RUN_ID": "123456",
+    "GITHUB_RUN_ATTEMPT": "1",
+    "GITHUB_RUN_NUMBER": "99",
+    "GITHUB_REF": "refs/heads/main",
+    "GITHUB_SHA": "f" * 40,
+    "GITHUB_ACTOR": "danathar",
+}
+
+
+def _distinct_resolve_outputs() -> dict[str, str]:
+    """
+    RESOLVE_OUTPUTS with every value unique to its own name.
+
+    In the shared fixture `version` and `base_image_tag` are both "42" and the two kernel fields
+    are equal, as they often are on a real run, so a step that read one for the other would still
+    produce the right-looking value. Here no two names can be confused.
+    """
+
+    distinct = {name: f"{name}-value" for name in RESOLVE_OUTPUTS}
+    distinct["use_input_lock"] = "true"
+    distinct["detected_kernel_releases"] = "detected-kernel-a detected-kernel-b"
+    return distinct
+
+
+@unittest.skipIf(yaml is None, "PyYAML is not installed")
+class ResolvedInputRecordTests(unittest.TestCase):
+    """
+    The resolved inputs travel by name through four hand-written lists: the outputs
+    `write_resolved_build_outputs` writes, the `RESOLVE_OUTPUTS` fixture above, the `env:` block of
+    the "Write build inputs manifest" step, and the `require_env` calls in
+    ci_tools/write_build_inputs_manifest.py.
+
+    Each list was checked only against itself. Wiring `BASE_IMAGE_PINNED` to
+    `steps.resolve.outputs.base_image_ref` recorded the floating tag as the pinned base, and
+    renaming an output in `write_resolved_build_outputs` left this file's fixture still supplying
+    the old name; both kept every test green.
+    """
+
+    def test_the_fixture_supplies_exactly_what_the_resolve_step_writes(self) -> None:
+        resolved = ResolvedBuildInputs(
+            **{
+                field.name: (
+                    False
+                    if field.type == "bool"
+                    else ("a", "b")
+                    if field.name == "detected_kernel_releases"
+                    else f"{field.name}-value"
+                )
+                for field in dataclasses.fields(ResolvedBuildInputs)
+            }
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            output_path = Path(tmp) / "github-output"
+            output_path.touch()
+            with mock.patch.dict(os.environ, {"GITHUB_OUTPUT": str(output_path)}):
+                write_resolved_build_outputs(resolved)
+            text = output_path.read_text(encoding="utf-8")
+        written = re.findall(r"^([A-Za-z0-9_]+)<<", text, re.MULTILINE)
+
+        self.assertEqual(sorted(written), sorted(RESOLVE_OUTPUTS))
+
+    def test_the_record_holds_each_resolved_input_under_its_own_name(self) -> None:
+        distinct = _distinct_resolve_outputs()
+        with mock.patch.dict(RESOLVE_OUTPUTS, distinct):
+            step_env = _run_step("Write build inputs manifest").only_call.env
+
+        with tempfile.TemporaryDirectory() as tmp:
+            artifact_dir = Path(tmp) / "artifacts"
+            with (
+                mock.patch.object(manifest_writer, "ARTIFACT_DIR", artifact_dir),
+                mock.patch.object(
+                    manifest_writer, "ARTIFACT_PATH", artifact_dir / "build-inputs.json"
+                ),
+                mock.patch.dict(os.environ, {**RUNNER_ENV, **step_env}, clear=True),
+                redirect_stdout(io.StringIO()),
+            ):
+                manifest_writer.main()
+            document = json.loads((artifact_dir / "build-inputs.json").read_text(encoding="utf-8"))
+        recorded = document["inputs"]
+
+        self.assertEqual(
+            sorted(MANIFEST_ALIASES.get(name, name) for name in recorded),
+            sorted(RESOLVE_OUTPUTS),
+            "the record and the resolve step disagree about which inputs exist",
+        )
+        for name, value in recorded.items():
+            output = MANIFEST_ALIASES.get(name, name)
+            expected: object = distinct[output]
+            if output == "use_input_lock":
+                expected = expected == "true"
+            elif output == "detected_kernel_releases":
+                expected = str(expected).split()
+            with self.subTest(input=name):
+                self.assertEqual(value, expected)
 
 
 if __name__ == "__main__":

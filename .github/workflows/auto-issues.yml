@@ -8,12 +8,15 @@ name: Auto issues
 # stop verifying against cosign.pub, and Prune registry is the only thing that
 # removes old throwaway tags. Both run on a clock with nobody watching. A red
 # run shows up as a badge at most, and GitHub emails only whoever last edited
-# the cron line. This turns that red run into an issue someone will see.
+# the cron line. This turns that red run into an issue someone will see. The
+# monthly Agent audit trail is the same: a finding fails a run nobody is
+# watching, and its findings sit in that run's summary.
 #
 # What it watches, and what it deliberately does not:
 #
-#   - `Nightly compliance` (nightly-compliance.yml) and `Prune registry`
-#     (prune-registry.yml) are watched.
+#   - `Nightly compliance` (nightly-compliance.yml), `Prune registry`
+#     (prune-registry.yml) and `Agent audit trail` (agent-audit.yml) are
+#     watched.
 #   - `Build And Promote Main Image` (build.yml) is not, yet.
 #     akmods-failure-triage.yml already keeps a sticky issue for its usual
 #     failure, an akmods build that does not cover the kernel, and closes it
@@ -54,7 +57,7 @@ on:
   workflow_run:
     # Matched by each workflow's `name:`, not its file name, so renaming one
     # silently stops tracking it. The test above fails when they disagree.
-    workflows: ["Nightly compliance", "Prune registry"]
+    workflows: ["Nightly compliance", "Prune registry", "Agent audit trail"]
     types:
       - completed
 

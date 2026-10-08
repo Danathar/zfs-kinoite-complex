@@ -46,12 +46,11 @@ import subprocess
 import unittest
 from pathlib import Path
 
-from tests.test_docs_consistency import workflow_paths
+from tests.test_docs_consistency import action_paths, workflow_paths
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DOCS_DIR = REPO_ROOT / "docs"
 WORKFLOW_DIR = REPO_ROOT / ".github" / "workflows"
-ACTION_DIR = REPO_ROOT / ".github" / "actions"
 
 PROPOSAL = DOCS_DIR / "runtime-validation-proposal.md"
 INSTALL_AND_VERIFY = DOCS_DIR / "install-and-verify.md"
@@ -116,7 +115,7 @@ def _line_oriented_pipeline_files() -> list[Path]:
     return sorted(
         [
             *workflow_paths(),
-            *ACTION_DIR.glob("*/action.yml"),
+            *action_paths(),
             CONTAINERFILE,
             *(REPO_ROOT / "build_files").glob("*.sh"),
         ]

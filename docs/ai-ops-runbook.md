@@ -168,6 +168,23 @@ Every file in `.github/workflows/` has an entry here.
   moved is not necessarily working: the badge writer leaves the old state in
   place for a conclusion it cannot interpret.
 
+### `auto-issues.yml` — "Auto issues"
+
+- **Means:** runs after `nightly-compliance.yml` or `prune-registry.yml`
+  finishes. Its job "Open, update or close the tracking issue" opens one issue
+  when a scheduled run on `main` fails, comments on that issue when it fails
+  again, and closes it when the next scheduled run passes. The issue title is
+  `Scheduled run failing:` followed by the workflow's name, and its author is
+  `app/github-actions`. It applies no label.
+- **First:** open the run linked in the issue and use that workflow's entry
+  above. A cancelled run, or a run dispatched by hand, neither opens nor closes
+  the issue: a green dry run of `prune-registry.yml` says nothing about a
+  failed `delete: true` dispatch. An issue with the same title that someone
+  else opened is ignored, and a new one is filed.
+- **Detail:** the header of `.github/workflows/auto-issues.yml`. It says why
+  `build.yml` is not watched yet: an akmods failure already gets a sticky
+  issue (below), and a failure in any other `build.yml` step gets no issue.
+
 ### `ai-fix.yml` — "AI fix"
 
 - **Means:** a maintainer handed work to an agent, by labelling an issue
@@ -190,6 +207,24 @@ Every file in `.github/workflows/` has an entry here.
 - **Detail:** the header of `.github/workflows/ai-fix.yml`, and
   [`SECURITY-AI.md`](./SECURITY-AI.md). Whether the credentials are set is not
   visible without admin rights; the run summary is the evidence.
+
+### `agent-audit.yml` — "Agent audit trail"
+
+- **Means:** a monthly read-back of the pull requests agents wrote. Its job
+  "Read back merged agent pull requests" lists every one merged in the last
+  31 days in the run summary: who opened and merged it, its signature line,
+  the issue it closes, its sign-offs, and whether the labeler marked it
+  safety-critical (Tier 3). It writes nothing else.
+- **Red means a record is missing:** a pull request the Hive app opened with
+  no `— hive:` signature line, or a commit on an agent pull request with no
+  `Signed-off-by:` trailer. Merge commits are exempt. Misses merged before
+  2026-10-08 are listed but do not fail it.
+- **First:** open the run summary. Each finding names the pull request and
+  the commits. Merged history is not rewritten to fix one. Say on the pull
+  request what the record lacks, and raise it with whoever runs that agent.
+- **Detail:** the header of `.github/workflows/agent-audit.yml`. What each
+  part of the record means:
+  [`agent-tasks/README.md`](./agent-tasks/README.md).
 
 ## Sticky akmods failure issues
 

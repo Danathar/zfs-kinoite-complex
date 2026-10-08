@@ -164,8 +164,10 @@ filename it uses instead:
   scheduled workflow that wrote to issues or a branch would also be new
   automation holding a token, and that file is where each workflow's token
   permissions are recorded.
-- **The scheduled workflows that do exist** are `build.yml`, `nightly-compliance.yml`
-  and `prune-registry.yml`. Each does one job, and none reports on progress.
+- **The scheduled workflows that do exist** are `build.yml`, `nightly-compliance.yml`,
+  `prune-registry.yml` and `agent-audit.yml`. Each does one job, and none reports
+  on progress: `agent-audit.yml` is red or green on whether merged agent pull
+  requests left their signature line and sign-offs.
 
 If a report is ever wanted, the commands above are the starting point, and the
 change goes through [`docs/risk-tiers.md`](./risk-tiers.md) like any other

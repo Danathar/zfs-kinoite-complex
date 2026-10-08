@@ -218,8 +218,10 @@ Every file in `.github/workflows/` has an entry here.
   safety-critical (Tier 3). It writes nothing else.
 - **Red means a record is missing:** a pull request the Hive app opened with
   no `— hive:` signature line, or a commit on an agent pull request with no
-  `Signed-off-by:` trailer. Merge commits are exempt. Misses merged before
-  2026-10-08 are listed but do not fail it. A red scheduled run also opens a
+  `Signed-off-by:` trailer. A merge that brings in commits from outside the
+  pull request (an update from `main`) is exempt; a merge of another unmerged
+  branch is not. Misses merged before 2026-10-08 are listed but do not fail
+  it. A red scheduled run also opens a
   `Scheduled run failing: Agent audit trail` issue (see `auto-issues.yml`
   above).
 - **First:** open the run summary. Each finding names the pull request and

@@ -44,10 +44,6 @@ UNWATCHED = {
         "akmods-failure-triage.yml keeps a sticky issue for its akmods failures and must tell a "
         "gate-skipped green run from a real one before closing; see the workflow header."
     ),
-    "Agent audit trail": (
-        "agent-audit.yml runs monthly and reports on pull requests that already merged; its "
-        "findings are in its own run summary, and it was not part of #381's scope."
-    ),
 }
 
 GITHUB_BASH = ["bash", "--noprofile", "--norc", "-eo", "pipefail"]

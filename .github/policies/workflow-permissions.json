@@ -20,6 +20,12 @@
         "triage": {"contents": "write", "issues": "write", "actions": "read", "packages": "read"}
       }
     },
+    "auto-issues.yml": {
+      "workflow": null,
+      "jobs": {
+        "track": {"issues": "write"}
+      }
+    },
     "build-branch.yml": {
       "workflow": null,
       "jobs": {

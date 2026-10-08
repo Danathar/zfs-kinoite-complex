@@ -168,6 +168,23 @@ Every file in `.github/workflows/` has an entry here.
   moved is not necessarily working: the badge writer leaves the old state in
   place for a conclusion it cannot interpret.
 
+### `auto-issues.yml` — "Auto issues"
+
+- **Means:** runs after `nightly-compliance.yml` or `prune-registry.yml`
+  finishes. Its job "Open, update or close the tracking issue" opens one issue
+  when a scheduled run on `main` fails, comments on that issue when it fails
+  again, and closes it when the next scheduled run passes. The issue title is
+  `Scheduled run failing:` followed by the workflow's name, and its author is
+  `app/github-actions`. It applies no label.
+- **First:** open the run linked in the issue and use that workflow's entry
+  above. A cancelled run, or a run dispatched by hand, neither opens nor closes
+  the issue: a green dry run of `prune-registry.yml` says nothing about a
+  failed `delete: true` dispatch. An issue with the same title that someone
+  else opened is ignored, and a new one is filed.
+- **Detail:** the header of `.github/workflows/auto-issues.yml`. It says why
+  `build.yml` is not watched yet: an akmods failure already gets a sticky
+  issue (below), and a failure in any other `build.yml` step gets no issue.
+
 ### `ai-fix.yml` — "AI fix"
 
 - **Means:** a maintainer handed work to an agent, by labelling an issue

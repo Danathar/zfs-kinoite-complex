@@ -27,9 +27,36 @@ from ci_tools.check_akmods_cache import (
     main,
 )
 from ci_tools.common import CiToolError
+from ci_tools.pin_akmods_cache import akmods_cache_image_tag
 
 
 class CheckAkmodsCacheTests(unittest.TestCase):
+    def test_checks_the_same_tag_pin_akmods_cache_pins(self) -> None:
+        # The reuse check and pin-akmods-cache must name one cache tag, or the
+        # digest pinned for the build is not the image the check vouched for.
+        cases = (
+            ("danathar", "zfs-kinoite-complex-akmods", "43"),
+            ("example", "akmods", "44"),
+        )
+        for image_org, source_repo, fedora_version in cases:
+            with self.subTest(image_org=image_org, fedora_version=fedora_version), patch(
+                "ci_tools.check_akmods_cache.skopeo_inspect_json_optional",
+                return_value=None,
+            ) as inspect_json_optional:
+                status = inspect_akmods_cache(
+                    image_org=image_org,
+                    source_repo=source_repo,
+                    fedora_version=fedora_version,
+                    kernel_release="6.18.16-200.fc43.x86_64",
+                    zfs_version="2.4.1",
+                )
+
+            expected = akmods_cache_image_tag(
+                image_org=image_org, source_repo=source_repo, fedora_version=fedora_version
+            )
+            self.assertEqual(status.source_image, expected)
+            inspect_json_optional.assert_called_once_with(f"docker://{expected}", creds=None)
+
     def test_reports_missing_primary_kernel_rpm(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

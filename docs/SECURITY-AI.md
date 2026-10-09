@@ -71,9 +71,15 @@ Nothing else in CI is secret.
 
 ## Labels carry authority — automation must not apply them
 
-This repository is connected to an external system ("Hive") that treats certain
-labels as an **approval to auto-merge on green CI**. As of this writing, every
-label whose description says so:
+This repository is connected to an external system ("Hive"). Its GitHub App
+merges agent pull requests once their required checks are green; the maintainer
+chose that. Pull requests labelled `hold` are not merged automatically and wait
+for a maintainer. Merged pull requests have included one labelled
+`area/safety-critical`, so that label does not exclude a pull request from App
+merges.
+
+Some labels also have a description that calls them an **approval to auto-merge
+on green CI**. As of this writing, every label whose description says so:
 
 ```text
 agent/quality  agent/scanner  agent/security
@@ -83,7 +89,9 @@ hive/hive-wild-mole  quality  security  testing
 They are ordinary-looking words. `testing` and `quality` in particular are
 exactly what a naive path-based labeler would attach to a pull request touching
 `tests/` — and doing so would hand that pull request an approval signal it never
-earned, on a repository where merging to `main` publishes.
+earned, on a repository where merging to `main` publishes. This page does not
+claim these labels are what lets the App merge: pull requests carrying none of
+them have been App-merged.
 
 So:
 

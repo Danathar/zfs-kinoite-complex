@@ -173,9 +173,10 @@ What L6 means for this repository:
 
 - All of Hive's agents may file issues and open pull requests here.
 - Hive puts a `hold` label on outreach pull requests only, and a human maintainer reviews those.
-  Other agent pull requests carry no hold from the Hive level. Auto-merge is switched off for this
-  repository by the maintainer's policy, so a maintainer reviews agent pull requests and merges
-  the ones that should land.
+  Pull requests labelled `hold` are not merged automatically; they wait for a maintainer.
+- The Hive GitHub App merges other agent pull requests itself once their required checks are green.
+  This is the maintainer's choice. It includes pull requests labelled `area/safety-critical`, which
+  are not excluded. A merge to `main` publishes a signed image, so those checks are the gate.
 - Three of the agents are the reviewer, the architect and the strategist. The reviewer works through
   the open pull requests and backs each finding with a file and line; it never merges, approves or
   closes one. The architect writes RFCs and opens pull requests for structural changes. The

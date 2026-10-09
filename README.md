@@ -5,7 +5,7 @@
 [![nightly compliance](https://github.com/Danathar/zfs-kinoite-complex/actions/workflows/nightly-compliance.yml/badge.svg?branch=main)](https://github.com/Danathar/zfs-kinoite-complex/actions/workflows/nightly-compliance.yml)
 [![last good build](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FDanathar%2Fzfs-kinoite-complex%2Fstatus%2Flast-good-build-badge.json)](https://github.com/Danathar/zfs-kinoite-complex/pkgs/container/zfs-kinoite-complex)
 [![OpenZFS/kernel status](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FDanathar%2Fzfs-kinoite-complex%2Fstatus%2Fakmods-badge.json)](https://github.com/Danathar/zfs-kinoite-complex/issues?q=is%3Aissue+is%3Aopen+label%3Aakmods-failure)
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Danathar/zfs-kinoite-complex)
+[![Ask DeepWiki](https://img.shields.io/badge/Ask-DeepWiki-1f6feb)](https://deepwiki.com/Danathar/zfs-kinoite-complex)
 [![Maintenance assisted by Hivecommons Hive](https://img.shields.io/badge/maintenance%20assisted%20by-Hivecommons%20Hive-1f6feb)](https://github.com/hivecommons/hive)
 [![ACMM L6 Fully Autonomous](https://img.shields.io/badge/ACMM-L6%20Fully%20Autonomous-2da44e)](#maintained-with-hive-acmm-l6)
 [![AI assisted](https://img.shields.io/badge/AI-assisted-d29922)](#about-this-project)

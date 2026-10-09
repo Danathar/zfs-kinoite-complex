@@ -224,7 +224,7 @@ gh pr list --state merged --limit 1000 --json mergedBy \
 The ruleset requires a pull request and a passing `Python Unit Tests`; it
 requires no approving review, and it allows no bypass actors.
 
-Agents do not merge. [`AGENTS.md`](../AGENTS.md) section 0 rule 6 says not to
+In this repository agents do not merge. [`AGENTS.md`](../AGENTS.md) section 0 rule 6 says not to
 push, promote, tag, or delete published artifacts on your own initiative, and
 [`SECURITY-AI.md`](./SECURITY-AI.md) lists merging and approving as things no
 agent may do on any instruction. `.claude/settings.json` denies the merge

@@ -7,7 +7,7 @@
 [![OpenZFS/kernel status](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2FDanathar%2Fzfs-kinoite-complex%2Fstatus%2Fakmods-badge.json)](https://github.com/Danathar/zfs-kinoite-complex/issues?q=is%3Aissue+is%3Aopen+label%3Aakmods-failure)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Danathar/zfs-kinoite-complex)
 [![Maintenance assisted by Hivecommons Hive](https://img.shields.io/badge/maintenance%20assisted%20by-Hivecommons%20Hive-1f6feb)](https://github.com/hivecommons/hive)
-[![ACMM L5 Semi-Autonomous](https://img.shields.io/badge/ACMM-L5%20Semi--Autonomous-2da44e)](#maintained-with-hive-acmm-l5)
+[![ACMM L6 Fully Autonomous](https://img.shields.io/badge/ACMM-L6%20Fully%20Autonomous-2da44e)](#maintained-with-hive-acmm-l6)
 [![AI assisted](https://img.shields.io/badge/AI-assisted-d29922)](#about-this-project)
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
 
@@ -162,23 +162,25 @@ before redistributing this image or basing a downstream image on it.
 > proves and what it does not. The maintainer is not responsible for data loss, unbootable
 > systems, failed builds, or other consequences of using it.
 
-## Maintained with Hive (ACMM L5)
+## Maintained with Hive (ACMM L6)
 
-**This repository's Hive runs at ACMM L5 (Semi-Autonomous).** Maintenance here is assisted by
+**This repository's Hive runs at ACMM L6 (Fully Autonomous).** Maintenance here is assisted by
 [Hivecommons Hive](https://github.com/hivecommons/hive). The repository is maintained by
 [@Danathar](https://github.com/Danathar). Hive orchestrates a fleet of AI agents that continuously
 review this codebase and report what they find here as issues and pull requests.
 
-What L5 means for this repository:
+What L6 means for this repository:
 
 - All of Hive's agents may file issues and open pull requests here.
-- Hive puts a `hold` label on every pull request an agent opens, and nothing merges on its own.
-  A human maintainer reviews agent pull requests in batches and merges the ones that should land.
-- L5 adds three agents. The reviewer works through the open pull requests and backs each finding
-  with a file and line; it never merges, approves or closes one. The architect writes RFCs and
-  opens pull requests for structural changes. The strategist coordinates work across the other
-  agents.
-- The telemetry and operations agents are part of L5 but start paused.
+- Hive puts a `hold` label on outreach pull requests only, and a human maintainer reviews those.
+  Other agent pull requests carry no hold from the Hive level. Auto-merge is switched off for this
+  repository by the maintainer's policy, so a maintainer reviews agent pull requests and merges
+  the ones that should land.
+- Three of the agents are the reviewer, the architect and the strategist. The reviewer works through
+  the open pull requests and backs each finding with a file and line; it never merges, approves or
+  closes one. The architect writes RFCs and opens pull requests for structural changes. The
+  strategist coordinates work across the other agents.
+- The telemetry and operations agents are part of L6 but start paused.
 
 Labels in this repository carry approval authority, and automation here must never apply one.
 [`docs/SECURITY-AI.md`](./docs/SECURITY-AI.md) records which labels those are and why.

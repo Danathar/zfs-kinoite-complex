@@ -110,9 +110,10 @@ Read it with three cautions:
 
 ### What is waiting on a person
 
-[`README.md` → Maintained with Hive (ACMM L5)](../README.md#maintained-with-hive-acmm-l5)
-says Hive puts a `hold` label on every pull request an agent opens, and that a
-human maintainer reviews them in batches. The open ones are the queue:
+[`README.md` → Maintained with Hive (ACMM L6)](../README.md#maintained-with-hive-acmm-l6)
+says Hive puts a `hold` label on outreach pull requests only, and that auto-merge
+is off here, so a human maintainer reviews agent pull requests and merges them.
+The held ones are the queue:
 
 ```bash
 gh pr list -R Danathar/zfs-kinoite-complex --state open --label hold

@@ -162,8 +162,8 @@ class QuotationTests(unittest.TestCase):
         facts = {
             "README.md": (
                 "testing-only",
-                "puts a `hold` label on every pull request an agent opens",
-                "reviews agent pull requests in batches",
+                "puts a `hold` label on outreach pull requests only",
+                "reviews agent pull requests and merges",
             ),
             "docs/safety-model.md": (
                 "testing-only",
@@ -323,8 +323,8 @@ class NoStoredNumbersTests(unittest.TestCase):
             text = text.replace(block, "")
         text = re.sub(r"`[^`\n]*`", "", text)
         text = LINK.sub(lambda match: match.group(0).split("](")[0], text)
-        # The README heading is named in a link's text, and L5 is part of its name.
-        text = text.replace("(ACMM L5)", "")
+        # The README heading is named in a link's text, and L6 is part of its name.
+        text = text.replace("(ACMM L6)", "")
         # "Tier 3" is the name of a risk tier, and "1." is list numbering.
         text = text.replace("Tier 3", "")
         text = re.sub(r"^\s*\d+\. ", "", text, flags=re.MULTILINE)

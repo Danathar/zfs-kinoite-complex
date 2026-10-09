@@ -143,10 +143,9 @@ gh label list --limit 60 --json name,description \
   -q '.[] | select(.description | test("auto-merge"; "i")) | .name'
 ```
 
-No workflow in this repository merges on these labels. They are still not
-inert: their description, and `SECURITY-AI.md`, say Hive reads them as approval
-to auto-merge on green CI. See [Who merges](#who-merges) for what has actually
-happened.
+No workflow in this repository merges on these labels, and the App has merged
+pull requests that carried none of them. Do not read them as the thing that lets
+Hive merge. See [Who merges](#who-merges) for what has actually happened.
 
 ## Keeping agents from colliding
 
@@ -213,28 +212,39 @@ gh api repos/Danathar/zfs-kinoite-complex/rulesets
 
 ## Who merges
 
-The maintainer. When this was written, every merged pull request, Hive's
-included, had been merged by `Danathar`. Check that it still holds:
+The Hive GitHub App (`danathar-atomic-hive[bot]`) merges agent pull requests once
+their required checks are green. The maintainer, `Danathar`, chose this. Since
+2026-10-08 16:00 UTC the App has merged every pull request that landed on `main`,
+a few minutes after its checks went green. The last human merge was #398.
+
+- Pull requests labelled `hold` are not merged automatically. They wait for a
+  maintainer to review them.
+- `area/safety-critical` does not exclude a pull request. #402 carried it, along
+  with `area/ci-tools` and `area/tests`, and was merged by the App.
+- The App-merged pull requests (#400, #402, #404, #406) carried only the
+  `area/*` labels the path labeler applies. None carried `hold`, and none carried
+  an approval label such as `hive/hive-wild-mole`.
+
+Check who merged what:
 
 ```bash
 gh pr list --state merged --limit 1000 --json mergedBy \
   -q 'map(.mergedBy.login) | unique'
 ```
 
-The ruleset requires a pull request and a passing `Python Unit Tests`; it
-requires no approving review, and it allows no bypass actors.
+A merge to `main` builds, signs and promotes the image, so the required checks
+are the gate. The ruleset requires a pull request and a passing
+`Python Unit Tests`; it requires no approving review, and it allows no bypass
+actors.
 
-In this repository agents do not merge. [`AGENTS.md`](../AGENTS.md) section 0 rule 6 says not to
+Agent sessions working in this repository do not merge on their own initiative.
+[`AGENTS.md`](../AGENTS.md) section 0 rule 6 says not to
 push, promote, tag, or delete published artifacts on your own initiative, and
 [`SECURITY-AI.md`](./SECURITY-AI.md) lists merging and approving as things no
 agent may do on any instruction. `.claude/settings.json` denies the merge
-command outright.
-
-An approval label such as `hive/hive-wild-mole` is a signal to Hive's own
-merge tooling and, as a reader of this repository, you will see it on pull
-requests that `Danathar` then merged. This page does not know what Hive does
-with the label on its side. If it ever merges on its own, the evidence will be a
-`merged` event whose actor is the Hive App:
+command outright. The App's merge happens on the Hive side, outside those
+sessions. The evidence for any one pull request is a `merged` event whose actor
+is the Hive App or a person:
 
 ```bash
 gh api repos/Danathar/zfs-kinoite-complex/issues/<number>/events \

@@ -163,7 +163,7 @@ class QuotationTests(unittest.TestCase):
             "README.md": (
                 "testing-only",
                 "puts a `hold` label on outreach pull requests only",
-                "reviews agent pull requests and merges",
+                "merges other agent pull requests itself once their required checks are green",
             ),
             "docs/safety-model.md": (
                 "testing-only",

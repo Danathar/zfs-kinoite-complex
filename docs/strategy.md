@@ -111,9 +111,10 @@ Read it with three cautions:
 ### What is waiting on a person
 
 [`README.md` → Maintained with Hive (ACMM L6)](../README.md#maintained-with-hive-acmm-l6)
-says Hive puts a `hold` label on outreach pull requests only, and that auto-merge
-is off here, so a human maintainer reviews agent pull requests and merges them.
-The held ones are the queue:
+says Hive puts a `hold` label on outreach pull requests only, and that the Hive
+GitHub App merges every other agent pull request once its required checks are green.
+The queue is the hold-labelled pull requests only; everything else merges on green
+checks and does not wait for a person:
 
 ```bash
 gh pr list -R Danathar/zfs-kinoite-complex --state open --label hold

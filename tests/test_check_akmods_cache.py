@@ -560,10 +560,11 @@ class RegistryCredentialsTests(unittest.TestCase):
             creds="Danathar:registry-token-value",
         )
         # The token must travel as the `creds` keyword and nowhere else:
-        # `skopeo_copy` puts that value behind `--src-creds`/`--dest-creds`,
-        # which `redact_command_args` knows to strip from a failure message. A
-        # token smuggled into a positional argument would be printed verbatim
-        # into the job log the first time the copy failed.
+        # `skopeo_copy` writes that value to a 0600 authfile through
+        # `registry_auth_dir`, so it never reaches skopeo's argv. A token
+        # smuggled into a positional argument would land in argv, readable by
+        # every uid on the runner through /proc/<pid>/cmdline, and printed
+        # verbatim into the job log the first time the copy failed.
         for positional in skopeo_copy.call_args.args:
             self.assertNotIn("registry-token-value", str(positional))
 

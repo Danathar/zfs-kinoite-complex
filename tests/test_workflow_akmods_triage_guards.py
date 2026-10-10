@@ -205,6 +205,75 @@ class TriageGuardTests(unittest.TestCase):
             ],
         )
 
+    def test_a_build_failure_issue_is_filed_for_a_scheduled_failure_with_no_payload(self) -> None:
+        # The akmods sticky issue covers a failure that left a payload; this step covers every
+        # other failed scheduled build. A pushed or dispatched run has someone watching it, and
+        # the three failed conclusions are the ones auto-issues.yml counts.
+        name = "Open or update the build failure issue"
+        self.check(
+            self.condition(name),
+            [
+                ({"event": "schedule", "conclusion": "failure", "has_payload": "false"}, True),
+                ({"event": "schedule", "conclusion": "timed_out", "has_payload": "false"}, True),
+                (
+                    {"event": "schedule", "conclusion": "startup_failure", "has_payload": "false"},
+                    True,
+                ),
+                # A missing step output is the empty string, and still means no payload.
+                ({"event": "schedule", "conclusion": "failure"}, True),
+                ({"event": "schedule", "conclusion": "failure", "has_payload": "true"}, False),
+                ({"event": "schedule", "conclusion": "timed_out", "has_payload": "true"}, False),
+                ({"event": "push", "conclusion": "failure", "has_payload": "false"}, False),
+                (
+                    {"event": "workflow_dispatch", "conclusion": "failure", "has_payload": "false"},
+                    False,
+                ),
+                ({"event": "schedule", "conclusion": "cancelled", "has_payload": "false"}, False),
+                ({"event": "schedule", "conclusion": "success", "has_payload": "false"}, False),
+                ({"event": "schedule", "conclusion": "skipped", "has_payload": "false"}, False),
+            ],
+        )
+
+    def test_the_build_failure_issue_closes_only_after_a_scheduled_run_that_really_built(
+        self,
+    ) -> None:
+        # A gate-skipped green run reports success without building, and a pushed or dispatched
+        # green run says nothing about the schedule the issue is tracking.
+        self.check(
+            self.condition("Close the build failure issue on a real green build"),
+            [
+                ({"event": "schedule", "conclusion": "success", "build_ran": "true"}, True),
+                ({"event": "schedule", "conclusion": "success", "build_ran": "false"}, False),
+                ({"event": "schedule", "conclusion": "success"}, False),
+                ({"event": "schedule", "conclusion": "failure", "build_ran": "true"}, False),
+                ({"event": "push", "conclusion": "success", "build_ran": "true"}, False),
+                (
+                    {"event": "workflow_dispatch", "conclusion": "success", "build_ran": "true"},
+                    False,
+                ),
+            ],
+        )
+
+    def test_every_guarded_step_has_a_test_here(self) -> None:
+        # A step added with an `if:` and no case in this file would be exactly the gap this
+        # file was written to close, so the list of guarded steps is pinned.
+        guarded = {name for name, step in self.steps.items() if "if" in step}
+        self.assertEqual(
+            guarded,
+            {
+                "Unzip payload",
+                "Open or update sticky issue on failed run",
+                "Close stale sticky issues on successful run",
+                "Open or update the build failure issue",
+                "Close the build failure issue on a real green build",
+                "Build OpenZFS/kernel badge payload",
+                "Publish badges to status branch",
+            },
+            "a step gained or lost an if: guard; add or remove its test above",
+        )
+        unnamed = [step for step in self.job["steps"] if "if" in step and "name" not in step]
+        self.assertEqual(unnamed, [], "a guarded step has no name, so no test can find it")
+
     def test_the_openzfs_badge_is_rebuilt_for_a_payload_or_a_real_green_build(self) -> None:
         # The workflow comment: a gate-skipped green run must not overwrite a red badge, and a
         # failure that left a payload must update it.

@@ -18,9 +18,16 @@ on:
     types:
       - completed
 
+# Every build completion gets its own triage run. With cancel-in-progress, a
+# pushed or dispatched build finishing during a scheduled failure's triage
+# would cancel it before the build failure issue is filed. `queue: max` keeps
+# every waiting run: with the default `queue: single`, a third completion
+# would cancel the one already pending. Runs go one at a time in completion
+# order, so the badges still end on the newest build's state.
 concurrency:
   group: akmods-failure-triage
-  cancel-in-progress: true
+  cancel-in-progress: false
+  queue: max
 
 jobs:
   triage:
@@ -188,12 +195,15 @@ jobs:
       # filed, and :latest stopped moving with only the last-good-build badge
       # to show it. Only scheduled runs count, the rule auto-issues.yml uses
       # for the same reason: whoever pushed or dispatched a run is watching
-      # it. Title and author follow auto-issues.yml's convention, so the two
+      # it. The failed conclusions are the three auto-issues.yml counts.
+      # Title and author follow auto-issues.yml's convention, so the two
       # workflows' issues read the same and are matched the same way.
       - name: Open or update the build failure issue
         if: >-
           github.event.workflow_run.event == 'schedule' &&
-          github.event.workflow_run.conclusion == 'failure' &&
+          (github.event.workflow_run.conclusion == 'failure' ||
+           github.event.workflow_run.conclusion == 'timed_out' ||
+           github.event.workflow_run.conclusion == 'startup_failure') &&
           steps.download.outputs.has_payload != 'true'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
@@ -209,7 +219,7 @@ jobs:
             // Matched by title and by author: the repository is public, and a
             // failure must never be reported into an issue someone else opened.
             const match = open.find(i => !i.pull_request && i.title === title && i.user.login === 'github-actions[bot]');
-            const line = `Scheduled run ${run.html_url} failed on ${run.head_sha}.`;
+            const line = `Scheduled run ${run.html_url} ended with ${run.conclusion} on ${run.head_sha}.`;
             if (match) {
               await github.rest.issues.createComment({
                 owner: context.repo.owner,

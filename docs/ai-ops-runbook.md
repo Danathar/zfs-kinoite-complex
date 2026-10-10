@@ -158,8 +158,11 @@ Every file in `.github/workflows/` has an entry here.
 
 - **Means:** runs after `build.yml` finishes. It opens or updates one sticky
   issue for a failed akmods build, closes the open ones after a green run
-  that really built something, and refreshes the two README badges. The job
-  is "Manage sticky akmods failure issue". See the next section for the
+  that really built something, and refreshes the two README badges. A
+  scheduled build that fails in any other step opens or comments on one
+  issue titled `Scheduled run failing: Build And Promote Main Image`, which
+  the next scheduled run that really builds and succeeds closes. The job is
+  "Manage sticky akmods failure issue". See the next section for the akmods
   issues themselves.
 - **First:** if this workflow itself is red, the build it reports on is
   unaffected. Open the run and read the failing step. Until it is fixed the
@@ -183,8 +186,9 @@ Every file in `.github/workflows/` has an entry here.
   a failed `delete: true` dispatch. An issue with the same title that someone
   else opened is ignored, and a new one is filed.
 - **Detail:** the header of `.github/workflows/auto-issues.yml`. It says why
-  `build.yml` is not watched yet: an akmods failure already gets a sticky
-  issue (below), and a failure in any other `build.yml` step gets no issue.
+  `build.yml` is not watched here: `akmods-failure-triage.yml` files its
+  failures, akmods or not, because only it can tell a gate-skipped green run
+  from a real one.
 
 ### `ai-fix.yml` — "AI fix"
 

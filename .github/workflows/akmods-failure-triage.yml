@@ -18,9 +18,16 @@ on:
     types:
       - completed
 
+# Every build completion gets its own triage run. With cancel-in-progress, a
+# pushed or dispatched build finishing during a scheduled failure's triage
+# would cancel it before the build failure issue is filed. `queue: max` keeps
+# every waiting run: with the default `queue: single`, a third completion
+# would cancel the one already pending. Runs go one at a time in completion
+# order, so the badges still end on the newest build's state.
 concurrency:
   group: akmods-failure-triage
-  cancel-in-progress: true
+  cancel-in-progress: false
+  queue: max
 
 jobs:
   triage:
@@ -179,6 +186,91 @@ jobs:
                 state: 'closed',
               });
               core.info(`Closed sticky issue #${issue.number}`);
+            }
+
+      # Every other failure of a scheduled build. The sticky issue above is
+      # opened only when the akmods build itself failed and left a payload. A
+      # failure in any other step -- a missing signing secret, a base-image
+      # pull that dies, the push -- left the daily build red with nothing
+      # filed, and :latest stopped moving with only the last-good-build badge
+      # to show it. Only scheduled runs count, the rule auto-issues.yml uses
+      # for the same reason: whoever pushed or dispatched a run is watching
+      # it. The failed conclusions are the three auto-issues.yml counts.
+      # Title and author follow auto-issues.yml's convention, so the two
+      # workflows' issues read the same and are matched the same way.
+      - name: Open or update the build failure issue
+        if: >-
+          github.event.workflow_run.event == 'schedule' &&
+          (github.event.workflow_run.conclusion == 'failure' ||
+           github.event.workflow_run.conclusion == 'timed_out' ||
+           github.event.workflow_run.conclusion == 'startup_failure') &&
+          steps.download.outputs.has_payload != 'true'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const title = 'Scheduled run failing: Build And Promote Main Image';
+            const run = context.payload.workflow_run;
+            const open = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              per_page: 100,
+            });
+            // Matched by title and by author: the repository is public, and a
+            // failure must never be reported into an issue someone else opened.
+            const match = open.find(i => !i.pull_request && i.title === title && i.user.login === 'github-actions[bot]');
+            const line = `Scheduled run ${run.html_url} ended with ${run.conclusion} on ${run.head_sha}.`;
+            if (match) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: match.number,
+                body: line,
+              });
+              core.info(`Commented on build failure issue #${match.number}`);
+            } else {
+              const created = await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: title,
+                body: `${line}\n\nThe failing step is not the akmods build, so no akmods-failure issue was opened. Later failed scheduled builds comment here, and the next scheduled run that really builds and succeeds closes this issue.`,
+              });
+              core.info(`Opened build failure issue #${created.data.number}`);
+            }
+
+      # Closed only by a scheduled run that really built (build_ran), for the
+      # same reason the sticky issues are: a gate-skipped run reports success
+      # without building anything.
+      - name: Close the build failure issue on a real green build
+        if: >-
+          github.event.workflow_run.event == 'schedule' &&
+          github.event.workflow_run.conclusion == 'success' &&
+          steps.download.outputs.build_ran == 'true'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const title = 'Scheduled run failing: Build And Promote Main Image';
+            const run = context.payload.workflow_run;
+            const open = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              per_page: 100,
+            });
+            for (const issue of open.filter(i => !i.pull_request && i.title === title && i.user.login === 'github-actions[bot]')) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: `Scheduled run ${run.html_url} built and succeeded on ${run.head_sha}. Closing.`,
+              });
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                state: 'closed',
+              });
+              core.info(`Closed build failure issue #${issue.number}`);
             }
 
       # Only two conclusions tell us anything new about OpenZFS/kernel compat:

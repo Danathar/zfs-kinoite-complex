@@ -17,14 +17,13 @@ name: Auto issues
 #   - `Nightly compliance` (nightly-compliance.yml), `Prune registry`
 #     (prune-registry.yml) and `Agent audit trail` (agent-audit.yml) are
 #     watched.
-#   - `Build And Promote Main Image` (build.yml) is not, yet.
-#     akmods-failure-triage.yml already keeps a sticky issue for its usual
-#     failure, an akmods build that does not cover the kernel, and closes it
-#     only after a green run that really built; a second issue for the same
-#     red run would restate it. A build.yml failure in any other step files no
-#     issue today. Covering that needs this file to tell an akmods failure and
-#     a gate-skipped green run apart the way the triage workflow does, which
-#     is left for its own change.
+#   - `Build And Promote Main Image` (build.yml) is not watched here.
+#     akmods-failure-triage.yml already runs after every build and can tell an
+#     akmods failure and a gate-skipped green run apart, which this file
+#     cannot. It keeps a sticky issue for an akmods build that does not cover
+#     the kernel, and files every other failed scheduled build under the title
+#     this file would use, "Scheduled run failing: Build And Promote Main
+#     Image", closing it after the next scheduled run that really built.
 #   - Every other workflow runs on a pull request, a push to a branch, or a
 #     person's label or comment. Someone is already looking at it.
 #

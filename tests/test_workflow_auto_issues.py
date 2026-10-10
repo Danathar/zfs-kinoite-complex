@@ -41,8 +41,9 @@ STEP = "Track the scheduled run"
 # scheduled workflow must land in `workflows:` or here, so the choice is made in a diff.
 UNWATCHED = {
     "Build And Promote Main Image": (
-        "akmods-failure-triage.yml keeps a sticky issue for its akmods failures and must tell a "
-        "gate-skipped green run from a real one before closing; see the workflow header."
+        "akmods-failure-triage.yml files every failed scheduled build, akmods or not, because "
+        "only it can tell a gate-skipped green run from a real one before closing; see the "
+        "workflow header."
     ),
 }
 

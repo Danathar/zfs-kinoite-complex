@@ -112,6 +112,12 @@
       "description": "Never automerge a cosign version bump. docs/architecture-overview.md carries version-specific compatibility claims (DOCKER_CONFIG handling, legacy signature format) checked directly against the currently pinned version and the akmods build container's preinstalled cosign; a new pin needs those claims re-verified, not just installed.",
       "automerge": false,
       "matchPackageNames": ["sigstore/cosign"]
+    },
+    {
+      "description": "The privileged akmods build container is pinned by digest in two places: the `container: image:` literal in build.yml (tracked by Renovate's github-actions manager) and DEFAULT_BUILD_CONTAINER_IMAGE in ci/defaults.json (tracked by the custom regex manager above). tests/test_workflow_build_container.py::test_container_literals_match_the_checked_in_default and tests/test_renovate_config.py::test_the_devcontainer_digest_is_one_digest_in_all_three_files require them to be identical. The two managers report different currentValue values, so without grouping Renovate opens two PRs for one digest bump and each fails those tests on its own, so neither can merge (this happened in the sibling repo zfs-aurora-complex, #76 and #77). A shared groupName puts both updates on one branch and in one PR.",
+      "groupName": "akmods build container",
+      "automerge": false,
+      "matchPackageNames": ["ghcr.io/ublue-os/devcontainer"]
     }
   ]
 }

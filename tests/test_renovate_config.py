@@ -377,7 +377,7 @@ class PackageRuleTests(unittest.TestCase):
     def test_every_matchpackagenames_rule_names_a_dependency_a_manager_actually_produces(self) -> None:
         """`matchPackageNames` is matched exactly; a near-miss name silences the rule."""
         matching = [rule for rule in self.rules if "matchPackageNames" in rule]
-        expected = {"openzfs/zfs", "sigstore/cosign"}
+        expected = {"openzfs/zfs", "sigstore/cosign", "ghcr.io/ublue-os/devcontainer"}
         seen = {tuple(rule["matchPackageNames"]) for rule in matching}
         self.assertEqual(seen, {(name,) for name in expected})
         for rule in matching:
@@ -386,6 +386,22 @@ class PackageRuleTests(unittest.TestCase):
             with self.subTest(rule=rule["description"][:60]):
                 self.assertIn(names[0], self.managers)
                 self.assertIs(rule["automerge"], False)
+
+    def test_both_copies_of_the_devcontainer_digest_move_in_one_pr(self) -> None:
+        """Two managers update the two copies; only a shared group puts them in one PR.
+
+        Each copy alone fails test_the_devcontainer_digest_is_one_digest_in_all_three_files,
+        so two PRs for one bump could never merge.
+        """
+        matching = [
+            rule
+            for rule in self.rules
+            if rule.get("matchPackageNames") == ["ghcr.io/ublue-os/devcontainer"]
+        ]
+        self.assertEqual(len(matching), 1)
+        self.assertTrue(matching[0].get("groupName", "").strip())
+        self.assertNotIn("matchManagers", matching[0])
+        self.assertNotIn("matchFileNames", matching[0])
 
     def test_the_dockerfile_manager_is_disabled_outright(self) -> None:
         """`enabled` must be present and false -- an absent key is not a disabled manager."""

@@ -64,7 +64,9 @@ class BuildLastGoodBuildBadgeTests(unittest.TestCase):
             created_iso="2026-07-24T23:30:00Z",
             # Deliberately naive: this test exists because a naive datetime can
             # still reach production code, so the function has to handle it.
-            now=datetime(2026, 7, 24, 23, 45),
+            # Stripping tzinfo (rather than omitting it) keeps DTZ001 quiet on
+            # every ruff release without a noqa that newer ruff calls unused.
+            now=datetime(2026, 7, 24, 23, 45, tzinfo=UTC).replace(tzinfo=None),
         )
         self.assertIn("today", badge["message"])
 

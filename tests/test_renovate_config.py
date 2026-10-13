@@ -88,7 +88,10 @@ DEVCONTAINER_DIGEST_FILES = {
 # table is what makes deleting a manager fail: a manager that is simply gone
 # breaks no regex and matches no file, so nothing else here would notice.
 EXPECTED_MANAGERS = {
-    "quay.io/coreos/chunkah": {".github/actions/rechunk-native-image/action.yml"},
+    "quay.io/coreos/chunkah": {
+        ".github/actions/rechunk-native-image/action.yml",
+        "docs/architecture-overview.md",
+    },
     "openzfs/zfs": {"ci/defaults.json"},
     "ghcr.io/ublue-os/devcontainer": {"ci/defaults.json"},
     "ghcr.io/ublue-os/brew": {"ci/defaults.json"},
@@ -610,12 +613,18 @@ class DocumentationJoinTests(unittest.TestCase):
 # leaves it alone. A line that restates the live pin belongs in a matchString
 # instead; anything else naming the version fails the scan below.
 COSIGN_VERIFICATION_RECORDS = {
+    ".claude/hooks/gate-git-diff.sh": ("# (observed with cosign v3.1.3).",),
     "ci_tools/common.py": (
         "v3.1.2, the `install-signing-tools` pin when this was checked",
         "both cosign v2.4.1 and v3.1.2 correctly verify",
+        "skopeo 1.22.2, cosign v3.1.3 (one patch ahead of",
     ),
-    "docs/architecture-overview.md": ("patch ahead of v3.1.2, the pin when this was checked",),
+    "docs/architecture-overview.md": (
+        "patch ahead of v3.1.2, the pin when this was checked",
+        "verified directly with cosign v2.4.1 and v3.1.3 (one",
+    ),
     "tests/test_common.py": ("and v3.1.2 verifies this",),
+    "tests/test_git_diff_gate.py": ("# cosign v3.1.3). Unlike the ruff rows",
 }
 COSIGN_ACTION = ".github/actions/install-signing-tools/action.yml"
 SELF = Path(__file__).resolve().relative_to(REPO_ROOT).as_posix()

@@ -7,6 +7,6 @@
   "DEFAULT_BASE_IMAGE": "quay.io/fedora-ostree-desktops/kinoite:44",
   "STABLE_SIGNAL_IMAGE": "quay.io/fedora-ostree-desktops/kinoite:44",
   "DEFAULT_BUILD_CONTAINER_IMAGE": "ghcr.io/ublue-os/devcontainer@sha256:c0e6b4fba2d8768bb8be2141c0e26239027e84639fc58071985158088e5d8c7f",
-  "DEFAULT_BREW_IMAGE": "ghcr.io/ublue-os/brew@sha256:d52b3f578f01623636aff534291b0bd8ff0a0244ef225bf51aecb5fa05a137af",
+  "DEFAULT_BREW_IMAGE": "ghcr.io/ublue-os/brew@sha256:5bdf54dc7c21c22db29df6550e3711788719c5123549ea6dc5645d5af47795e3",
   "DEFAULT_ZFS_MINOR_VERSION": "2.4"
 }

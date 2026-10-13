@@ -624,7 +624,7 @@ COSIGN_VERIFICATION_RECORDS = {
         "verified directly with cosign v2.4.1 and v3.1.3 (one",
     ),
     "tests/test_common.py": ("and v3.1.2 verifies this",),
-    "tests/test_git_diff_gate.py": ("# cosign v3.1.3). Unlike the ruff rows",
+    "tests/test_git_diff_gate.py": ("# cosign v3.1.3). Unlike the ruff rows",),
 }
 COSIGN_ACTION = ".github/actions/install-signing-tools/action.yml"
 SELF = Path(__file__).resolve().relative_to(REPO_ROOT).as_posix()

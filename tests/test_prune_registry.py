@@ -7,7 +7,7 @@ import os
 import re
 import unittest
 from contextlib import redirect_stdout
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest import mock
 
@@ -24,7 +24,7 @@ from tests.test_docs_consistency import workflow_paths
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PUBLISH_ACTION = REPO_ROOT / ".github" / "actions" / "publish-native-image" / "action.yml"
 
-NOW = datetime(2026, 10, 1, tzinfo=timezone.utc)
+NOW = datetime(2026, 10, 1, tzinfo=UTC)
 OLD = NOW - timedelta(days=30)
 
 
@@ -310,7 +310,7 @@ class UntaggedPruning(unittest.TestCase):
 
 
 def api_item(vid: int, *tags: str, age_days: float = 30) -> dict:
-    created = (datetime.now(timezone.utc) - timedelta(days=age_days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    created = (datetime.now(UTC) - timedelta(days=age_days)).strftime("%Y-%m-%dT%H:%M:%SZ")
     return {"id": vid, "name": f"sha256:{vid:064x}", "created_at": created, "metadata": {"container": {"tags": list(tags)}}}
 
 

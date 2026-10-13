@@ -74,7 +74,7 @@ concurrency:
 jobs:
   preflight:
     name: Check credentials and target
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 5
 
     # Cheap event filter first, so an ordinary comment does not start a job. The
@@ -177,7 +177,7 @@ jobs:
     name: Run the agent
     needs: preflight
     if: needs.preflight.outputs.run == 'yes'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
 
     permissions:
@@ -195,7 +195,7 @@ jobs:
           persist-credentials: false
 
       - name: Claude Code
-        uses: anthropics/claude-code-action@fa2b2666b747000bf42767d1f332065b375e3c8f # v1.0.214
+        uses: anthropics/claude-code-action@1d6de8cb0c237e7c15e9e1bdf973826ebae490cc # v1.0.248
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}

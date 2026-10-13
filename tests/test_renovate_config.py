@@ -25,9 +25,9 @@ So the checks here never restate what the pins are. They execute the config:
     grew a second copy that Renovate would rewrite together with the first.
   * The captured `currentValue`/`currentDigest` are then joined to the other
     places the same literal is written by hand. The devcontainer digest is in
-    three files; Renovate's built-in `github-actions` manager updates two of
-    them and the custom manager here updates the third, and nothing verified
-    that those two mechanisms agree on one digest until now.
+    two files; Renovate's built-in `github-actions` manager updates the
+    workflow copy and the custom manager here updates ci/defaults.json, and
+    nothing verified that those two mechanisms agree on one digest until now.
 
 Renovate's regexes are JavaScript-flavoured, so named groups are spelled
 `(?<name>...)` rather than Python's `(?P<name>...)`. `js_regex` rewrites just
@@ -51,6 +51,7 @@ fifth copy has to be classified rather than silently joining the stale ones.
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import re
 import subprocess
@@ -174,6 +175,83 @@ def sole_capture(manager: dict, name: str) -> dict[str, str | None]:
             f"{manager['depNameTemplate']}: expected exactly one match in {name}, got {len(found)}"
         )
     return found[0]
+
+
+# The two dependencies Renovate produces for the build container digest, as
+# packageRules see them. The workflow copy comes from the built-in
+# github-actions manager, which reads a job's `container: image:` as a docker
+# dependency of depType "container"; a digest-only reference has no tag, so it
+# has no currentValue. The ci/defaults.json copy comes from the custom regex
+# manager, which has no depType and takes its currentValue from
+# currentValueTemplate. A digest bump is updateType "digest" for both.
+DEVCONTAINER_DEPENDENCIES = (
+    {
+        "manager": "github-actions",
+        "fileName": ".github/workflows/build.yml",
+        "packageName": "ghcr.io/ublue-os/devcontainer",
+        "depName": "ghcr.io/ublue-os/devcontainer",
+        "datasource": "docker",
+        "depType": "container",
+        "currentValue": None,
+        "updateType": "digest",
+    },
+    {
+        "manager": "custom.regex",
+        "fileName": "ci/defaults.json",
+        "packageName": "ghcr.io/ublue-os/devcontainer",
+        "depName": "ghcr.io/ublue-os/devcontainer",
+        "datasource": "docker",
+        "depType": None,
+        "currentValue": "latest",
+        "updateType": "digest",
+    },
+)
+
+# packageRules match keys this file knows how to evaluate, mapped to the
+# dependency field each one reads.
+RULE_MATCH_FIELDS = {
+    "matchPackageNames": "packageName",
+    "matchDepNames": "depName",
+    "matchManagers": "manager",
+    "matchFileNames": "fileName",
+    "matchDatasources": "datasource",
+    "matchDepTypes": "depType",
+    "matchUpdateTypes": "updateType",
+    "matchCurrentValue": "currentValue",
+}
+
+
+def pattern_matches(pattern: str, value: str | None) -> bool:
+    """One Renovate match pattern: `/regex/`, a glob, or an exact string."""
+    if value is None:
+        return False
+    if len(pattern) > 2 and pattern.startswith("/") and pattern.endswith("/"):
+        return js_regex(pattern[1:-1]).search(value) is not None
+    return fnmatch.fnmatchcase(value, pattern)
+
+
+def patterns_match(patterns: list[str] | str, value: str | None) -> bool:
+    """A list of patterns: any positive one matches and no `!` one does."""
+    if isinstance(patterns, str):
+        patterns = [patterns]
+    positive = [pattern for pattern in patterns if not pattern.startswith("!")]
+    negative = [pattern[1:] for pattern in patterns if pattern.startswith("!")]
+    if positive and not any(pattern_matches(pattern, value) for pattern in positive):
+        return False
+    return not any(pattern_matches(pattern, value) for pattern in negative)
+
+
+def resolve_package_rules(rules: list[dict], dependency: dict) -> dict:
+    """Apply every rule whose match keys all match, in order; later values win."""
+    settings: dict = {}
+    for rule in rules:
+        keys = [key for key in rule if key.startswith(("match", "exclude"))]
+        unknown = sorted(set(keys) - set(RULE_MATCH_FIELDS))
+        if unknown:
+            raise AssertionError(f"packageRule uses unmodelled match keys {unknown}: {rule}")
+        if all(patterns_match(rule[key], dependency[RULE_MATCH_FIELDS[key]]) for key in keys):
+            settings.update({key: value for key, value in rule.items() if key not in keys})
+    return settings
 
 
 class CustomManagerTests(unittest.TestCase):
@@ -402,6 +480,31 @@ class PackageRuleTests(unittest.TestCase):
         self.assertTrue(matching[0].get("groupName", "").strip())
         self.assertNotIn("matchManagers", matching[0])
         self.assertNotIn("matchFileNames", matching[0])
+
+    def test_every_rule_leaves_both_devcontainer_copies_in_one_live_group(self) -> None:
+        """Resolve every packageRule against both copies, the way Renovate would.
+
+        Naming the group on one rule is not enough. A narrowing key on that rule
+        (`matchDepTypes`, `matchUpdateTypes`, `matchCurrentValue`) makes it apply
+        to only one copy, and a later rule can still regroup or disable one copy,
+        since Renovate applies matching rules in order and the last value wins.
+        Either way one bump becomes two PRs again, and neither can merge.
+        """
+        for copy in DEVCONTAINER_DEPENDENCIES:
+            with self.subTest(copy=copy["fileName"]):
+                self.assertIn(copy["packageName"], self.managers)
+        resolved = [resolve_package_rules(self.rules, copy) for copy in DEVCONTAINER_DEPENDENCIES]
+        for copy, settings in zip(DEVCONTAINER_DEPENDENCIES, resolved, strict=True):
+            with self.subTest(copy=copy["fileName"]):
+                self.assertIsNot(settings.get("enabled"), False, "this copy is never updated")
+                self.assertTrue((settings.get("groupName") or "").strip(), "no group")
+        self.assertEqual(resolved[0].get("groupName"), resolved[1].get("groupName"))
+
+    def test_the_rule_resolver_refuses_a_match_key_it_does_not_model(self) -> None:
+        """A rule keyed on something new must be modelled, not read as matching."""
+        rule = {"matchJsonata": ["true"], "groupName": "x"}
+        with self.assertRaises(AssertionError):
+            resolve_package_rules([rule], DEVCONTAINER_DEPENDENCIES[0])
 
     def test_the_dockerfile_manager_is_disabled_outright(self) -> None:
         """`enabled` must be present and false -- an absent key is not a disabled manager."""

@@ -18,7 +18,7 @@ import re
 import sys
 import urllib.request
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from ci_tools.common import CiToolError
 
@@ -177,7 +177,7 @@ def list_versions(owner: str, package: str, token: str) -> list[Version]:
                 Version(
                     id=int(item["id"]),
                     digest=item["name"],
-                    created=datetime.fromisoformat(item["created_at"].replace("Z", "+00:00")),
+                    created=datetime.fromisoformat(item["created_at"]),
                     tags=tuple(item.get("metadata", {}).get("container", {}).get("tags", [])),
                 )
             )
@@ -236,7 +236,7 @@ def main() -> None:
         raise CiToolError("GITHUB_TOKEN and PACKAGE_OWNER (or GITHUB_REPOSITORY_OWNER) are required")
     packages = tuple(p for p in os.environ.get("PACKAGES", " ".join(DEFAULT_PACKAGES)).split() if p)
     delete = os.environ.get("PRUNE_DELETE", "false") == "true"
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     # Phase 1: list and plan every package before touching any. A listing or
     # sanity failure on the second package must not leave the first one half

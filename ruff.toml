@@ -10,6 +10,10 @@
 
 line-length = 100
 
+# Pinned so import sorting and the UP/FURB rules do not shift with the ruff release
+# default. Python 3.11 is the floor: tests use tomllib and ci_tools use datetime.UTC.
+target-version = "py311"
+
 [lint.per-file-ignores]
 # sys.path must be extended before these imports so the shared/ package is
 # importable both inside the built image and from a plain script invocation.

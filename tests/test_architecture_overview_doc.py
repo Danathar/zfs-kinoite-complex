@@ -488,11 +488,20 @@ class PublishedTagShapeTests(unittest.TestCase):
             f"{repository}:main-<fedora>",
         )
         # And the digest-pinned ref the final image build actually consumes.
-        with patch(
-            "ci_tools.pin_akmods_cache.skopeo_inspect_digest",
-            return_value="sha256:<digest>",
+        built_image_id = "a" * 64
+        with (
+            patch(
+                "ci_tools.pin_akmods_cache.skopeo_inspect_digest",
+                return_value="sha256:<digest>",
+            ),
+            patch(
+                "ci_tools.pin_akmods_cache.pushed_config_hex",
+                return_value=built_image_id,
+            ),
         ):
-            pinned, digest = pin_akmods_cache_image(f"{repository}:main-<fedora>")
+            pinned, digest = pin_akmods_cache_image(
+                f"{repository}:main-<fedora>", built_image_id
+            )
         self.assertEqual(pinned, f"{repository}@sha256:<digest>")
         self.assertEqual(digest, "sha256:<digest>")
 

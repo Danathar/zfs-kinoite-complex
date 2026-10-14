@@ -143,6 +143,10 @@ STEP_OUTPUTS = {
         "akmods_image": "ghcr.io/danathar/akmods-zfs:42-6.16.4-200.fc42.x86_64",
         "akmods_image_pinned": "ghcr.io/danathar/akmods-zfs@sha256:" + "f" * 64,
     },
+    # The local image ID the build step records between `just build` and `just push`.
+    "akmods_build": {
+        "built_image_id": "9" * 64,
+    },
     "pin_akmods": {
         "akmods_image": "ghcr.io/danathar/akmods-zfs:42-6.16.4-200.fc42.x86_64",
         "akmods_image_pinned": "ghcr.io/danathar/akmods-zfs@sha256:" + "e" * 64,
@@ -732,6 +736,28 @@ class StepWiringTests(unittest.TestCase):
                         f"${{{{ steps.pin_akmods.outputs.{output}"
                     )
                 )
+
+    def test_the_pin_is_bound_to_the_image_the_build_step_recorded(self) -> None:
+        """
+        The pin step is handed the build step's recorded image ID, and runs after that step.
+
+        The pin reads the shared tag back after the push. Only the ID recorded before the push
+        lets it tell the image this run built from one a branch run swapped onto the tag in
+        between; without it the pin step refuses, so a broken wiring fails the rebuild closed.
+        """
+
+        env = _run_step("Resolve shared akmods cache digest").only_call.env
+        self.assertEqual(
+            env["AKMODS_BUILT_IMAGE_ID"], STEP_OUTPUTS["akmods_build"]["built_image_id"]
+        )
+        steps = _action()["runs"]["steps"]
+        ids = [step.get("id") for step in steps]
+        self.assertLess(ids.index("akmods_build"), ids.index("pin_akmods"))
+        # The pin only runs where the build ran. A reused cache never reaches it: its digest
+        # comes from the cache probe, which verified that digest's signature instead.
+        self.assertIn(
+            f"({_step(BUILD_STEP)['if']})", _step("Resolve shared akmods cache digest")["if"]
+        )
 
     def test_the_input_resolution_step_is_given_a_token_for_the_release_lookup(self) -> None:
         """

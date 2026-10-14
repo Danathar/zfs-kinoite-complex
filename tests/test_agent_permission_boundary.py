@@ -1026,6 +1026,9 @@ class DiagnoseGuardTableTests(unittest.TestCase):
         "GITHUB_RUN_NUMBER is not a run number": True,  # the workflow's environment
         "REQUIRE_MATCH=true needs AKMODS_IMAGE_PINNED": True,  # the action's wiring
         "Refusing to check akmods cache ref": True,  # whatever produced the ref
+        "Refusing to pin the akmods cache: AKMODS_BUILT_IMAGE_ID": True,  # the action's wiring
+        # Escalate: a moved shared tag, or a push that rewrote the config. The guard is ours.
+        "Refusing to pin akmods cache": True,
     }
 
     @classmethod

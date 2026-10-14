@@ -150,6 +150,7 @@ This page defines terms used across this repository's docs and workflow comments
 - `AKMODS_FAILURE_PAYLOAD_PATH`: path where the failure classifier writes the sticky-issue payload.
 - `REQUIRE_MATCH`: when `true`, `check-akmods-cache` runs in strict mode after a rebuild, where a cache that does not carry the resolved `ZFS_VERSION` is a failure rather than a "rebuild needed" answer.
 - `AKMODS_IMAGE_PINNED`: digest-pinned akmods cache ref that strict mode checks, the one `pin-akmods-cache` published; required when `REQUIRE_MATCH` is `true`, so the check never re-resolves the shared tag.
+- `AKMODS_BUILT_IMAGE_ID`: local image ID (the sha256 of the image config) that `akmods-build-and-publish` records between `just build` and `just push` and publishes as the `built_image_id` step output; `pin-akmods-cache` refuses to pin the rebuilt cache unless the amd64 config behind the digest the shared tag resolves to hashes to this value, and refuses when it is empty or not a sha256 ID.
 - `WORKFLOW_CONCLUSION`: conclusion of the build workflow run (`success`, `failure`, ...) that the akmods badge writer reports on.
 - `BUILD_RAN`: whether that run actually built, so a successful gate-skipped schedule run leaves the akmods badge untouched.
 - `FAILURE_PAYLOAD_PATH`: path of the classifier payload the akmods badge writer reads; the file `AKMODS_FAILURE_PAYLOAD_PATH` named when it was written.

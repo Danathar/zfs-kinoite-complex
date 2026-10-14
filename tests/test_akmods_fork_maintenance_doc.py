@@ -497,11 +497,20 @@ class AkmodsImageCaveatTests(unittest.TestCase):
 
     def test_pinning_produces_a_digest_ref_rather_than_the_mutable_tag(self) -> None:
         digest = "sha256:" + "3" * 64
-        with patch(
-            "ci_tools.pin_akmods_cache.skopeo_inspect_digest",
-            return_value=digest,
+        built_image_id = "4" * 64
+        with (
+            patch(
+                "ci_tools.pin_akmods_cache.skopeo_inspect_digest",
+                return_value=digest,
+            ),
+            patch(
+                "ci_tools.pin_akmods_cache.pushed_config_hex",
+                return_value=built_image_id,
+            ),
         ):
-            pinned, returned = pin_akmods_cache_image("ghcr.io/example/akmods:main-44")
+            pinned, returned = pin_akmods_cache_image(
+                "ghcr.io/example/akmods:main-44", built_image_id
+            )
         self.assertEqual(pinned, f"ghcr.io/example/akmods@{digest}")
         self.assertEqual(returned, digest)
 

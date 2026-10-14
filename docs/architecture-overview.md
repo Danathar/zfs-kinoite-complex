@@ -283,7 +283,10 @@ If no:
    mutable tag. It fails the run unless that digest carries a `kmod-zfs` for
    the primary kernel at the resolved ZFS version. It does not check the
    signature: nothing has signed the new cache yet. The `sign-akmods-cache`
-   job signs that digest, and `promote-stable` waits for it
+   job signs that digest, and `promote-stable` waits for it. The pin itself is
+   refused unless that digest's amd64 config hashes to the local image ID the
+   build recorded before pushing (`AKMODS_BUILT_IMAGE_ID`), so an image another
+   run pushed to the shared tag in between is never pinned or signed
 
 Important design change:
 

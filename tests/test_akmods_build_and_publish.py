@@ -113,16 +113,23 @@ class AkmodsBuildAndPublishTests(unittest.TestCase):
     def test_build_and_push_seeds_the_cache_file_before_upstream_builds(self) -> None:
         # main() patches this function out in the tests below, so the body is
         # asserted here: the cache.json upstream reads has to be on disk with
-        # the pinned release in it *before* `just build` runs, and `just push`
+        # the pinned release in it *before* `just build` runs, the built image
+        # has to be recorded between the build and the push, and `just push`
         # has to follow the build rather than race it.
         observed: list[tuple[str, bool]] = []
+        local_ref = "localhost/zfs-kinoite-complex-akmods:main-43-x86_64"
 
         with (
             tempfile.TemporaryDirectory() as tempdir,
             patch.object(script, "AKMODS_WORKTREE", Path(tempdir)),
             patch.dict(
                 script.os.environ,
-                {"AKMODS_KERNEL": "main", "AKMODS_VERSION": "43"},
+                {
+                    "AKMODS_KERNEL": "main",
+                    "AKMODS_VERSION": "43",
+                    "AKMODS_REPO": "zfs-kinoite-complex-akmods",
+                    "GITHUB_OUTPUT": str(Path(tempdir) / "github-output"),
+                },
                 clear=True,
             ),
         ):
@@ -130,8 +137,9 @@ class AkmodsBuildAndPublishTests(unittest.TestCase):
                 Path(tempdir) / "build" / "main-43" / "KCWD" / "rpms" / "cache.json"
             )
 
-            def record(args: list[str], **_kwargs: object) -> None:
+            def record(args: list[str], **_kwargs: object) -> str:
                 observed.append((args[-1], cache_json.exists()))
+                return f"{'a' * 64}\n" if args[0] == "podman" else ""
 
             with (
                 patch.object(script, "run_cmd", side_effect=record) as run_cmd,
@@ -139,14 +147,19 @@ class AkmodsBuildAndPublishTests(unittest.TestCase):
             ):
                 script.build_and_push_kernel_release("6.18.16-200.fc43.x86_64")
 
-            self.assertEqual(observed, [("build", True), ("push", True)])
+            self.assertEqual(observed, [("build", True), (local_ref, True), ("push", True)])
             self.assertEqual(
                 run_cmd.call_args_list,
                 [
                     call(["just", "build"], cwd=str(Path(tempdir)), capture_output=False),
+                    call(["podman", "image", "inspect", "--format", "{{.Id}}", local_ref]),
                     call(["just", "push"], cwd=str(Path(tempdir)), capture_output=False),
                 ],
             )
+            # The pin step reads this back as AKMODS_BUILT_IMAGE_ID.
+            output = (Path(tempdir) / "github-output").read_text(encoding="utf-8")
+            self.assertIn("built_image_id<<", output)
+            self.assertIn("a" * 64 + "\n", output)
             self.assertIn(
                 "Building akmods for kernel release: 6.18.16-200.fc43.x86_64",
                 printed.getvalue(),

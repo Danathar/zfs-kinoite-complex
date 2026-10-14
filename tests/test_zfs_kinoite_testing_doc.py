@@ -286,7 +286,8 @@ class MainArtifactTests(unittest.TestCase):
         )
         self.assertEqual(f"{tag.rsplit(':', 1)[0]}@sha256:<digest>", documented)
         pin = (REPO_ROOT / "ci_tools" / "pin_akmods_cache.py").read_text(encoding="utf-8")
-        self.assertIn('return f"{image_name}@{digest}", digest', pin)
+        self.assertIn('pinned_ref = f"{image_name}@{digest}"', pin)
+        self.assertIn("return pinned_ref, digest", pin)
 
 
 class BranchArtifactTests(unittest.TestCase):

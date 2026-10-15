@@ -726,16 +726,27 @@ class ValidationInstructionTests(unittest.TestCase):
     def test_the_named_workflow_and_dispatch_input_exist(self) -> None:
         items = _numbered_items(_section(DOC_TEXT, "### Validate The Sync"))
         after_push = next(item for item in items if "after pushing" in item)
-        workflow = re.search(r"`(build-branch)` workflow", after_push)
+        workflow = re.search(r"`(build\.yml)` run", after_push)
         dispatch = re.search(r"`rebuild_akmods=(true|false)`", after_push)
-        self.assertIsNotNone(workflow, "the document no longer names the branch validation workflow")
+        self.assertIsNotNone(workflow, "the document no longer names the workflow that rebuilds akmods")
         self.assertIsNotNone(dispatch, "the document no longer names the rebuild input")
+        self.assertEqual("true", dispatch.group(1))
         self.assertTrue(
-            (REPO_ROOT / ".github" / "workflows" / f"{workflow.group(1)}.yml").exists()
+            (REPO_ROOT / ".github" / "workflows" / workflow.group(1)).exists()
         )
         build_text = BUILD_WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("rebuild_akmods:", build_text)
         self.assertIn("github.event.inputs.rebuild_akmods", build_text)
+
+    def test_build_branch_is_not_presented_as_an_akmods_build(self) -> None:
+        """`build-branch` compiles nothing, so the step must say so rather than lean on it."""
+        items = _numbered_items(_section(DOC_TEXT, "### Validate The Sync"))
+        after_push = " ".join(next(item for item in items if "after pushing" in item).split())
+        self.assertIn("`build-branch` workflow does not", after_push)
+        self.assertIn("compiles nothing", after_push)
+        self.assertTrue(
+            (REPO_ROOT / ".github" / "workflows" / "build-branch.yml").exists()
+        )
 
 
 if __name__ == "__main__":

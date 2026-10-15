@@ -24,6 +24,7 @@ is never wrong about a fixture is the only thing keeping the assertions built on
 
 from __future__ import annotations
 
+import ast
 import json
 import os
 import re
@@ -747,6 +748,142 @@ class ValidationInstructionTests(unittest.TestCase):
         self.assertTrue(
             (REPO_ROOT / ".github" / "workflows" / "build-branch.yml").exists()
         )
+
+    def test_the_promotion_opt_out_names_a_real_input_that_skips_promotion(self) -> None:
+        """
+        The step warns that the rebuild moves `:latest` and names the input that stops it.
+
+        That sentence is the only thing between a maintainer validating a fork sync and every
+        machine tracking this repository pulling an image built from it. So the input it names
+        must be a real `build.yml` dispatch input, its default must be the promoting one (or
+        "unless you also set" is backwards), and the value the document gives must be one the
+        promote job's guard refuses.
+        """
+
+        after_push = _after_push_step()
+        opt_out = re.search(
+            r"promotes `:latest` unless you also set `([A-Za-z0-9_]+)=(true|false)`", after_push
+        )
+        self.assertIsNotNone(opt_out, "the step no longer names the input that skips promotion")
+        name, value = opt_out.groups()
+        inputs = _dispatch_inputs(BUILD_WORKFLOW.read_text(encoding="utf-8"))
+        self.assertIn(name, inputs, f"build.yml has no dispatch input named {name!r}")
+        self.assertEqual(
+            inputs[name].get("default"),
+            "true",
+            f"{name} no longer defaults to promoting, so 'unless you also set' is backwards",
+        )
+        guard = f"github.event.inputs.{name} == 'true'"
+        promote_if = _job_if(BUILD_WORKFLOW.read_text(encoding="utf-8"), "promote-stable")
+        self.assertIn(guard, promote_if, "the promote job no longer reads the named input")
+        self.assertNotEqual(value, "true", "the document's value is the one that promotes")
+
+    def test_build_branch_checks_exactly_what_the_document_says(self) -> None:
+        """
+        "it only checks that the fork commit clones and that the existing shared cache still
+        matches" is a claim about `prepare-validation-build`, the one command build-branch's
+        akmods job runs. Hold the module to those two checks and to nothing that compiles.
+        """
+
+        after_push = _after_push_step()
+        self.assertIn(
+            "it only checks that the fork commit clones and that the existing shared cache "
+            "still matches",
+            after_push,
+        )
+        branch = (REPO_ROOT / ".github" / "workflows" / "build-branch.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("python3 -m ci_tools.cli prepare-validation-build", branch)
+        tree = ast.parse(
+            (REPO_ROOT / "ci_tools" / "prepare_validation_build.py").read_text(encoding="utf-8")
+        )
+        imported = {
+            (node.module, alias.name)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom)
+            for alias in node.names
+        }
+        self.assertIn(("ci_tools.akmods_clone_pinned", "clone_pinned"), imported)
+        self.assertIn(("ci_tools.check_akmods_cache", "inspect_akmods_cache"), imported)
+        self.assertEqual(
+            {module for module, _ in imported if module and "build" in module.split(".")[-1]},
+            {"ci_tools.resolve_build_inputs"},
+            "prepare-validation-build now imports a build module, so 'compiles nothing' may be false",
+        )
+
+    def test_the_rebuild_is_placed_on_main_after_the_push(self) -> None:
+        """Where the rebuild runs and when it validates are the step's two warnings; keep both."""
+
+        after_push = _after_push_step()
+        self.assertIn("The rebuild runs on `main`", after_push)
+        self.assertIn(
+            "With the floating track, `main` already resolves the pushed fork commit, so this "
+            "validates the sync after it lands, not before",
+            after_push,
+        )
+        self.assertIn("main", load_repo_defaults().get("AKMODS_UPSTREAM_TRACK", ""))
+
+    def test_the_files_a_green_branch_run_says_nothing_about_are_the_ones_checked_above(
+        self,
+    ) -> None:
+        """The synced files step 5 names must be the ones the pre-push steps already check."""
+
+        items = _numbered_items(_section(DOC_TEXT, "### Validate The Sync"))
+        after_push = _after_push_step()
+        named = re.search(r"says nothing about the synced `([^`]+)` or `([^`]+)`", after_push)
+        self.assertIsNotNone(named, "the step no longer names the synced files")
+        earlier = " ".join(item for item in items if "after pushing" not in item)
+        for name in named.groups():
+            # As a whole file name: `Justfile` itself, or the last part of a longer path.
+            self.assertRegex(earlier, rf"[`/]{re.escape(name)}[` ]", f"no earlier step checks {name}")
+
+
+def _after_push_step() -> str:
+    items = _numbered_items(_section(DOC_TEXT, "### Validate The Sync"))
+    return next(item for item in items if "after pushing" in item)
+
+
+def _dispatch_inputs(workflow_text: str) -> dict[str, dict[str, str]]:
+    """Map each `workflow_dispatch` input of a workflow to its scalar fields (default, type...)."""
+
+    lines = workflow_text.splitlines()
+    start = next(i for i, line in enumerate(lines) if line.strip() == "workflow_dispatch:")
+    inputs: dict[str, dict[str, str]] = {}
+    current: dict[str, str] | None = None
+    for line in lines[start + 1 :]:
+        if line.strip() and not line.startswith("    "):
+            break
+        name = re.match(r"^      ([A-Za-z0-9_]+):\s*$", line)
+        if name:
+            current = inputs.setdefault(name.group(1), {})
+            continue
+        field = re.match(r"^        ([A-Za-z0-9_]+):\s*(.*?)\s*$", line)
+        if field and current is not None:
+            current[field.group(1)] = field.group(2)
+    return inputs
+
+
+def _job_if(workflow_text: str, job: str) -> str:
+    """Return a job's `if:` expression, folded `>-` block included, as one line."""
+
+    lines = workflow_text.splitlines()
+    start = lines.index(f"  {job}:")
+    for index in range(start + 1, len(lines)):
+        line = lines[index]
+        if re.match(r"^  \S", line):
+            break
+        if line.startswith("    if:"):
+            value = line.split(":", 1)[1].strip()
+            if value not in (">-", ">", "|"):
+                return value
+            block = []
+            for entry in lines[index + 1 :]:
+                if entry.strip() and not entry.startswith("      "):
+                    break
+                block.append(entry.strip())
+            return " ".join(part for part in block if part)
+    raise AssertionError(f"job {job!r} has no `if:`")
 
 
 if __name__ == "__main__":

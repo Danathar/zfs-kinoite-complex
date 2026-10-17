@@ -167,9 +167,10 @@ filename it uses instead:
   automation holding a token, and that file is where each workflow's token
   permissions are recorded.
 - **The scheduled workflows that do exist** are `build.yml`, `nightly-compliance.yml`,
-  `prune-registry.yml` and `agent-audit.yml`. Each does one job, and none reports
-  on progress: `agent-audit.yml` is red or green on whether merged agent pull
-  requests left their signature line and sign-offs.
+  `prune-registry.yml`, `agent-audit.yml` and `boot-test.yml`. Each does one job, and
+  none reports on progress: `agent-audit.yml` is red or green on whether merged agent
+  pull requests left their signature line and sign-offs, and `boot-test.yml` on whether
+  the published image boots with ZFS loaded.
 
 If a report is ever wanted, the commands above are the starting point, and the
 change goes through [`docs/risk-tiers.md`](./risk-tiers.md) like any other

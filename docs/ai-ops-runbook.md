@@ -127,6 +127,25 @@ Every file in `.github/workflows/` has an entry here.
 - **Detail:** [`quality.md`](./quality.md), "The nightly job answers a question
   the others cannot". It reports; it repairs nothing.
 
+### `boot-test.yml` — "Boot test"
+
+- **Means:** once a day it boots the published `:latest`, by digest, in a
+  throwaway VM on the runner (bcvk), logs in over SSH, and checks that the
+  `zfs` and `kmod-zfs` packages are installed, that the `zfs` module loaded at
+  boot, and that `zpool list` reaches it. Its job is `boot`. It runs after
+  `build.yml` has moved `:latest`, so it gates nothing: red means the image a
+  user would pull now failed.
+- **First:** read the run's summary. It names the digest booted and each
+  check's result. A summary saying the VM never reached the checks is a VM
+  that did not boot or never answered SSH; read the `boot-test-*` artifact's
+  `bcvk.log` and `console.txt` before blaming the image, because a runner that
+  could not start the VM looks the same from the summary. A failed check is the
+  image. Do not re-tag or re-sign anything to fix it
+  ([`AGENTS.md`](../AGENTS.md) section 0 rule 6).
+- **Detail:** the header of `ci_tools/boot_test.py`. Failed systemd units are
+  listed but not judged: several fail on every ephemeral boot, such as
+  `bootloader-update.service`, which finds no `/boot` to update.
+
 ### `prune-registry.yml` — "Prune registry"
 
 - **Means:** registry retention. On its weekly schedule it is a **dry run**:
@@ -161,8 +180,8 @@ Every file in `.github/workflows/` has an entry here.
 
 ### `auto-issues.yml` — "Auto issues"
 
-- **Means:** runs after `nightly-compliance.yml`, `prune-registry.yml` or
-  `agent-audit.yml` finishes. Its job "Open, update or close the tracking
+- **Means:** runs after `nightly-compliance.yml`, `prune-registry.yml`,
+  `agent-audit.yml` or `boot-test.yml` finishes. Its job "Open, update or close the tracking
   issue" opens one issue when a scheduled run on `main` fails, comments on
   that issue when it fails again, and closes it when the next scheduled run
   passes. The issue title is `Scheduled run failing:` followed by the

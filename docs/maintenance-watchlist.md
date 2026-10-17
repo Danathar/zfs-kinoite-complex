@@ -84,7 +84,7 @@ hypothetical future workflow:
 - `promote-stable` is conditioned on `github.event.inputs.promote_to_stable ==
   'true'`, and that input **defaults to `true`**.
 
-`prune-registry.yml`'s job, the only other one with `packages: write`, has the
+`prune-registry.yml`'s job, the only package writer outside `build.yml`, has the
 same guard. `tests/test_workflow_build_container.py` fails if a job holding
 `packages: write` is not bound to `main` by a guard, the environment, or a job
 it needs.

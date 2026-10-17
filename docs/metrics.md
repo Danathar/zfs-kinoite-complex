@@ -150,8 +150,8 @@ done | sort
 ```
 
 It prints one line per workflow and job: the longest run of that job among the
-workflow's last 20 completed runs. It makes one API call per run, 200 in all
-(20 runs for each of the ten workflows the tuning file names), plus one per
+workflow's last 20 completed runs. It makes one API call per run, 220 in all
+(20 runs for each of the eleven workflows the tuning file names), plus one per
 workflow to list those runs, and takes about two minutes.
 
 Read it against the tuning file by hand, and keep three things in mind:

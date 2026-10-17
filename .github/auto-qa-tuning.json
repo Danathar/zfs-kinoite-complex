@@ -83,6 +83,9 @@
     { "workflow": "nightly-compliance.yml", "job": "suite", "timeout_minutes": 15 },
     { "workflow": "nightly-compliance.yml", "job": "published-image", "timeout_minutes": 15 },
 
+    { "workflow": "boot-test.yml", "job": "boot", "timeout_minutes": 60,
+      "note": "Host setup, a multi-GB pull and up to two VM boots. A local boot took about 90s; no hosted run has been sampled yet." },
+
     { "workflow": "prune-registry.yml", "job": "prune", "timeout_minutes": 10 },
 
     { "workflow": "agent-audit.yml", "job": "audit", "timeout_minutes": 15 }

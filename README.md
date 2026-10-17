@@ -55,8 +55,9 @@ is the version it attempts to build and install.
 > The author exercises it in VMs and intends to keep the image building and
 > testing as the pipeline evolves. CI does not boot the image or import a pool
 > before `:latest` moves; promotion proves composition, signing, and `bootc
-> container lint`, not production runtime safety. See
-> [`docs/safety-model.md`](./docs/safety-model.md).
+> container lint`, not production runtime safety. A daily boot test boots
+> `:latest` in a VM after it moves and checks that ZFS loads; it reports, it
+> does not gate. See [`docs/safety-model.md`](./docs/safety-model.md).
 
 First, teach the host to trust this repository's signing key. This is a one-time
 setup per host, and it has to happen **before** the switch: the image ships its

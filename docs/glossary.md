@@ -151,3 +151,5 @@ This page defines terms used across this repository's docs and workflow comments
 - `BUILD_RAN`: whether that run actually built, so a successful gate-skipped schedule run leaves the akmods badge untouched.
 - `FAILURE_PAYLOAD_PATH`: path of the classifier payload the akmods badge writer reads; the file `AKMODS_FAILURE_PAYLOAD_PATH` named when it was written.
 - `BADGE_OUTPUT_PATH`: path where a badge writer puts its shields.io JSON payload; each writer has its own default under `artifacts/`.
+- `BOOT_TEST_IMAGE`: image the boot test boots, by tag or digest; `boot-test.yml` passes `:latest` unless a dispatch names another.
+- `BOOT_TEST_WORK`: directory where the boot test writes its check script, VM logs and `result.json`; defaults to `artifacts/boot-test`.

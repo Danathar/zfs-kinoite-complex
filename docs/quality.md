@@ -74,7 +74,7 @@ Two properties of the badge pipeline are deliberate:
 | `Python Unit Tests` (`test.yml`) | every PR and push to `main` | **merging the pull request**, through the ruleset on `main` — not publishing. See below |
 | `ruff check` | same job | same |
 | Per-module coverage floors (`tests/check_coverage.py`) | same job | same |
-| `Evaluate Stable Signal Gate` (`build.yml`) | scheduled and `main` pushes | *skips* the build on a scheduled run when upstream has not moved (`build.yml:120`) — a skip, not a failure |
+| `Evaluate Stable Signal Gate` (`build.yml`) | scheduled and `main` pushes | *skips* the build on a scheduled run when upstream has not moved (`build.yml:124`) — a skip, not a failure |
 | `check-akmods-cache` strict mode | before the candidate build | the build, if the cache does not carry a matching `kmod-zfs` |
 | `sign-image` | before publish | publishing — an unsigned production image is refused outright |
 | `promote-stable` digest re-read | after the copy to `:latest` | the run, not the copy — it detects a bad promotion, it does not prevent one. See the warning above. |

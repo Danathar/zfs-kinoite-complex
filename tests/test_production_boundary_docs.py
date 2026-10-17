@@ -5,8 +5,8 @@ docs/maintenance-watchlist.md and docs/production-boundary-proposal.md -- to the
 files, ci/defaults.json and the Containerfile whose contents they restate.
 Doing: Extracts the named sections from each document and recomputes every claim they make
 about the machine, then asserts the two agree.
-Why: The watchlist is the standing record that `production-signing` has no branch policy, so
-a dispatch against any branch can reach the production signing key. Every supporting fact it
+Why: The watchlist records why `production-signing` must stay restricted to `main`: without
+that branch policy, a dispatch against any branch reaches the production signing key. Every supporting fact it
 gives -- which jobs declare the environment, which consume `secrets.SIGNING_SECRET`, that no
 job guards on `github.ref`, that `promote_to_stable` defaults to `true` -- is a hand copy of
 build.yml. Nothing opened either file, so build.yml could be fixed, or made worse, and the
@@ -40,9 +40,9 @@ TESTING_DOC = DOCS_DIR / "zfs-kinoite-testing.md"
 
 BUILD = WORKFLOW_DIR / "build.yml"
 
-# The heading of the watchlist section that records the open finding. Everything the
-# tests in OpenFindingTests recompute is quoted inside it.
-OPEN_FINDING_HEADING = "### Open: the `production-signing` environment is not branch-restricted"
+# The heading of the watchlist section that records the branch-policy finding. Everything
+# the tests in OpenFindingTests recompute is quoted inside it.
+BRANCH_POLICY_HEADING = "### Closed: the `production-signing` environment is restricted to `main`"
 
 SIGNING_ENVIRONMENT = "production-signing"
 
@@ -229,10 +229,10 @@ jobs:
 class SectionExtractorTests(unittest.TestCase):
     def test_the_open_finding_section_is_not_empty(self) -> None:
         # An extractor that returns "" would make every `assertIn` below vacuous.
-        self.assertGreater(len(_section(WATCHLIST, OPEN_FINDING_HEADING).strip()), 500)
+        self.assertGreater(len(_section(WATCHLIST, BRANCH_POLICY_HEADING).strip()), 500)
 
     def test_the_section_stops_at_the_next_heading(self) -> None:
-        section = _section(WATCHLIST, OPEN_FINDING_HEADING)
+        section = _section(WATCHLIST, BRANCH_POLICY_HEADING)
         self.assertNotIn("## Runtime validation", section)
 
     def test_a_missing_heading_is_an_error_rather_than_an_empty_string(self) -> None:
@@ -291,7 +291,7 @@ class SigningBoundaryNamesTests(unittest.TestCase):
 
 class OpenFindingTests(unittest.TestCase):
     """
-    Each bullet of the watchlist's open finding, recomputed from build.yml.
+    Each bullet of the watchlist's branch-policy finding, recomputed from build.yml.
 
     These fail in both directions by design. If the branch-restriction gap is closed in
     the workflow, the recomputed facts stop matching what the document asserts and the
@@ -301,7 +301,7 @@ class OpenFindingTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        cls.section = _section(WATCHLIST, OPEN_FINDING_HEADING)
+        cls.section = _section(WATCHLIST, BRANCH_POLICY_HEADING)
         cls.top = _workflow_keys(BUILD)
         cls.jobs = _jobs(BUILD)
 
@@ -346,28 +346,28 @@ class OpenFindingTests(unittest.TestCase):
                 f"The watchlist says {name} consumes the signing secret; it no longer does.",
             )
 
-    def test_no_job_guards_on_the_ref_and_only_the_concurrency_key_mentions_it(self) -> None:
-        self.assertIn("No job in `build.yml` guards on `github.ref`", self.section)
+    def test_only_the_akmods_job_guards_on_the_ref(self) -> None:
+        # The finding says build-zfs-akmods is the one job with a `github.ref` guard and
+        # that every signing and promotion job depends on it.
+        self.assertIn("Only `build-zfs-akmods` guards on `github.ref`", self.section)
         guarded = sorted(
             name for name, job in self.jobs.items() if "github.ref" in "\n".join(job.children)
         )
         self.assertEqual(
             guarded,
-            [],
-            "The watchlist records that no job guards on `github.ref`, which is why a "
-            f"dispatch from any branch reaches the signing key. {guarded} now does. If "
-            "that is the fix, rewrite the open finding in docs/maintenance-watchlist.md "
-            "in the same change.",
+            ["build-zfs-akmods"],
+            "The watchlist records that only build-zfs-akmods guards on `github.ref`. "
+            "Rewrite the finding in docs/maintenance-watchlist.md in the same change.",
         )
-        # "The only ref-shaped expression in the file is the `concurrency` group key."
-        self.assertEqual(
-            _keys(self.top["concurrency"].children)["group"].value,
-            "${{ github.workflow }}-${{ github.ref || github.run_id }}",
+        condition = _keys(self.jobs["build-zfs-akmods"].children)["if"].value
+        self.assertTrue(
+            condition.startswith("github.ref == 'refs/heads/main' && ("),
+            f"build-zfs-akmods must require main before anything else: {condition}",
         )
-        self.assertEqual(
-            sum("github.ref" in line for line in _decommented(BUILD.read_text(encoding="utf-8"))),
-            1,
-        )
+        for name in ("sign-akmods-cache", "build-candidate-image", "promote-stable"):
+            with self.subTest(job=name):
+                needs = "\n".join(self.jobs[name].children)
+                self.assertIn("build-zfs-akmods", needs, f"{name} no longer needs build-zfs-akmods")
 
     def test_the_promotion_gate_reads_the_input_the_finding_quotes(self) -> None:
         condition = self._job("promote-stable")["if"].value
@@ -397,14 +397,14 @@ class OpenFindingTests(unittest.TestCase):
 
 class QuotedDocumentTests(unittest.TestCase):
     """
-    The open finding quotes two other documents to establish that the boundary is
+    The finding quotes two other documents to establish that the boundary is
     asserted elsewhere as fact. A quote that no longer appears at the source is how a
     finding becomes unfalsifiable.
     """
 
     @classmethod
     def setUpClass(cls) -> None:
-        cls.section = _normalized(_section(WATCHLIST, OPEN_FINDING_HEADING))
+        cls.section = _normalized(_section(WATCHLIST, BRANCH_POLICY_HEADING))
 
     def test_the_proposal_still_requires_the_rule_the_finding_quotes(self) -> None:
         quote = "environment rules restricting the signing jobs to `main`"
@@ -428,7 +428,7 @@ class QuotedDocumentTests(unittest.TestCase):
         testing = _normalized(TESTING_DOC.read_text(encoding="utf-8"))
         self.assertNotIn("only `main` refs can reach", testing)
         self.assertIn(
-            "maintenance-watchlist.md#open-the-production-signing-environment-is-not-branch-restricted",
+            "maintenance-watchlist.md#closed-the-production-signing-environment-is-restricted-to-main",
             testing,
         )
 

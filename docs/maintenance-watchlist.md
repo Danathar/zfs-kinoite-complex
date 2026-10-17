@@ -43,7 +43,7 @@ Keep `cosign.pub`, `SIGNING_SECRET`, the `production-signing` environment, and
 GHCR package permissions aligned. Verify that branch and environment rules
 prevent untrusted branch runs from reaching the production signing key.
 
-### Open: the `production-signing` environment is not branch-restricted
+### Closed: the `production-signing` environment is restricted to `main`
 
 [`production-boundary-proposal.md`](./production-boundary-proposal.md) lists
 "environment rules restricting the signing jobs to `main`" as a **required
@@ -54,46 +54,74 @@ state as fact that signing happens "inside the `production-signing` environment
 that only `main` refs can reach". It no longer does: its signing section now
 links here instead.
 
-As checked on 2026-09-04 that restriction is not configured:
+Until 2026-10-17 the restriction was missing: `deployment_branch_policy` was
+`null`, so any ref could deploy to the environment. Since 2026-10-17 only the
+`main` branch may, and administrators cannot bypass it. Check it live:
 
 ```bash
-gh api repos/Danathar/zfs-kinoite-complex/environments \
-  --jq '.environments[] | "\(.name): rules=\(.protection_rules|length) branch_policy=\(.deployment_branch_policy)"'
-# production-signing: rules=0 branch_policy=null
+gh api repos/Danathar/zfs-kinoite-complex/environments/production-signing \
+  --jq '"admins_bypass=\(.can_admins_bypass) branch_policy=\(.deployment_branch_policy)"'
+# admins_bypass=false branch_policy={"custom_branch_policies":true,"protected_branches":false}
+gh api repos/Danathar/zfs-kinoite-complex/environments/production-signing/deployment-branch-policies \
+  --jq '[.branch_policies[].name]'
+# ["main"]
 ```
 
-`deployment_branch_policy: null` means any ref may deploy to it.
-
-**A branch can already reach the signing key today.** `build.yml` itself is the
-path, not a hypothetical future workflow:
+**Why it matters.** `build.yml` itself is the path to the key, not a
+hypothetical future workflow:
 
 - It carries a `workflow_dispatch` trigger, and `gh workflow run build.yml --ref
   <branch>` runs *that branch's* copy of the file.
 - `sign-akmods-cache` and `build-candidate-image` both declare `environment:
   production-signing` and consume `secrets.SIGNING_SECRET`.
-- No job in `build.yml` guards on `github.ref`. The only ref-shaped expression in
-  the file is the `concurrency` group key, which gates nothing.
+- Only `build-zfs-akmods` guards on `github.ref`: it runs only on
+  `refs/heads/main`. It is privileged and holds `packages: write`, and without
+  the guard a branch dispatch would run that branch's `ci_tools/` and
+  `.github/actions/` code there and could republish the shared `main-<fedora>`
+  akmods tag.
+  `sign-akmods-cache`, `build-candidate-image` and `promote-stable` all need it,
+  so on another ref nothing after it runs either.
 - `promote-stable` is conditioned on `github.event.inputs.promote_to_stable ==
   'true'`, and that input **defaults to `true`**.
 
-So a dispatch against an arbitrary branch signs a candidate with the production
-key and copies it to `:latest` by default. `deployment_branch_policy: null` is
-the reason nothing stops it.
+`prune-registry.yml`'s job, the only package writer outside `build.yml`, has the
+same guard. `tests/test_workflow_build_container.py` fails if a job holding
+`packages: write` is not bound to `main` by a guard, the environment, or a job
+it needs.
 
-What bounds this is repository write access rather than the environment:
-dispatching a workflow needs a token with `actions: write`, so it is not a route
-open to fork pull requests. But the environment restriction is precisely the
-control meant to make the signing key harder to reach than ordinary write
-access, and it is absent.
+The two guards are independent. The job guard lives in `build.yml`, so a branch
+whose copy drops it can run the akmods job again; editing workflow files needs
+the Workflows permission. The environment restriction lives in GitHub settings,
+so no branch can drop it, and it still keeps such a run away from the signing
+key.
 
-This cannot be checked from CI without an admin-scoped token, which is why it
-belongs here rather than in a test. Three ways to close it: configure the
-environment's branch policy, add a `github.ref` guard to the signing and
-promotion jobs in `build.yml` so the workflow enforces it itself, or correct the
-two documents that assert the boundary is already in place (done for
-`zfs-kinoite-testing.md` on 2026-10-02). Leaving it as it
-stands is the one option that should not, because a documented boundary nobody
-enforces is worse than an acknowledged gap.
+The environment setting cannot be checked from CI without an admin-scoped token,
+which is why it belongs here rather than in a test. Re-check it after any change
+to the environment.
+
+### Open: hosts accept any signed image from this repository under any tag
+
+The signature policy the image installs uses `signedIdentity: matchRepository`
+([`configure_signing_policy.py`](../files/scripts/configure_signing_policy.py)),
+and the signatures `sign-image` writes name the repository without a tag. Check
+one:
+
+```bash
+cosign verify --key cosign.pub ghcr.io/danathar/zfs-kinoite-complex:latest \
+  | jq -r '.[0].critical.identity["docker-reference"]'
+# ghcr.io/danathar/zfs-kinoite-complex
+```
+
+So a host accepts every image this repository ever signed, whatever tag it is
+pulled through. Anything that can write tags in the package could point
+`:latest` at an older signed `candidate-*` or `stable-*` image, and `bootc
+upgrade` would likely accept it as a rollback. [unverified: not exercised.]
+Today that means `build.yml`'s jobs on `main`, `prune-registry.yml`'s job, and
+anyone holding a token with package write access.
+
+No fix is chosen. Narrowing who can write the package reduces the exposure; a
+signature bound to a tag, or a host-side check that refuses older images, would
+close it. Neither has been evaluated.
 
 ## Runtime validation
 

@@ -844,7 +844,8 @@ class OperationalModelTests(unittest.TestCase):
         self.assertIn("\n  preflight:\n", workflow)
         self.assertIn("python3 -m ci_tools.cli check-stable-signal", workflow)
         gated = re.findall(
-            r"if: github\.event_name != 'schedule' \|\| needs\.preflight\.outputs\.should_build",
+            r"if: (?:github\.ref == 'refs/heads/main' && \()?"
+            r"github\.event_name != 'schedule' \|\| needs\.preflight\.outputs\.should_build",
             workflow,
         )
         # Every job that consumes the gate bypasses it for non-schedule events.

@@ -38,7 +38,7 @@ The goal is written in four places. Read them in this order.
 [`docs/maintenance-watchlist.md`](./maintenance-watchlist.md) records what
 stands in the way: the moving parts nothing else watches, including one finding
 marked
-[Open](./maintenance-watchlist.md#open-the-production-signing-environment-is-not-branch-restricted).
+[Open](./maintenance-watchlist.md#open-hosts-accept-any-signed-image-from-this-repository-under-any-tag).
 The two proposals are proposals, not commitments with dates.
 
 So the stated direction is: keep a testing-only image building, signed and
@@ -60,8 +60,8 @@ List the findings the watchlist marks as open:
 grep -n '^### Open' docs/maintenance-watchlist.md
 ```
 
-Each hit is a heading. The section under it says how to check the live GitHub
-setting and which options close it. Settings live on GitHub, not in the
+Each hit is a heading. The section under it says how to check the finding live
+and which options close it. Settings live on GitHub, not in the
 repository, so the files alone cannot tell you whether they are configured. The
 proposal says the same and does not claim they are.
 

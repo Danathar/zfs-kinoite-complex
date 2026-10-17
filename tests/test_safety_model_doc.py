@@ -345,12 +345,15 @@ class ScheduledBuildTests(unittest.TestCase):
         # PyYAML reads the bare key `on` as True.
         triggers = workflow.get("on", workflow.get(True))
         self.assertLessEqual({"schedule", "push", "workflow_dispatch"}, set(triggers))
-        for job in ("build-zfs-akmods", "build-candidate-image"):
+        gate = "github.event_name != 'schedule' || needs.preflight.outputs.should_build == 'true'"
+        expected = {
+            # The akmods job also refuses every ref but main; see docs/maintenance-watchlist.md.
+            "build-zfs-akmods": f"github.ref == 'refs/heads/main' && ({gate})",
+            "build-candidate-image": gate,
+        }
+        for job, condition in expected.items():
             with self.subTest(job=job):
-                self.assertEqual(
-                    _squash(workflow["jobs"][job]["if"]),
-                    "github.event_name != 'schedule' || needs.preflight.outputs.should_build == 'true'",
-                )
+                self.assertEqual(_squash(workflow["jobs"][job]["if"]), condition)
 
     def test_the_code_reading_guide_copy_names_both_triggers(self) -> None:
         lines = [

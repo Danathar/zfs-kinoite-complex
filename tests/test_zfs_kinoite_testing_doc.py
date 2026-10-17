@@ -38,11 +38,10 @@ gone stale when this file was written:
     build would conclude brew does not.
 
 The page used to state as fact that signing happens "inside the `production-signing`
-environment that only `main` refs can reach". That restriction is not configured, and
-`docs/maintenance-watchlist.md` records it as an open finding, so the page now links to
-that finding instead. This file checks the *machine-side* half -- that the two signing
-jobs really do declare that environment -- and that the page no longer claims the
-environment is branch-restricted.
+environment that only `main` refs can reach", before that restriction was configured. It
+now links to the `docs/maintenance-watchlist.md` finding that records the setting and how
+to check it. This file checks the *machine-side* half -- that the two signing jobs really
+do declare that environment -- and that the link resolves.
 
 No PyYAML, for the reason tests/test_docs_consistency.py gives: the CI job installs only
 pytest, pytest-cov and ruff, so a third-party parser would depend on the runner image and
@@ -527,10 +526,10 @@ class SigningTests(unittest.TestCase):
     """
     `### 5.` -- what signs, what cannot, and the environment the signing jobs declare.
 
-    The page used to claim that only `main` refs can *reach* that environment. That is not
-    configured; `docs/maintenance-watchlist.md` records it as an open finding, and the page
-    now links there instead. This checks the half the tree can settle -- the two jobs really
-    do declare the environment the page names -- and that the false claim stays gone.
+    The page links to the watchlist finding for the environment's branch policy rather than
+    stating it, because the policy is a GitHub setting the tree cannot show. This checks the
+    half the tree can settle -- the two jobs really do declare the environment the page
+    names -- and that the link points at a heading that exists.
     """
 
     @classmethod
@@ -542,14 +541,11 @@ class SigningTests(unittest.TestCase):
         self.assertIn("`production-signing` environment", self.body)
         self.assertEqual(self.main_yaml.count("environment: production-signing"), 2)
 
-    def test_the_page_points_at_the_open_finding_instead_of_claiming_the_restriction(self) -> None:
-        # If the restriction is ever configured, the finding and this page get revisited
-        # together; until then the page must not state it as fact.
+    def test_the_page_links_to_the_branch_policy_finding(self) -> None:
         watchlist = (DOCS_DIR / "maintenance-watchlist.md").read_text(encoding="utf-8")
-        self.assertIn("### Open: the `production-signing` environment is not branch-restricted",
+        self.assertIn("### Closed: the `production-signing` environment is restricted to `main`",
                       watchlist)
-        self.assertNotIn("only `main` refs can reach", self.body)
-        self.assertIn("maintenance-watchlist.md#open-the-production-signing-environment-is-not-branch-restricted",
+        self.assertIn("maintenance-watchlist.md#closed-the-production-signing-environment-is-restricted-to-main",
                       self.body)
 
     def test_a_candidate_is_signed_by_digest_after_the_push(self) -> None:

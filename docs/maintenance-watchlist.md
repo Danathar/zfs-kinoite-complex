@@ -43,7 +43,7 @@ Keep `cosign.pub`, `SIGNING_SECRET`, the `production-signing` environment, and
 GHCR package permissions aligned. Verify that branch and environment rules
 prevent untrusted branch runs from reaching the production signing key.
 
-### Open: the `production-signing` environment is not branch-restricted
+### Closed: the `production-signing` environment is restricted to `main`
 
 [`production-boundary-proposal.md`](./production-boundary-proposal.md) lists
 "environment rules restricting the signing jobs to `main`" as a **required
@@ -54,18 +54,21 @@ state as fact that signing happens "inside the `production-signing` environment
 that only `main` refs can reach". It no longer does: its signing section now
 links here instead.
 
-As checked on 2026-09-04 that restriction is not configured:
+Until 2026-10-17 the restriction was missing: `deployment_branch_policy` was
+`null`, so any ref could deploy to the environment. Since 2026-10-17 only the
+`main` branch may, and administrators cannot bypass it. Check it live:
 
 ```bash
-gh api repos/Danathar/zfs-kinoite-complex/environments \
-  --jq '.environments[] | "\(.name): rules=\(.protection_rules|length) branch_policy=\(.deployment_branch_policy)"'
-# production-signing: rules=0 branch_policy=null
+gh api repos/Danathar/zfs-kinoite-complex/environments/production-signing \
+  --jq '"admins_bypass=\(.can_admins_bypass) branch_policy=\(.deployment_branch_policy)"'
+# admins_bypass=false branch_policy={"custom_branch_policies":true,"protected_branches":false}
+gh api repos/Danathar/zfs-kinoite-complex/environments/production-signing/deployment-branch-policies \
+  --jq '[.branch_policies[].name]'
+# ["main"]
 ```
 
-`deployment_branch_policy: null` means any ref may deploy to it.
-
-**A branch can already reach the signing key today.** `build.yml` itself is the
-path, not a hypothetical future workflow:
+**This setting is the only thing keeping a branch away from the signing key.**
+`build.yml` itself would be the path, not a hypothetical future workflow:
 
 - It carries a `workflow_dispatch` trigger, and `gh workflow run build.yml --ref
   <branch>` runs *that branch's* copy of the file.
@@ -76,24 +79,25 @@ path, not a hypothetical future workflow:
 - `promote-stable` is conditioned on `github.event.inputs.promote_to_stable ==
   'true'`, and that input **defaults to `true`**.
 
-So a dispatch against an arbitrary branch signs a candidate with the production
-key and copies it to `:latest` by default. `deployment_branch_policy: null` is
-the reason nothing stops it.
+Without the restriction, a dispatch against an arbitrary branch signs a
+candidate with the production key and copies it to `:latest` by default.
 
-What bounds this is repository write access rather than the environment:
-dispatching a workflow needs a token with `actions: write`, so it is not a route
-open to fork pull requests. But the environment restriction is precisely the
-control meant to make the signing key harder to reach than ordinary write
-access, and it is absent.
+**Still open: the restriction does not cover `build-zfs-akmods`.** That job
+declares no environment, holds `packages: write`, runs privileged, and has no
+`github.ref` guard. A `workflow_dispatch` against a branch, for example with
+`rebuild_akmods=true`, runs that branch's `ci_tools/` and `.github/actions/`
+code there and can republish the shared `main-<fedora>` akmods tag before its
+signing job is refused. The republished cache is unsigned, so the next `main`
+run rejects it and has to rebuild: a denial of service and a cache-poisoning
+attempt, not a signed image. Dispatching needs a token with `actions: write`.
+A job-level `if: github.ref == 'refs/heads/main'` on `build-zfs-akmods` would
+close it; that is not done.
 
 This cannot be checked from CI without an admin-scoped token, which is why it
-belongs here rather than in a test. Three ways to close it: configure the
-environment's branch policy, add a `github.ref` guard to the signing and
-promotion jobs in `build.yml` so the workflow enforces it itself, or correct the
-two documents that assert the boundary is already in place (done for
-`zfs-kinoite-testing.md` on 2026-10-02). Leaving it as it
-stands is the one option that should not, because a documented boundary nobody
-enforces is worse than an acknowledged gap.
+belongs here rather than in a test. Re-check it after any change to the
+environment. A `github.ref` guard on the signing and promotion jobs in
+`build.yml` would enforce the same boundary in the workflow itself; that is not
+done.
 
 ## Runtime validation
 

@@ -140,9 +140,11 @@ also yours to make.
 - **The signing environment.** `sign-akmods-cache` and `build-candidate-image`
   declare `environment: production-signing`.
   [`production-boundary-proposal.md`](../../docs/production-boundary-proposal.md)
-  lists restricting that environment to `main` as a required setting, so where
-  that restriction is in place a `replay/*` dispatch cannot reach the signing
-  secret and the candidate build fails.
+  lists restricting that environment to `main` as a required setting, and it
+  is in place here (see
+  [`maintenance-watchlist.md`](../../docs/maintenance-watchlist.md#closed-the-production-signing-environment-is-restricted-to-main)).
+  So a `replay/*` dispatch cannot reach the signing secret and the candidate
+  build fails.
 - **The shared cache moves first.** `build-zfs-akmods` runs before either
   signing job, and `build.yml` does not override `allow_cache_rebuild`, whose
   default is `true`. On a cache miss it republishes the shared

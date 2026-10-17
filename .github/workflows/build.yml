@@ -269,7 +269,7 @@ jobs:
         if: needs.build-zfs-akmods.outputs.akmods_image_digest == ''
         shell: bash
         run: |
-          echo "This run rebuilt the shared akmods cache but produced no pinned digest. Refusing to sign by re-resolving the shared tag, which a concurrent branch rebuild could have moved." >&2
+          echo "This run rebuilt the shared akmods cache but produced no pinned digest. Refusing to sign by re-resolving the shared tag, which another run could have moved." >&2
           exit 1
 
       # Signs the exact digest the previous job pinned, not the shared tag.

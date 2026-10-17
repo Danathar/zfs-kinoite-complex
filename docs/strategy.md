@@ -36,9 +36,10 @@ The goal is written in four places. Read them in this order.
    [Future automation requirements](./runtime-validation-proposal.md#future-automation-requirements).
 
 [`docs/maintenance-watchlist.md`](./maintenance-watchlist.md) records what
-stands in the way: the moving parts nothing else watches, including one finding
-marked
-[Open](./maintenance-watchlist.md#open-the-production-signing-environment-is-not-branch-restricted).
+stands in the way: the moving parts nothing else watches. Its one
+production-boundary finding,
+[the signing environment's branch policy](./maintenance-watchlist.md#closed-the-production-signing-environment-is-restricted-to-main),
+is closed.
 The two proposals are proposals, not commitments with dates.
 
 So the stated direction is: keep a testing-only image building, signed and
@@ -61,9 +62,10 @@ grep -n '^### Open' docs/maintenance-watchlist.md
 ```
 
 Each hit is a heading. The section under it says how to check the live GitHub
-setting and which options close it. Settings live on GitHub, not in the
-repository, so the files alone cannot tell you whether they are configured. The
-proposal says the same and does not claim they are.
+setting and which options close it. No hits means no finding is open. Settings
+live on GitHub, not in the repository, so the files alone cannot tell you
+whether they are still configured. The proposal says the same and does not
+claim they are.
 
 Print the proposal's checklist to work through by hand:
 

@@ -157,8 +157,8 @@ without requiring a manual `modprobe zfs`.
 
 Candidate tags are signed after push by resolving the pushed tag to a digest and
 then signing that digest, inside the `production-signing` environment (see
-[`maintenance-watchlist.md`](./maintenance-watchlist.md#open-the-production-signing-environment-is-not-branch-restricted)
-for the environment's current, unrestricted branch policy).
+[`maintenance-watchlist.md`](./maintenance-watchlist.md#closed-the-production-signing-environment-is-restricted-to-main)
+for the environment's branch policy and how to check it).
 
 Stable `latest` is promoted by copying the already-signed candidate digest, not
 by signing a second time.

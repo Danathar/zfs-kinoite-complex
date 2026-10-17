@@ -117,7 +117,11 @@ jobs:
     # so an unbounded hang is the worst case in this repo.
     timeout-minutes: 90
     needs: preflight
-    if: github.event_name != 'schedule' || needs.preflight.outputs.should_build == 'true'
+    # Only `main` runs this job: it is privileged and holds a package-write
+    # token, so a dispatch on another ref would run that ref's code here and
+    # could republish the shared akmods cache. Every later job needs this one,
+    # so on another ref the whole build is skipped.
+    if: github.ref == 'refs/heads/main' && (github.event_name != 'schedule' || needs.preflight.outputs.should_build == 'true')
     runs-on: ubuntu-26.04
     outputs:
       fedora_version: ${{ steps.prepare.outputs.version }}

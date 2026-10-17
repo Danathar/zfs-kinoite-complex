@@ -67,37 +67,56 @@ gh api repos/Danathar/zfs-kinoite-complex/environments/production-signing/deploy
 # ["main"]
 ```
 
-**This setting is the only thing keeping a branch away from the signing key.**
-`build.yml` itself would be the path, not a hypothetical future workflow:
+**Why it matters.** `build.yml` itself is the path to the key, not a
+hypothetical future workflow:
 
 - It carries a `workflow_dispatch` trigger, and `gh workflow run build.yml --ref
   <branch>` runs *that branch's* copy of the file.
 - `sign-akmods-cache` and `build-candidate-image` both declare `environment:
   production-signing` and consume `secrets.SIGNING_SECRET`.
-- No job in `build.yml` guards on `github.ref`. The only ref-shaped expression in
-  the file is the `concurrency` group key, which gates nothing.
+- Only `build-zfs-akmods` guards on `github.ref`: it runs only on
+  `refs/heads/main`. It is privileged and holds `packages: write`, and without
+  the guard a branch dispatch would run that branch's `ci_tools/` and
+  `.github/actions/` code there and could republish the shared `main-<fedora>`
+  akmods tag.
+  `sign-akmods-cache`, `build-candidate-image` and `promote-stable` all need it,
+  so on another ref nothing after it runs either.
 - `promote-stable` is conditioned on `github.event.inputs.promote_to_stable ==
   'true'`, and that input **defaults to `true`**.
 
-Without the restriction, a dispatch against an arbitrary branch signs a
-candidate with the production key and copies it to `:latest` by default.
+The two guards are independent. The job guard lives in `build.yml`, so a branch
+whose copy drops it can run the akmods job again; editing workflow files needs
+the Workflows permission. The environment restriction lives in GitHub settings,
+so no branch can drop it, and it still keeps such a run away from the signing
+key.
 
-**Still open: the restriction does not cover `build-zfs-akmods`.** That job
-declares no environment, holds `packages: write`, runs privileged, and has no
-`github.ref` guard. A `workflow_dispatch` against a branch, for example with
-`rebuild_akmods=true`, runs that branch's `ci_tools/` and `.github/actions/`
-code there and can republish the shared `main-<fedora>` akmods tag before its
-signing job is refused. The republished cache is unsigned, so the next `main`
-run rejects it and has to rebuild: a denial of service and a cache-poisoning
-attempt, not a signed image. Dispatching needs a token with `actions: write`.
-A job-level `if: github.ref == 'refs/heads/main'` on `build-zfs-akmods` would
-close it; that is not done.
+The environment setting cannot be checked from CI without an admin-scoped token,
+which is why it belongs here rather than in a test. Re-check it after any change
+to the environment.
 
-This cannot be checked from CI without an admin-scoped token, which is why it
-belongs here rather than in a test. Re-check it after any change to the
-environment. A `github.ref` guard on the signing and promotion jobs in
-`build.yml` would enforce the same boundary in the workflow itself; that is not
-done.
+### Open: hosts accept any signed image from this repository under any tag
+
+The signature policy the image installs uses `signedIdentity: matchRepository`
+([`configure_signing_policy.py`](../files/scripts/configure_signing_policy.py)),
+and the signatures `sign-image` writes name the repository without a tag. Check
+one:
+
+```bash
+cosign verify --key cosign.pub ghcr.io/danathar/zfs-kinoite-complex:latest \
+  | jq -r '.[0].critical.identity["docker-reference"]'
+# ghcr.io/danathar/zfs-kinoite-complex
+```
+
+So a host accepts every image this repository ever signed, whatever tag it is
+pulled through. Anything that can write tags in the package could point
+`:latest` at an older signed `candidate-*` or `stable-*` image, and `bootc
+upgrade` would likely accept it as a rollback. [unverified: not exercised.]
+Today that means `build.yml`'s jobs on `main`, `prune-registry.yml`'s job, and
+anyone holding a token with package write access.
+
+No fix is chosen. Narrowing who can write the package reduces the exposure; a
+signature bound to a tag, or a host-side check that refuses older images, would
+close it. Neither has been evaluated.
 
 ## Runtime validation
 

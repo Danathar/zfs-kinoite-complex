@@ -24,7 +24,7 @@ import shutil
 import subprocess
 import unittest
 
-from tests.test_docs_consistency import REPO_ROOT, workflow_paths
+from tests.test_docs_consistency import REPO_ROOT, heading_slugs, workflow_paths
 from tests.test_metrics_doc import (
     fenced_blocks,
     fields_read,
@@ -112,6 +112,26 @@ class LinkTargetTests(unittest.TestCase):
             with self.subTest(source=source):
                 self.assertIn(source, targets)
 
+    def test_the_open_finding_anchor_is_the_watchlists_open_heading(self) -> None:
+        # The link names an anchor that `grep '^### Open'` is meant to find. If the
+        # heading is renamed so the grep stops matching, the anchor and the command
+        # disagree, and the generic anchor test only sees the anchor.
+        anchors = [
+            match.group(1).partition("#")[2]
+            for match in LINK.finditer(doc())
+            if match.group(1).startswith("./maintenance-watchlist.md#")
+        ]
+        self.assertEqual(len(anchors), 1)
+        watchlist = DOCS / "maintenance-watchlist.md"
+        self.assertIn(anchors[0], heading_slugs(watchlist))
+        opens = [
+            line for line in watchlist.read_text(encoding="utf-8").splitlines()
+            if re.match(r"### Open", line)
+        ]
+        self.assertTrue(opens, "the watchlist has no `### Open` heading, so the page's example is stale")
+        slug = re.sub(r"[^\w\s-]", "", opens[0].lstrip("#").strip()).strip().lower().replace(" ", "-")
+        self.assertEqual(anchors[0], slug)
+
 
 class QuotationTests(unittest.TestCase):
     """Every sentence the page puts in quotation marks is a hand copy of another page."""
@@ -179,9 +199,10 @@ class LocalCommandTests(unittest.TestCase):
     @unittest.skipUnless(shutil.which("grep") and shutil.which("sed"), "grep or sed is missing")
     def test_open_finding_grep_lists_only_open_headings(self) -> None:
         result = run_local("grep -n '^### Open'")
-        # grep exits 1 when nothing matches, which the page reads as "no finding is open".
-        self.assertIn(result.returncode, (0, 1), result.stderr)
-        for line in result.stdout.splitlines():
+        self.assertEqual(result.returncode, 0, result.stderr)
+        lines = result.stdout.splitlines()
+        self.assertTrue(lines)
+        for line in lines:
             self.assertRegex(line, r"^\d+:### Open")
 
     @unittest.skipUnless(shutil.which("sed"), "sed is missing")

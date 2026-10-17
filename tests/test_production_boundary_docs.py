@@ -346,28 +346,28 @@ class OpenFindingTests(unittest.TestCase):
                 f"The watchlist says {name} consumes the signing secret; it no longer does.",
             )
 
-    def test_no_job_guards_on_the_ref_and_only_the_concurrency_key_mentions_it(self) -> None:
-        self.assertIn("No job in `build.yml` guards on `github.ref`", self.section)
+    def test_only_the_akmods_job_guards_on_the_ref(self) -> None:
+        # The finding says build-zfs-akmods is the one job with a `github.ref` guard and
+        # that every signing and promotion job depends on it.
+        self.assertIn("Only `build-zfs-akmods` guards on `github.ref`", self.section)
         guarded = sorted(
             name for name, job in self.jobs.items() if "github.ref" in "\n".join(job.children)
         )
         self.assertEqual(
             guarded,
-            [],
-            "The watchlist records that no job guards on `github.ref`, so only the "
-            f"environment's branch policy keeps a branch dispatch from the signing key. "
-            f"{guarded} now does. Rewrite the finding in docs/maintenance-watchlist.md "
-            "in the same change.",
+            ["build-zfs-akmods"],
+            "The watchlist records that only build-zfs-akmods guards on `github.ref`. "
+            "Rewrite the finding in docs/maintenance-watchlist.md in the same change.",
         )
-        # "The only ref-shaped expression in the file is the `concurrency` group key."
-        self.assertEqual(
-            _keys(self.top["concurrency"].children)["group"].value,
-            "${{ github.workflow }}-${{ github.ref || github.run_id }}",
+        condition = _keys(self.jobs["build-zfs-akmods"].children)["if"].value
+        self.assertTrue(
+            condition.startswith("github.ref == 'refs/heads/main' && ("),
+            f"build-zfs-akmods must require main before anything else: {condition}",
         )
-        self.assertEqual(
-            sum("github.ref" in line for line in _decommented(BUILD.read_text(encoding="utf-8"))),
-            1,
-        )
+        for name in ("sign-akmods-cache", "build-candidate-image", "promote-stable"):
+            with self.subTest(job=name):
+                needs = "\n".join(self.jobs[name].children)
+                self.assertIn("build-zfs-akmods", needs, f"{name} no longer needs build-zfs-akmods")
 
     def test_the_promotion_gate_reads_the_input_the_finding_quotes(self) -> None:
         condition = self._job("promote-stable")["if"].value

@@ -509,6 +509,29 @@ class PackageRuleTests(unittest.TestCase):
         with self.assertRaises(AssertionError):
             resolve_package_rules([rule], DEVCONTAINER_DEPENDENCIES[0])
 
+    def test_a_docker_match_with_no_digest_is_exempt_from_digest_pinning(self) -> None:
+        """config:best-practices digest-pins every docker dependency.
+
+        A match that captures no digest (a version named in prose, say) has nothing
+        a pin could write, so Renovate queues a pinDigest update that can never
+        apply. Every such file needs a `pinDigests: false` rule, and a rule that
+        exempts anything else would silently stop pinning a real image reference.
+        """
+        tracked = tracked_files()
+        digestless: set[str] = set()
+        for manager in self.managers.values():
+            if manager["datasourceTemplate"] != "docker":
+                continue
+            for name in selected_files(manager, tracked):
+                if any(not found.get("currentDigest") for found in captures(manager, name)):
+                    digestless.add(name)
+        exemptions = [rule for rule in self.rules if rule.get("pinDigests") is False]
+        exempt = {name for rule in exemptions for name in rule.get("matchFileNames", [])}
+        self.assertEqual(digestless, exempt)
+        for rule in exemptions:
+            with self.subTest(rule=rule["description"][:60]):
+                self.assertEqual(set(rule), {"description", "matchFileNames", "pinDigests"})
+
     def test_the_dockerfile_manager_is_disabled_outright(self) -> None:
         """`enabled` must be present and false -- an absent key is not a disabled manager."""
         matching = [rule for rule in self.rules if rule.get("matchManagers") == ["dockerfile"]]

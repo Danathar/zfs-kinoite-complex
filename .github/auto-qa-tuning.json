@@ -84,7 +84,7 @@
     { "workflow": "nightly-compliance.yml", "job": "published-image", "timeout_minutes": 15 },
 
     { "workflow": "boot-test.yml", "job": "boot", "timeout_minutes": 60,
-      "note": "Host setup, a multi-GB pull and up to two VM boots. A local boot took about 90s; no hosted run has been sampled yet." },
+      "note": "Host setup, a multi-GB pull and up to two VM boots of at most 15 minutes each. The first hosted run (39077504762) took 4 minutes with one boot." },
 
     { "workflow": "prune-registry.yml", "job": "prune", "timeout_minutes": 10 },
 

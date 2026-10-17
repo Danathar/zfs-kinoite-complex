@@ -38,9 +38,10 @@ jobs:
     name: boot
     # 26.04 ships podman 5 and a QEMU and virtiofsd new enough for bcvk.
     runs-on: ubuntu-26.04
-    # Host setup and the pull take about ten minutes; each of the at most two
-    # boots is bounded at fifteen by BOOT_TIMEOUT_SECONDS in boot_test.py. A
-    # local boot with every check passing took about a minute and a half.
+    # The first hosted run (39077504762) took four minutes: host setup 75s,
+    # pull and one passing boot 150s. Each of the at most two boots is bounded
+    # at fifteen minutes by BOOT_TIMEOUT_SECONDS in boot_test.py, so the cap
+    # covers two timed-out boots plus a slow pull.
     timeout-minutes: 60
     env:
       WORK: ${{ github.workspace }}/artifacts/boot-test

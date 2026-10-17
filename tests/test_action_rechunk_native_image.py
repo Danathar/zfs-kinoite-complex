@@ -524,8 +524,7 @@ class RechunkActionStepTests(unittest.TestCase):
         """
         Every `${{ }}` in this action stays in an `env:` block, never in a `run:` body.
 
-        `image_tag` is derived from a branch name in .github/workflows/build-branch.yml, so it
-        carries attacker-influenceable text into this action. Expanded by the runner into the
+        `image_tag` arrives as a workflow input, so it is text this action does not control. Expanded by the runner into the
         script text it would be shell source; read from the environment it is data. This is the
         static half of the guarantee, checked for every step so a step added later cannot
         reintroduce the pattern.

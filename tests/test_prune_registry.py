@@ -14,11 +14,7 @@ from unittest import mock
 from ci_tools import promote_stable, prune_registry
 from ci_tools.common import CiToolError
 from ci_tools.prune_registry import KEEP_STABLE, Version, plan_versions
-from ci_tools.tagging_context import (
-    build_branch_image_tag,
-    build_branch_metadata,
-    build_candidate_tag,
-)
+from ci_tools.tagging_context import build_candidate_tag
 from tests.test_docs_consistency import workflow_paths
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -83,7 +79,7 @@ class ProducerTagContract(unittest.TestCase):
     The tags the pipeline writes are the tags the retention rule recognises.
 
     prune_registry.py spells the tag grammar as regexes, but the tags come from
-    elsewhere: tagging_context.py (candidate and branch tags), promote_stable.py
+    elsewhere: tagging_context.py (candidate tags), promote_stable.py
     (the `stable-<run>-<sha>` audit tag and `latest`) and the
     publish-native-image action (`<tag>-unsigned-<run_id>`). The tests above use
     hand-written literals, so a producer can change its format and every one of
@@ -95,18 +91,11 @@ class ProducerTagContract(unittest.TestCase):
 
     SHA = "4f4264cdeadbeefcafef00d4f4264cdeadbeefca"
     RUN_ID = "33270846007"
-    BRANCHES = ("main", "feature/ZFS 2.4", "--", "x" * 300)
+    # Tags a removed branch workflow published. Old ones can still be in GHCR.
+    OLD_BRANCH_TAGS = ("br-main-44", "br-my-branch-44", "br-feature-zfs-2.4-44", "br-branch-44")
 
     def candidate_tag(self) -> str:
         return build_candidate_tag(github_sha=self.SHA, fedora_version="44")
-
-    def branch_tags(self) -> list[str]:
-        return [
-            build_branch_image_tag(
-                branch_tag_prefix=build_branch_metadata(name), fedora_version="44"
-            )
-            for name in self.BRANCHES
-        ]
 
     def promoted_tags(self) -> list[str]:
         """The destination tags promote_stable.main() copies to, in order."""
@@ -153,9 +142,9 @@ class ProducerTagContract(unittest.TestCase):
             2, plan.delete, f"{tag!r} is not a tag the retention rule deletes: {plan.keep.get(2)}"
         )
 
-    def test_publish_is_only_ever_given_a_candidate_or_branch_tag(self) -> None:
-        # The two producers below are the whole input to the publish action;
-        # a third would be a tag family nothing here builds.
+    def test_publish_is_only_ever_given_a_candidate_tag(self) -> None:
+        # The candidate tag is the whole input to the publish action; a second
+        # would be a tag family nothing here builds.
         passed: set[str] = set()
         for workflow in workflow_paths():
             lines = workflow.read_text().splitlines()
@@ -170,22 +159,19 @@ class ProducerTagContract(unittest.TestCase):
                     self.fail(f"{workflow.name}: a publish-native-image call with no image_tag")
         self.assertEqual(
             passed,
-            {
-                "${{ steps.tags.outputs.candidate_tag }}",
-                "${{ steps.tags.outputs.branch_image_tag }}",
-            },
+            {"${{ steps.tags.outputs.candidate_tag }}"},
         )
 
     def test_an_old_candidate_tag_is_deleted(self) -> None:
         self.assert_deleted_when_old(self.candidate_tag())
 
-    def test_an_old_branch_tag_is_deleted_for_any_branch_name(self) -> None:
-        for tag in self.branch_tags():
+    def test_an_old_br_tag_is_still_deleted(self) -> None:
+        for tag in self.OLD_BRANCH_TAGS:
             with self.subTest(tag=tag):
                 self.assert_deleted_when_old(tag)
 
     def test_an_old_transient_tag_is_deleted_for_every_published_tag(self) -> None:
-        for image_tag in [self.candidate_tag(), *self.branch_tags()]:
+        for image_tag in [self.candidate_tag(), *self.OLD_BRANCH_TAGS]:
             for tag in self.transient_tags(image_tag):
                 with self.subTest(tag=tag):
                     self.assert_deleted_when_old(tag)

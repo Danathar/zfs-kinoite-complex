@@ -9,7 +9,7 @@ under bash with `GITHUB_OUTPUT`/`GITHUB_ENV` pointed at scratch files, and parse
 wrote. The apt step runs against a `sudo` stub that records what it was asked to install without
 installing it.
 Why: These three actions are the highest-fan-in CI surface in the repository -- 14 `uses:` sites
-across build.yml, build-pr.yml, build-branch.yml, akmods-failure-triage.yml and
+across build.yml, build-pr.yml, akmods-failure-triage.yml and
 nightly-compliance.yml -- and no tier executes any of them. tests/test_export_repo_defaults.py and
 tests/test_tagging_context.py call the Python entry points directly, so they never see the
 action.yml wrapper; tests/e2e/ dispatches `ci_tools.cli` commands rather than action steps; and
@@ -329,20 +329,19 @@ class LoadCiDefaultsActionTest(unittest.TestCase):
 @unittest.skipIf(yaml is None, "PyYAML is required to read the action definitions")
 class PrepareRegistryContextActionTest(unittest.TestCase):
     """
-    .github/actions/prepare-registry-context normalizes the GHCR path and flags bot actors.
+    .github/actions/prepare-registry-context normalizes the GHCR path.
 
     Both results are consumed as strings inside workflow expressions -- `image_registry` is
-    concatenated into an image reference, and `actor_is_bot` is compared against the literal
-    `'true'` to decide whether a branch build publishes at all.
+    concatenated into an image reference.
     """
 
     def setUp(self) -> None:
         self.action = "prepare-registry-context"
 
-    def _run(self, *, owner: str, actor: str) -> _StepRun:
+    def _run(self, *, owner: str) -> _StepRun:
         return _run_step(
             _only_shell_step(self.action)["run"],
-            env={"GITHUB_REPOSITORY_OWNER": owner, "GITHUB_ACTOR": actor},
+            env={"GITHUB_REPOSITORY_OWNER": owner},
             cwd=REPO_ROOT,
         )
 
@@ -358,60 +357,35 @@ class PrepareRegistryContextActionTest(unittest.TestCase):
                 self.assertEqual(match.group(2), output)
 
     def test_step_writes_exactly_the_declared_outputs(self) -> None:
-        run = self._run(owner="Danathar", actor="Danathar")
+        run = self._run(owner="Danathar")
         self.assertEqual(run.completed.returncode, 0, run.completed.stderr)
         self.assertEqual(set(run.outputs) - {"resolved_by"}, set(_declared_outputs(self.action)))
 
     def test_mixed_case_owner_becomes_a_lowercase_ghcr_path(self) -> None:
         """GHCR rejects an upper-case path segment, and GitHub owner names preserve case."""
 
-        run = self._run(owner="DanAthar", actor="DanAthar")
+        run = self._run(owner="DanAthar")
         self.assertEqual(run.completed.returncode, 0, run.completed.stderr)
         self.assertEqual(run.outputs["image_org"], "danathar")
         self.assertEqual(run.outputs["image_registry"], "ghcr.io/danathar")
 
-    def test_bot_actor_is_reported_as_the_literal_string_true(self) -> None:
-        """
-        The workflows compare this against `'true'`, so the casing is part of the contract.
-
-        `build-branch.yml` gates its publish step on `steps.registry.outputs.actor_is_bot`; any
-        other spelling reads as "not a bot" and publishes an image for every automated update
-        branch.
-        """
-
-        run = self._run(owner="Danathar", actor="renovate[bot]")
-        self.assertEqual(run.completed.returncode, 0, run.completed.stderr)
-        self.assertEqual(run.outputs["actor_is_bot"], "true")
-
-    def test_human_actor_is_reported_as_the_literal_string_false(self) -> None:
-        run = self._run(owner="Danathar", actor="Danathar")
-        self.assertEqual(run.completed.returncode, 0, run.completed.stderr)
-        self.assertEqual(run.outputs["actor_is_bot"], "false")
-
     def test_step_also_exports_the_upper_case_env_names(self) -> None:
-        run = self._run(owner="DanAthar", actor="renovate[bot]")
+        run = self._run(owner="DanAthar")
         self.assertEqual(run.completed.returncode, 0, run.completed.stderr)
         self.assertEqual(run.env.get("IMAGE_ORG"), "danathar")
         self.assertEqual(run.env.get("IMAGE_REGISTRY"), "ghcr.io/danathar")
-        self.assertEqual(run.env.get("ACTOR_IS_BOT"), "true")
 
-    def test_missing_actor_fails_the_step(self) -> None:
-        """
-        `GITHUB_ACTOR` is always set on a runner, so an absent value means something is wrong.
+    def test_missing_owner_fails_the_step(self) -> None:
+        """`GITHUB_REPOSITORY_OWNER` is always set on a runner, so an absent value is an error."""
 
-        Defaulting it would silently classify the run as human-driven and publish.
-        """
-
-        run = _run_step(
-            _only_shell_step(self.action)["run"],
-            env={"GITHUB_REPOSITORY_OWNER": "Danathar"},
-            cwd=REPO_ROOT,
+        run = _run_step(_only_shell_step(self.action)["run"], env={}, cwd=REPO_ROOT)
+        self.assertNotEqual(
+            run.completed.returncode, 0, "the step accepted a missing GITHUB_REPOSITORY_OWNER"
         )
-        self.assertNotEqual(run.completed.returncode, 0, "the step accepted a missing GITHUB_ACTOR")
         self.assertEqual(set(run.outputs), {"resolved_by"})
 
     def test_step_appends_to_the_shared_output_file(self) -> None:
-        run = self._run(owner="Danathar", actor="Danathar")
+        run = self._run(owner="Danathar")
         self.assertEqual(run.completed.returncode, 0, run.completed.stderr)
         self.assertEqual(run.outputs.get("resolved_by"), "an-earlier-step")
 

@@ -26,9 +26,6 @@ tests/                                unit tests plus the tests/e2e/ tier
   - main push/schedule/manual workflow
   - candidate-first build and promotion
   - scheduled runs skip when neither the upstream Kinoite base image nor the OpenZFS patch release has moved since the last promoted image (see [`docs/safety-model.md`](./safety-model.md))
-- `.github/workflows/build-branch.yml`
-  - branch-tagged test builds
-  - reuse or rebuild the shared akmods cache when the branch targets a new primary kernel
 - `.github/workflows/build-pr.yml`
   - pull request (PR) validation build
   - no push and no signing
@@ -58,7 +55,7 @@ Docs-only changes do not trigger image builds.
 4. [`ci_tools/prepare_validation_build.py`](../ci_tools/prepare_validation_build.py)
    - pull-request cache validation plus pinned-akmods-ref fetch validation
 5. [`ci_tools/tagging_context.py`](../ci_tools/tagging_context.py)
-   - normalizes registry paths and detects automation accounts
+   - normalizes registry paths
 
 ### 4. Akmods build control
 
@@ -78,10 +75,10 @@ Docs-only changes do not trigger image builds.
 ### 6. Tagging and signing
 
 1. [`ci_tools/tagging_context.py`](../ci_tools/tagging_context.py)
-   - builds candidate tags, branch tags, branch-safe prefixes, and registry context values
+   - builds candidate tags and registry context values
 2. [`ci_tools/promote_stable.py`](../ci_tools/promote_stable.py)
 3. [`ci_tools/sign_image.py`](../ci_tools/sign_image.py)
-   - used by branch/main publish flows; publication requires `SIGNING_SECRET`
+   - used by the main publish flow; publication requires `SIGNING_SECRET`
 4. [`.github/actions/`](../.github/actions)
    - local composite actions used to keep the workflow files readable
 

@@ -10,10 +10,7 @@ docs/metrics.md and docs/quality.md.
 Why: Nothing opened this file. It is the first thing a fresh session reads and it exists to be
 acted on -- it names the checks a session should wait for and the ones it should not, and its own
 header says stale content here is worse than an empty file, "a session that trusts it will act on
-it". It was already wrong: it told every session that a pull request triggers `Build Or Reuse
-Shared ZFS Akmods Cache` and `Build Branch Image`, which are jobs in build-branch.yml, a workflow
-with no `pull_request` trigger at all and with `ai-fix/**` in its `branches-ignore` -- so an agent
-session on an ai-fix branch was told to wait for two checks that can never appear.
+it".
 Goal: Make a claim here fail on the pull request that falsifies it, rather than on the session
 that believes it.
 
@@ -374,47 +371,25 @@ class StandingConstraints(unittest.TestCase):
         check = re.search(r"a green `([^`]+)`\s+check", claim).group(1)
         self.assertIn(check, self.jobs, f"no workflow defines a job named {check!r}")
 
-    def test_the_slow_builds_bullet_names_the_right_trigger_for_each_job(self):
-        """"Pushing a branch triggers ...; opening the pull request triggers ...".
+    def test_the_slow_builds_bullet_names_the_right_trigger_for_the_job(self):
+        """"Opening a pull request triggers ...".
 
-        This is the bullet that was wrong. It attributed all three jobs to the pull request,
-        and two of them are in build-branch.yml, which has no `pull_request` trigger -- so a
-        session was told to wait for checks that a pull request does not produce. Each half of
-        the sentence is now checked against the `on:` block of the workflow that defines the
-        jobs it lists.
+        The sentence is checked against the `on:` block of the workflow that defines the job
+        it lists, so a session is never told to wait for a check the event does not produce.
         """
         claim = bullet(self.text, "Image builds are slow.")
-        attributions = {
-            "push": re.search(r"Pushing a branch triggers ([^;.]+)", claim),
-            "pull_request": re.search(r"opening the pull request triggers ([^;.]+)", claim),
-        }
-        for event, match in attributions.items():
-            self.assertIsNotNone(match, f"the bullet no longer attributes any job to {event}")
-            named = BACKTICKED_RE.findall(match.group(1))
-            self.assertTrue(named, f"the {event} half of the bullet names no job")
-            for job in named:
-                self.assertIn(job, self.jobs, f"no workflow defines a job named {job!r}")
-                on = triggers(self.jobs[job])
-                self.assertIn(
-                    event,
-                    on,
-                    f"{job!r} lives in {self.jobs[job].name}, which does not trigger on {event}",
-                )
-
-    def test_the_branch_excluded_from_the_branch_build_really_is_excluded(self):
-        """The bullet warns that an `ai-fix/**` branch gets no branch build.
-
-        That exclusion is one line in build-branch.yml's `branches-ignore`, and dropping it
-        would make the warning false in the direction that wastes a run rather than hangs a
-        session -- but false either way.
-        """
-        claim = bullet(self.text, "Image builds are slow.")
-        excluded = re.search(r"An `([^`]+)` branch is excluded", claim)
-        self.assertIsNotNone(excluded, "the bullet no longer names the excluded branch pattern")
-        branch_build = self.jobs["Build Branch Image"]
-        self.assertIn(
-            excluded.group(1), sequence(triggers(branch_build)["push"], "branches-ignore")
-        )
+        match = re.search(r"Opening a pull request triggers ([^;.]+)", claim)
+        self.assertIsNotNone(match, "the bullet no longer attributes any job to pull_request")
+        named = BACKTICKED_RE.findall(match.group(1))
+        self.assertTrue(named, "the bullet names no job")
+        for job in named:
+            self.assertIn(job, self.jobs, f"no workflow defines a job named {job!r}")
+            on = triggers(self.jobs[job])
+            self.assertIn(
+                "pull_request",
+                on,
+                f"{job!r} lives in {self.jobs[job].name}, which does not trigger on pull_request",
+            )
 
     def test_the_transient_failure_bullet_agrees_with_the_triage_table(self):
         """"`unexpected EOF` during a blob copy is a registry or CDN failure".

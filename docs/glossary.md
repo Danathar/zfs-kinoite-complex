@@ -19,7 +19,6 @@ This page defines terms used across this repository's docs and workflow comments
 - `pipeline`: the ordered set of jobs/steps in one workflow run.
 - `composite action`: a local reusable GitHub Action made from several smaller steps. This repo uses them to keep the workflow files shorter without moving logic out of version control.
 - `build context`: the set of local files available to the container build.
-- `branch-scoped`: a tag/name that includes the branch identifier so branch artifacts stay isolated.
 - `Fedora stream` / `kernel stream`: the ongoing flow of new kernel releases over time.
 - `tag`: a human-readable image label like `latest` or `candidate-deadbee-43`.
 - `image ref`: text that points to a container image, usually `name:tag` or `name@sha256:digest`.
@@ -41,7 +40,6 @@ This page defines terms used across this repository's docs and workflow comments
 - `out-of-date module` / `out-of-date kmod`: a kernel module built for an older kernel release than the one currently in the base image.
 - `hardening`: add safety checks or stricter rules so failures are less likely and easier to catch early.
 - `PR`: pull request.
-- `automation account`: an automated account that triggered the workflow, for example `renovate[bot]`.
 - `VM`: virtual machine.
 - `OCI`: Open Container Initiative standards used for container image formats and registries.
 - `OCI layout`: a local on-disk directory format for container images. In this repo, cache checks copy an image into that format before unpacking its filesystem layers for inspection.
@@ -133,8 +131,7 @@ This page defines terms used across this repository's docs and workflow comments
 - `REGISTRY_USER`: workflow-local registry username used by the Docker login step.
 - `REGISTRY_PASSWORD`: workflow-local registry password or token used by the Docker login step.
 - `IMAGE_ORG`: normalized image-owner portion used in GHCR paths.
-- `IMAGE_REGISTRY`: GHCR registry path for this owner, `ghcr.io/` followed by `IMAGE_ORG`. Exported by the same helper call that exports `IMAGE_ORG` and `ACTOR_IS_BOT`.
-- `ACTOR_IS_BOT`: workflow-local boolean that records whether the triggering account is an automation account, so branch workflows can skip publishing throwaway images.
+- `IMAGE_REGISTRY`: GHCR registry path for this owner, `ghcr.io/` followed by `IMAGE_ORG`. Exported by the same helper call that exports `IMAGE_ORG`.
 - `IMAGE_NAME`: final OS image repository name.
 - `IMAGE_TAG`: image tag being pushed, signed, or promoted.
 - `HAS_SIGNING_SECRET`: workflow-local boolean that records whether `SIGNING_SECRET` is configured.
@@ -145,7 +142,6 @@ This page defines terms used across this repository's docs and workflow comments
 - `USE_INPUT_LOCK`: whether input-lock replay mode is enabled.
 - `LOCK_FILE`: input-lock path passed into the resolver.
 - `LOCK_FILE_PATH`: input-lock path recorded in the build-inputs manifest.
-- `BRANCH_TAG_PREFIX`: branch-safe tag prefix used by branch builds.
 - `AKMODS_FAILURE_LOG`: path to the captured akmods build log used for failure classification.
 - `AKMODS_FAILURE_PAYLOAD_PATH`: path where the failure classifier writes the sticky-issue payload.
 - `REQUIRE_MATCH`: when `true`, `check-akmods-cache` runs in strict mode after a rebuild, where a cache that does not carry the resolved `ZFS_VERSION` is a failure rather than a "rebuild needed" answer.

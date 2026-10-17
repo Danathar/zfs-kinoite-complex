@@ -634,8 +634,8 @@ class DiagnoseWorkflowClaimTests(unittest.TestCase):
         )
         self.assertIn(f"`{name}`", self.text)
 
-    def test_the_other_two_build_workflows_the_prompt_contrasts_still_exist(self) -> None:
-        for workflow in ("build-pr.yml", "build-branch.yml"):
+    def test_the_other_build_workflow_the_prompt_contrasts_still_exists(self) -> None:
+        for workflow in ("build-pr.yml",):
             with self.subTest(workflow=workflow):
                 self.assertIn(f"`{workflow}`", self.text)
                 self.assertTrue((BUILD_WORKFLOW.parent / workflow).exists())

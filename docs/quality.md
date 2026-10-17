@@ -183,7 +183,6 @@ only one of them can publish anything signed:
 | --- | --- | --- |
 | `build.yml` | push to `main`, and 06:00 UTC daily | The production path — **the only one that can have moved `:latest`.** Usually nothing was published, but not always: see the warning below. |
 | `build-pr.yml` | every pull request that changes something other than Markdown or `docs/**` | Validation only. Its header says it intentionally stops before any push or signing step, so nothing was published either way. |
-| `build-branch.yml` | push to any branch except `main` and `ai-fix/**` | A branch test image. Publishes *unsigned* `br-*` tags, and only for human-attributed pushes. Never promoted. |
 | `test.yml` | every pull request and push to `main` | Lint, unit suite, coverage floors. A red run on a pull request stops it merging — see above. |
 
 **Then check that it actually failed.** `gh run list --workflow build.yml
@@ -210,8 +209,8 @@ Three things worth knowing before you conclude anything:
 
    | Message | Where it surfaces | What actually happened |
    | --- | --- | --- |
-   | `happened during read: unexpected EOF` | pulling the base image, in `Build Candidate Image`, `Build Shared ZFS Akmods Cache` or `Verify Shared ZFS Akmods Cache` | A quay.io CDN blob transfer died mid-download. |
-   | `writing blob: … received unexpected HTTP status: 500` | pushing, in `Build Branch Image` | ghcr.io returned a server error on a layer upload. |
+   | `happened during read: unexpected EOF` | pulling the base image, in `Build Candidate Image` or `Build Shared ZFS Akmods Cache` | A quay.io CDN blob transfer died mid-download. |
+   | `writing blob: … received unexpected HTTP status: 500` | pushing, in `Build Candidate Image` | ghcr.io returned a server error on a layer upload. |
    | `Error: trusted root is required when using new bundle format`, preceded by `failed to download https://tuf-repo-cdn.sigstore.dev/…root.json, http status code: 403` | the `Install skopeo and cosign` step, before any of this repo's own code runs | Sigstore's TUF CDN was unavailable, so the installer could not verify the `cosign` binary it downloads. |
 
    The third one is the trap. Its message names a trusted root and a bundle

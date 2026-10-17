@@ -739,14 +739,14 @@ class ValidationInstructionTests(unittest.TestCase):
         self.assertIn("rebuild_akmods:", build_text)
         self.assertIn("github.event.inputs.rebuild_akmods", build_text)
 
-    def test_build_branch_is_not_presented_as_an_akmods_build(self) -> None:
-        """`build-branch` compiles nothing, so the step must say so rather than lean on it."""
+    def test_pull_request_build_is_not_presented_as_an_akmods_build(self) -> None:
+        """`build-pr.yml` compiles nothing, so the step must say so rather than lean on it."""
         items = _numbered_items(_section(DOC_TEXT, "### Validate The Sync"))
         after_push = " ".join(next(item for item in items if "after pushing" in item).split())
-        self.assertIn("`build-branch` workflow does not", after_push)
+        self.assertIn("pull request build (`build-pr.yml`) does not", after_push)
         self.assertIn("compiles nothing", after_push)
         self.assertTrue(
-            (REPO_ROOT / ".github" / "workflows" / "build-branch.yml").exists()
+            (REPO_ROOT / ".github" / "workflows" / "build-pr.yml").exists()
         )
 
     def test_the_promotion_opt_out_names_a_real_input_that_skips_promotion(self) -> None:
@@ -778,11 +778,11 @@ class ValidationInstructionTests(unittest.TestCase):
         self.assertIn(guard, promote_if, "the promote job no longer reads the named input")
         self.assertNotEqual(value, "true", "the document's value is the one that promotes")
 
-    def test_build_branch_checks_exactly_what_the_document_says(self) -> None:
+    def test_pull_request_build_checks_exactly_what_the_document_says(self) -> None:
         """
         "it only checks that the fork commit clones and that the existing shared cache still
-        matches" is a claim about `prepare-validation-build`, the one command build-branch's
-        akmods job runs. Hold the module to those two checks and to nothing that compiles.
+        matches" is a claim about `prepare-validation-build`, the one command build-pr.yml
+        runs for akmods. Hold the module to those two checks and to nothing that compiles.
         """
 
         after_push = _after_push_step()
@@ -791,7 +791,7 @@ class ValidationInstructionTests(unittest.TestCase):
             "still matches",
             after_push,
         )
-        branch = (REPO_ROOT / ".github" / "workflows" / "build-branch.yml").read_text(
+        branch = (REPO_ROOT / ".github" / "workflows" / "build-pr.yml").read_text(
             encoding="utf-8"
         )
         self.assertIn("python3 -m ci_tools.cli prepare-validation-build", branch)

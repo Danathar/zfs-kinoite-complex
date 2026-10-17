@@ -270,7 +270,7 @@ class ShellScannerTests(unittest.TestCase):
         self.assertTrue(_shell_hits("losetup -f pool.img; zpool import -d . testpool"))
 
     def test_a_comment_about_a_command_is_not_a_command(self) -> None:
-        # Both lines are in this tree: build_files/build-image.sh and build-branch.yml.
+        # Both lines were written against this tree; neither is a command.
         self.assertEqual(_shell_hits("# without requiring a manual modprobe."), [])
         self.assertEqual(
             _shell_hits("      # switched to on fresh VMs with plain `bootc switch`"), []

@@ -42,7 +42,7 @@ After repository creation, verify:
 - `SIGNING_SECRET` is present only in that environment
 - the committed public key matches the private key used for signing
 - `latest` is moved only by the promotion job
-- branch builds cannot sign or promote production tags
+- pull request builds cannot sign or promote production tags
 
 These controls do not make the repository production-approved. Keep the image
 as a validation stream and do not represent it as a trusted production update

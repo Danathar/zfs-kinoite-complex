@@ -150,8 +150,8 @@ done | sort
 ```
 
 It prints one line per workflow and job: the longest run of that job among the
-workflow's last 20 completed runs. It makes one API call per run, 220 in all
-(20 runs for each of the eleven workflows the tuning file names), plus one per
+workflow's last 20 completed runs. It makes one API call per run, 200 in all
+(20 runs for each of the ten workflows the tuning file names), plus one per
 workflow to list those runs, and takes about two minutes.
 
 Read it against the tuning file by hand, and keep three things in mind:
@@ -166,11 +166,11 @@ Read it against the tuning file by hand, and keep three things in mind:
   `timeout_minutes` is a job that ran out of time, not one that fit.
 
 As of 2026-09-28 the slowest jobs were `Build Shared ZFS Akmods Cache` (16.6 of
-90 minutes), `Build PR Image (No Push)` (16.4 of 60) and `Build Branch Image`
-(14.4 of 60). None was near `at_risk_ratio`. Every job except the three image
-builds was under `loose_ratio`. That is advisory only: a loose timeout means a
-hung job runs longer before the runner reclaims it. The snapshots under
-`docs/metrics/` predate this section, so none of them carries this reading.
+90 minutes) and `Build PR Image (No Push)` (16.4 of 60). None was near
+`at_risk_ratio`. Every job except the image builds was under `loose_ratio`.
+That is advisory only: a loose timeout means a hung job runs longer before the
+runner reclaims it. The snapshots under `docs/metrics/` predate this section, so
+none of them carries this reading.
 
 ## Coverage
 

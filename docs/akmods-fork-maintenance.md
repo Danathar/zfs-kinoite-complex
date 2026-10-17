@@ -128,8 +128,8 @@ Before pushing the fork:
    the cache repo name, not `null`
 4. `bash -n build_files/zfs/build-kmod-zfs.sh` passes
 5. after pushing, start a manual `build.yml` run with `rebuild_akmods=true`. That is
-   the only run that compiles the synced fork. This repo's `build-branch` workflow
-   does not: it only checks that the fork commit clones and that the existing shared
+   the only run that compiles the synced fork. This repo's pull request build
+   (`build-pr.yml`) does not: it only checks that the fork commit clones and that the existing shared
    cache still matches, so it compiles nothing and a green run says nothing about
    the synced `Justfile` or `build-kmod-zfs.sh`. The rebuild runs on `main`, so it
    republishes the shared cache and promotes `:latest` unless you also set

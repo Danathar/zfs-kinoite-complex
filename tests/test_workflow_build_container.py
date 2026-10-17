@@ -1,8 +1,7 @@
 """
 Script: tests/test_workflow_build_container.py
-What: Guards how the privileged akmods build container is selected, that branch runs
-stay read-only against shared production state, and that only branches may publish
-unsigned (and only explicitly).
+What: Guards how the privileged akmods build container is selected and that no image is
+published without a signing key.
 Doing: Reads the workflow files as text and asserts no run-time override exists and that
 every hardcoded container literal matches the checked-in default.
 Why: That container runs --privileged, as root, with `/` bind-mounted and a package-write
@@ -15,8 +14,8 @@ Matches the workflow files as text rather than parsing them: most of these asser
 not need a real YAML parse, and a substring check is the stronger statement when the
 claim is "this string appears nowhere in the file".
 
-Several of them are the exception, and none of those parses either. The ai-fix branch
-exclusion is a value inside a trigger, `packages: write` is named in the header comment
+Several of them are the exception, and none of those parses either. `packages: write` is
+named in the header comment
 that explains why it is *not* granted, and `allowed_bots` is discussed a few lines above
 where it is set -- in each case the string a substring check would find is prose about the
 setting rather than the setting, which is exactly the false green this file exists to
@@ -41,8 +40,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW_DIR = REPO_ROOT / ".github" / "workflows"
 
-# The workflow whose jobs run the privileged akmods build container. Branch runs
-# used to as well; they now verify the shared cache read-only (#321).
+# The workflow whose jobs run the privileged akmods build container.
 PRIVILEGED_CONTAINER_WORKFLOWS = ("build.yml",)
 
 # Captures the rest of the line, not just non-whitespace: a GitHub expression
@@ -146,84 +144,15 @@ class PullRequestWorkflowTests(unittest.TestCase):
         )
 
 
-class BranchIsolationTests(unittest.TestCase):
+class ProductionSigningTests(unittest.TestCase):
     """
-    Branch runs must be read-only against shared production state.
+    The production path signs everything it publishes.
 
-    The production signing key is scoped to a main-only environment, so branch
-    refs cannot sign. Everything here pins the consequences: the branch
-    workflow never references the secret at all, never mutates the shared
-    akmods cache, and publishes only explicitly-unsigned test images. build.yml
-    must never take the unsigned path.
+    The production signing key is scoped to a main-only environment. Everything
+    here pins the consequences: the signing jobs declare that environment, the
+    publish action refuses to push without a key, and the shared akmods cache
+    cannot be rebuilt by a caller that denies it.
     """
-
-    def _branch_workflow(self) -> str:
-        return (WORKFLOW_DIR / "build-branch.yml").read_text(encoding="utf-8")
-
-    def test_branch_workflow_never_references_the_signing_secret(self) -> None:
-        # The strongest form of "branches cannot sign": not a guard around the
-        # secret, but no reference to it anywhere in the file. A branch push
-        # cannot exfiltrate or use a secret its workflow never requests.
-        self.assertNotIn("SIGNING_SECRET", self._branch_workflow())
-
-    def test_branch_cache_refresh_is_denied_for_everyone(self) -> None:
-        text = self._branch_workflow()
-        job = text[text.index("\n  build-branch-akmods:\n") : text.index("\n  build-branch-image:\n")]
-        why = (
-            "build-branch.yml must not be able to republish the shared akmods cache "
-            "from ANY branch run; without a signing key a branch rebuild publishes an "
-            "unsigned cache that every later run rejects, and a write credential could "
-            "replace the signed cache at will."
-        )
-        # The read-only command pull requests use, which has no rebuild path at all.
-        self.assertIn("python3 -m ci_tools.cli prepare-validation-build", job, why)
-        # No write credential, no privileged container, no rebuild knob to flip.
-        self.assertIn("packages: read", job, why)
-        self.assertNotIn("packages: write", job, why)
-        self.assertNotIn("container:", job, why)
-        self.assertNotIn("--privileged", job, why)
-        self.assertNotIn("prepare-main-akmods", job, why)
-        self.assertNotIn("allow_cache_rebuild", job, why)
-
-    def test_branch_workflow_has_no_cache_signing_job(self) -> None:
-        # The job cannot work without the key; leaving it in place would fail
-        # loudly on every human cache rebuild with a misleading message.
-        self.assertNotIn("sign-branch-akmods-cache", self._branch_workflow())
-
-    def test_branch_publish_is_explicitly_unsigned(self) -> None:
-        self.assertIn('allow_unsigned: "true"', self._branch_workflow())
-
-    def test_agent_branches_never_reach_the_branch_publisher(self) -> None:
-        """
-        An ai-fix/* branch must not reach the branch publisher.
-
-        Without this exclusion, opening a pull request would also publish an
-        unsigned br-* tag to the registry -- more than "propose a change" should
-        cost. `actor_is_bot` gates the push step as well, but that depends on
-        which credential the agent pushed with, which is not this repository's
-        property to guarantee. This one does not care who pushed.
-
-        Matched against comment-stripped source: the `on:` block's own comment
-        names the pattern, so the raw text would satisfy this even with the
-        exclusion deleted.
-        """
-        branch = _without_comments(self._branch_workflow())
-        self.assertIn(
-            "- 'ai-fix/**'",
-            branch,
-            "build-branch.yml must not build or publish agent-authored branches; "
-            "see the comment on its `on:` block and docs/SECURITY-AI.md.",
-        )
-        self.assertIn("- main", branch, "the pre-existing main exclusion must remain")
-
-    def test_build_yml_never_allows_unsigned_publish(self) -> None:
-        text = (WORKFLOW_DIR / "build.yml").read_text(encoding="utf-8")
-        self.assertNotIn(
-            "allow_unsigned",
-            text,
-            "build.yml must never pass allow_unsigned; the production path's "
-            "no-key-no-push guard is the invariant that keeps user-facing tags signed.",
-        )
 
     def test_main_signing_jobs_declare_the_environment(self) -> None:
         # Creating the environment in repository settings gates nothing on its
@@ -241,16 +170,14 @@ class BranchIsolationTests(unittest.TestCase):
                 "repository-level copy is removed, or signing silently breaks.",
             )
 
-    def test_publish_action_fails_closed_by_default(self) -> None:
+    def test_publish_action_refuses_to_push_without_a_key(self) -> None:
         action = (
             REPO_ROOT / ".github" / "actions" / "publish-native-image" / "action.yml"
         ).read_text(encoding="utf-8")
-        self.assertIn('default: "false"', action)
         self.assertIn(
-            "inputs.cosign_private_key == '' && inputs.allow_unsigned != 'true'",
+            "if: inputs.cosign_private_key == ''",
             action,
-            "publish-native-image must refuse to push when there is no key unless the "
-            "caller explicitly opted into unsigned publication.",
+            "publish-native-image must refuse to push when there is no key.",
         )
 
     def test_prepare_action_supports_denying_cache_rebuild(self) -> None:
@@ -312,24 +239,6 @@ class AgentWorkflowIsolationTests(unittest.TestCase):
         for trigger in ("pull_request_review:", "pull_request_review_comment:", "pull_request:"):
             with self.subTest(trigger=trigger):
                 self.assertNotIn(trigger, text)
-
-    def test_agent_branch_prefix_matches_the_branch_publisher_exclusion(self) -> None:
-        """
-        The two halves of "an agent branch publishes nothing" must agree.
-
-        build-branch.yml excludes `ai-fix/**` from its trigger, and ai-fix.yml
-        tells the action to push branches under `ai-fix/`. Changing the prefix
-        in one file without the other silently restores the behaviour the
-        exclusion was added to remove -- an agent branch publishing an unsigned
-        br-* tag -- and nothing else in the repository would notice.
-
-        Both sides are matched against comment-stripped source, because both
-        files mention the other's pattern in prose.
-        """
-        agent = _without_comments(self._agent_workflow())
-        branch = _without_comments((WORKFLOW_DIR / "build-branch.yml").read_text("utf-8"))
-        self.assertIn("branch_prefix: 'ai-fix/'", agent)
-        self.assertIn("- 'ai-fix/**'", branch)
 
 
 if __name__ == "__main__":

@@ -104,7 +104,7 @@ that a code path went away. Say which.
 Nothing here reaches CI or the image: `README.md` badges, `LICENSE`,
 `.editorconfig`, `.gitignore`.
 
-Worth knowing because `build.yml`, `build-pr.yml` and `build-branch.yml` all set
+Worth knowing because `build.yml` and `build-pr.yml` both set
 `paths-ignore` for `**/*.md` and `docs/**`, so a documentation-only change
 **starts no build at all**. That is a useful property when merging a batch — see
 [`quality.md`](./quality.md) on why back-to-back merges turn the build badge

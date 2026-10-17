@@ -51,11 +51,7 @@ from ci_tools.check_stable_signal import (
 from ci_tools.common import CiToolError
 from ci_tools.pin_akmods_cache import akmods_cache_image_tag, pin_akmods_cache_image
 from ci_tools.promote_stable import main as promote_main
-from ci_tools.tagging_context import (
-    build_branch_image_tag,
-    build_branch_metadata,
-    build_candidate_tag,
-)
+from ci_tools.tagging_context import build_candidate_tag
 from tests.test_docs_consistency import REPO_ROOT
 
 DOC_PATH = REPO_ROOT / "docs" / "architecture-overview.md"
@@ -402,7 +398,7 @@ class PublishedTagShapeTests(unittest.TestCase):
     def test_the_documented_tag_list_is_the_one_this_test_checks(self) -> None:
         self.assertEqual(
             set(self.documented_tags()),
-            {"candidate tag", "stable tag", "stable audit tag", "branch tag"},
+            {"candidate tag", "stable tag", "stable audit tag"},
         )
 
     def test_the_candidate_tag_shape_is_the_one_the_helper_builds(self) -> None:
@@ -412,21 +408,6 @@ class PublishedTagShapeTests(unittest.TestCase):
             "ghcr.io/danathar/zfs-kinoite-complex:"
             + build_candidate_tag(github_sha="<sha>", fedora_version="<fedora>"),
         )
-
-    def test_the_branch_tag_shape_is_the_one_the_helper_builds(self) -> None:
-        stated = self.documented_tags()["branch tag"]
-        built = build_branch_image_tag(
-            branch_tag_prefix=build_branch_metadata("<branch>"),
-            fedora_version="<fedora>",
-        )
-        # `<branch>` is not a registry-safe branch name, so the prefix helper
-        # rewrites the angle brackets; compare the shape, not the placeholder.
-        self.assertEqual(
-            stated,
-            "ghcr.io/danathar/zfs-kinoite-complex:"
-            + built.replace("br-branch-", "br-<branch>-"),
-        )
-        self.assertTrue(built.startswith("br-"), built)
 
     def test_promotion_moves_exactly_the_two_documented_stable_tags(self) -> None:
         """Run the real promotion and compare the tags it writes to the doc."""
@@ -847,7 +828,7 @@ class OperationalModelTests(unittest.TestCase):
 
     def test_every_workflow_the_document_names_exists(self) -> None:
         named = self.documented_workflows()
-        self.assertEqual(len(named), 5, named)
+        self.assertEqual(len(named), 4, named)
         for name in named:
             with self.subTest(workflow=name):
                 self.assertTrue((REPO_ROOT / ".github" / "workflows" / name).is_file())
@@ -874,15 +855,15 @@ class OperationalModelTests(unittest.TestCase):
             "a job reads the gate output without the non-schedule bypass",
         )
 
-    def test_branch_runs_never_rebuild_the_shared_cache(self) -> None:
+    def test_pull_request_runs_never_rebuild_the_shared_cache(self) -> None:
         self.assertIn(
-            "branch runs use the same read-only `prepare-validation-build`\nstep as pull requests",
+            "pull request runs use the read-only `prepare-validation-build`\nstep, which has no rebuild path",
             doc(),
         )
-        branch = read(".github/workflows/build-branch.yml")
-        self.assertIn("python3 -m ci_tools.cli prepare-validation-build", branch)
-        self.assertNotIn("allow_cache_rebuild", branch)
-        self.assertNotIn("prepare-main-akmods", branch)
+        pr = read(".github/workflows/build-pr.yml")
+        self.assertIn("python3 -m ci_tools.cli prepare-validation-build", pr)
+        self.assertNotIn("allow_cache_rebuild", pr)
+        self.assertNotIn("prepare-main-akmods", pr)
         self.assertNotIn(
             'allow_cache_rebuild: "false"',
             read(".github/workflows/build.yml"),
@@ -922,9 +903,6 @@ class OperationalModelTests(unittest.TestCase):
         workflow = read(".github/workflows/build.yml")
         literals = re.findall(rf"^\s+image: .*{re.escape(base)}.*$", workflow, re.MULTILINE)
         self.assertEqual(len(literals), 1, literals)
-        # Branch runs verify the cache read-only and run no build container at all.
-        branch = read(".github/workflows/build-branch.yml")
-        self.assertEqual(re.findall(rf"^\s+image: .*{re.escape(base)}.*$", branch, re.MULTILINE), [])
 
 
 if __name__ == "__main__":

@@ -469,8 +469,8 @@ class PublishActionStepTests(unittest.TestCase):
         `final_digest` was empty too, so the guard compared "" against "" and the step exited
         0 having promoted nothing. For `:latest` that was masked -- the tag already exists, so
         the read-back returns the previous build's digest and the comparison fails closed --
-        but a tag that does not exist yet, such as the per-branch `br-*` tags build-branch.yml
-        publishes, would be reported as published without ever having been written.
+        but a tag that does not exist yet, such as a fresh `candidate-*` tag, would be reported
+        as published without ever having been written.
 
         Driven with an empty stub registry, which is the fresh-tag case: neither the transient
         tag nor the requested tag resolves.

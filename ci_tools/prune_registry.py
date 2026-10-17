@@ -42,7 +42,7 @@ STABLE_RE = re.compile(r"^stable-\d+-[0-9a-f]+$")
 DELETABLE_RES = (
     re.compile(r"^candidate-[0-9a-f]+-\d+$"),  # per-commit candidates
     re.compile(r"^.+-unsigned-\d+$"),  # publish-native-image's pre-sign tag
-    re.compile(r"^br-.+$"),  # unsigned throwaway branch images
+    re.compile(r"^br-.+$"),  # unsigned images from the removed build-branch.yml
     # The akmods cache's per-kernel tags, `main-<fedora>-<kernel>` on the index
     # and `.<arch>` on its child. Nothing reads them, and the build that still
     # matters also carries `main-<fedora>`/`main-<fedora>-<arch>`, which stay

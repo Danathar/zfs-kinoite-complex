@@ -585,7 +585,7 @@ class TrustPolicyTests(unittest.TestCase):
         without touching this page fails here.
         """
 
-        for workflow in ("build.yml", "build-pr.yml", "build-branch.yml"):
+        for workflow in ("build.yml", "build-pr.yml"):
             with self.subTest(workflow=workflow):
                 text = (REPO_ROOT / ".github" / "workflows" / workflow).read_text(encoding="utf-8")
                 self.assertIn("signing_key_filename: ${{ steps.defaults.outputs.image_name }}.pub", text)

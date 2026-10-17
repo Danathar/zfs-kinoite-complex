@@ -60,7 +60,7 @@ COVERAGE_WORKFLOWS = ("test.yml", "nightly-compliance.yml", "ai-fix.yml")
 # The workflows that build and promote a production image. The document's final
 # section says there is no instrumentation on these, and that the missing
 # production execution coverage is a tracked gap rather than a settled design.
-PRODUCTION_WORKFLOWS = ("build.yml", "build-pr.yml", "build-branch.yml")
+PRODUCTION_WORKFLOWS = ("build.yml", "build-pr.yml")
 
 # Each alternative of the document's failure classifier, mapped to the tracked
 # file that emits it -- or to None for a message this repository does not

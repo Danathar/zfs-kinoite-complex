@@ -310,13 +310,13 @@ class BuildActionStepTests(unittest.TestCase):
 
     def test_unset_provenance_inputs_still_emit_their_labels(self) -> None:
         """
-        The three callers that omit the optional inputs must still produce the same label set.
+        A caller that omits the optional inputs must still produce the same label set.
 
-        .github/workflows/build-pr.yml and build-branch.yml pass neither `stable_signal_image`
-        nor `stable_signal_digest`, so the action's `default: ""` is the production path, not a
+        .github/workflows/build-pr.yml passes neither `stable_signal_image` nor
+        `stable_signal_digest`, so the action's `default: ""` is a real path, not a
         contrived one. Every label must still be emitted, with an empty value, so that the
         label set an image carries does not depend on which workflow built it: a consumer
-        reading provenance off a branch build should find the key and see it is empty, not have
+        reading provenance off a pull request build should find the key and see it is empty, not have
         to distinguish "unset" from "this build never labelled it". Dropping a label whose
         value is often empty is the cheap-looking edit this guards, and the positional `-t` and
         context arguments are re-checked here because a label that vanishes takes the argument
@@ -367,8 +367,7 @@ class BuildActionStepTests(unittest.TestCase):
         """
         Every `${{ }}` in this action stays in an `env:` block, never in a `run:` body.
 
-        `image_tag` is derived from a branch name on .github/workflows/build-branch.yml, so it
-        carries attacker-influenceable text into this action. Expanded by the runner into the
+        `image_tag` arrives as a workflow input, so it is text this action does not control. Expanded by the runner into the
         script text it would be shell source; read from the environment it is data. This is the
         static half of the guarantee, checked for every step so a step added later cannot
         reintroduce the pattern.

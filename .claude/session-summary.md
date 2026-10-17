@@ -50,11 +50,8 @@ branch, what is done, what is not, and what you were about to check.
 - **`main` only changes through a pull request.** A ruleset refuses direct and
   force pushes, and a pull request cannot merge until a green `Python Unit Tests`
   check reports. See [`docs/branch-protection.md`](../docs/branch-protection.md).
-- **Image builds are slow.** Pushing a branch triggers `Verify Shared ZFS
-  Akmods Cache` and `Build Branch Image`; opening the pull request triggers
-  `Build PR Image (No Push)`. They take tens of minutes. An `ai-fix/**` branch
-  is excluded from the branch build, so a pull request from one gets only the
-  third. `Python Unit Tests` returns in about ten seconds. Do not read a
-  pending image build as a hang.
+- **Image builds are slow.** Opening a pull request triggers `Build PR Image (No
+  Push)`. It takes tens of minutes. `Python Unit Tests` returns in about ten
+  seconds. Do not read a pending image build as a hang.
 - **`unexpected EOF` during a blob copy is a registry or CDN failure**, common
   enough here to rule out first, and never a reason to change code.

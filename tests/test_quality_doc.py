@@ -76,7 +76,6 @@ INSTALL_AND_VERIFY = REPO_ROOT / "docs" / "install-and-verify.md"
 
 BUILD_YML = WORKFLOW_DIR / "build.yml"
 BUILD_PR_YML = WORKFLOW_DIR / "build-pr.yml"
-BUILD_BRANCH_YML = WORKFLOW_DIR / "build-branch.yml"
 TEST_YML = WORKFLOW_DIR / "test.yml"
 NIGHTLY_YML = WORKFLOW_DIR / "nightly-compliance.yml"
 
@@ -763,13 +762,13 @@ class ReadingARedBuild(unittest.TestCase):
 
     def test_the_table_covers_every_workflow_a_reader_could_be_looking_at(self):
         """
-        The four workflows a person watches. `ai-fix.yml`, `labeler.yml` and
+        The three workflows a person watches. `ai-fix.yml`, `labeler.yml` and
         `akmods-failure-triage.yml` are deliberately absent: none of them builds anything.
         """
 
         named = {BACKTICKED_RE.findall(row[0])[0] for row in self.workflows}
         self.assertEqual(
-            named, {"build.yml", "build-pr.yml", "build-branch.yml", "test.yml"}
+            named, {"build.yml", "build-pr.yml", "test.yml"}
         )
         for workflow in sorted(named):
             with self.subTest(workflow=workflow):
@@ -792,24 +791,6 @@ class ReadingARedBuild(unittest.TestCase):
         self.assertIn("pull_request:", test_on)
         self.assertIn("main", sequence(test_on, "branches"))
 
-    def test_the_branch_row_names_the_two_patterns_build_branch_excludes(self):
-        """
-        "every branch except `main` and `ai-fix/**`" is `branches-ignore`, retyped.
-
-        Set equality, not containment: a pattern dropped from `branches-ignore` leaves the
-        row describing an exclusion the workflow no longer makes, and containment in the
-        direction of the workflow cannot see that.
-        """
-
-        cells = {BACKTICKED_RE.findall(row[0])[0]: row[1] for row in self.workflows}
-        excluded = set(sequence(top_level_block(BUILD_BRANCH_YML, "on"), "branches-ignore"))
-        self.assertEqual(set(BACKTICKED_RE.findall(cells["build-branch.yml"])), excluded)
-
-    def test_the_branch_row_is_right_that_those_images_are_unsigned(self):
-        row = next(r for r in self.workflows if "build-branch.yml" in r[0])
-        self.assertIn("unsigned", squash(row[2]))
-        self.assertNotIn("sign-image", BUILD_BRANCH_YML.read_text(encoding="utf-8"))
-
     def test_every_place_the_third_party_table_points_at_is_a_real_job_or_step(self):
         """
         The "Where it surfaces" column is the only thing that makes the third row usable: its
@@ -817,8 +798,7 @@ class ReadingARedBuild(unittest.TestCase):
         failed. A name that no longer exists costs the reader exactly that.
         """
 
-        known = set(job_names(BUILD_YML).values()) | set(job_names(BUILD_BRANCH_YML).values())
-        known |= set(step_names(BUILD_YML)) | set(step_names(BUILD_BRANCH_YML))
+        known = set(job_names(BUILD_YML).values()) | set(step_names(BUILD_YML))
         for row in self.third_party:
             for name in BACKTICKED_RE.findall(row[1]):
                 with self.subTest(name=name):

@@ -233,11 +233,11 @@ class WorkflowCoverageTests(unittest.TestCase):
         self.assertEqual(undocumented, [], "workflows named in no document")
 
     def test_quality_page_covers_every_workflow_that_can_fail_a_change(self) -> None:
-        # Narrower and stricter than the check above: these four decide whether
+        # Narrower and stricter than the check above: these three decide whether
         # a change is allowed to proceed, so the page a reader consults to
         # interpret a red run has to account for all of them.
         quality = QUALITY.read_text(encoding="utf-8")
-        for workflow in ("build.yml", "build-pr.yml", "build-branch.yml", "test.yml"):
+        for workflow in ("build.yml", "build-pr.yml", "test.yml"):
             with self.subTest(workflow=workflow):
                 self.assertIn(workflow, quality)
 

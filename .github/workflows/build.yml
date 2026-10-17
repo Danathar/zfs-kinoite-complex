@@ -279,8 +279,8 @@ jobs:
       # should be able to prove it was produced by this repo's own pipeline,
       # not just that a filename happens to match.
       #
-      # IMAGE_DIGEST matters here. `build-branch.yml` rebuilds and republishes
-      # this same shared `main-<fedora>` tag, so a concurrent branch run can
+      # IMAGE_DIGEST matters here. Any run holding a registry write token can
+      # republish this same shared `main-<fedora>` tag, so a concurrent run can
       # move it between the moment build-zfs-akmods pinned a digest and the
       # moment this job runs. Re-resolving the tag would then sign the other
       # run's image and leave the digest this run's candidate image was

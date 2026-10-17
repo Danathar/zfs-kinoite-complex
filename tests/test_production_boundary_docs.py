@@ -394,11 +394,6 @@ class OpenFindingTests(unittest.TestCase):
             "finding and the watchlist has to say so.",
         )
 
-    def test_build_branch_yml_is_still_the_clean_one_the_finding_contrasts(self) -> None:
-        self.assertIn("`build-branch.yml` is separately clean", self.section)
-        text = (WORKFLOW_DIR / "build-branch.yml").read_text(encoding="utf-8")
-        self.assertNotIn("SIGNING_SECRET", text)
-
 
 class QuotedDocumentTests(unittest.TestCase):
     """
@@ -436,12 +431,6 @@ class QuotedDocumentTests(unittest.TestCase):
             "maintenance-watchlist.md#open-the-production-signing-environment-is-not-branch-restricted",
             testing,
         )
-
-    def test_the_test_the_finding_credits_still_pins_what_it_says(self) -> None:
-        self.assertIn("tests/test_workflow_build_container.py", self.section)
-        pinning_test = REPO_ROOT / "tests" / "test_workflow_build_container.py"
-        self.assertTrue(pinning_test.is_file())
-        self.assertIn("SIGNING_SECRET", pinning_test.read_text(encoding="utf-8"))
 
 
 class ReviewChecklistTests(unittest.TestCase):
@@ -481,7 +470,7 @@ class ReviewChecklistTests(unittest.TestCase):
 
     def test_latest_is_moved_only_by_the_promotion_job(self) -> None:
         self.assertIn("`latest` is moved only by the promotion job", self.checklist)
-        self.assertIn("branch builds cannot sign or promote production tags", self.checklist)
+        self.assertIn("pull request builds cannot sign or promote production tags", self.checklist)
         promoters = []
         for path in self.workflows:
             for name, job in _jobs(path).items():
@@ -489,11 +478,10 @@ class ReviewChecklistTests(unittest.TestCase):
                     promoters.append(f"{path.name}:{name}")
         self.assertEqual(promoters, ["build.yml:promote-stable"])
 
-    def test_no_branch_or_pull_request_workflow_signs(self) -> None:
-        for name in ("build-branch.yml", "build-pr.yml"):
-            text = (WORKFLOW_DIR / name).read_text(encoding="utf-8")
-            self.assertNotIn("ci_tools.cli sign-image", text)
-            self.assertNotIn("ci_tools.cli promote-stable", text)
+    def test_no_pull_request_workflow_signs(self) -> None:
+        text = (WORKFLOW_DIR / "build-pr.yml").read_text(encoding="utf-8")
+        self.assertNotIn("ci_tools.cli sign-image", text)
+        self.assertNotIn("ci_tools.cli promote-stable", text)
 
 
 if __name__ == "__main__":

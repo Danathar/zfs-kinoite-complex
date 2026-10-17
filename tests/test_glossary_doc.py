@@ -34,9 +34,8 @@ were not, and five names had already gone missing when this file was written:
     `BREW_IMAGE_DIGEST`. Brew is the third digest-pinned image in the build:
     `ci_tools/write_build_inputs_manifest.py` requires all three, so three keys of
     `artifacts/build-inputs.json` were undefined by the page a reader opens beside it.
-  * `Signing And Registry` defined `IMAGE_ORG` but not `IMAGE_REGISTRY` or `ACTOR_IS_BOT`,
-    the other two values the same `write_github_env` call in
-    `ci_tools/tagging_context.py` exports.
+  * `Signing And Registry` defined `IMAGE_ORG` but not `IMAGE_REGISTRY`, the other value
+    the same `write_github_env` call in `ci_tools/tagging_context.py` exports.
   * `zfs_version` was documented in its workflow-input spelling only. The helpers read the
     value as `ZFS_VERSION`, which the page never named, so a grep for the variable a failing
     helper reports found nothing.
@@ -72,7 +71,6 @@ import unittest
 from pathlib import Path
 
 from ci_tools.tagging_context import (
-    actor_is_bot,
     build_candidate_tag,
     export_registry_context_values,
 )
@@ -550,7 +548,7 @@ class EnvironmentVariableTests(unittest.TestCase):
     def test_every_value_ci_tools_exports_to_github_env_is_documented(self) -> None:
         defined = defined_variables(doc_text())
         exported = exported_variables()
-        self.assertEqual(exported, {"IMAGE_ORG", "IMAGE_REGISTRY", "ACTOR_IS_BOT"})
+        self.assertEqual(exported, {"IMAGE_ORG", "IMAGE_REGISTRY"})
         missing = sorted(exported - defined)
         self.assertEqual(missing, [], f"exported to GITHUB_ENV, undefined by the page: {missing}")
 
@@ -692,19 +690,11 @@ class WorkedExampleTests(unittest.TestCase):
         definition = definition_of(doc_text(), "image owner portion")
         owner = re.search(r"for example `([a-z0-9-]+)` in `(ghcr\.io/[^`]+)`", definition)
         self.assertIsNotNone(owner, f"no owner example in: {definition}")
-        values = export_registry_context_values(
-            repository_owner="Danathar", actor_name="a-person"
-        )
+        values = export_registry_context_values(repository_owner="Danathar")
         self.assertEqual(values["image_org"], owner.group(1))
         self.assertEqual(
             f"{values['image_registry']}/{defaults()['IMAGE_NAME']}", owner.group(2)
         )
-
-    def test_the_automation_account_example_is_recognized_as_a_bot(self) -> None:
-        definition = definition_of(doc_text(), "automation account")
-        example = re.search(r"for example `([^`]+)`", definition)
-        self.assertIsNotNone(example)
-        self.assertTrue(actor_is_bot(example.group(1)))
 
     def test_the_stable_and_audit_tags_are_what_promotion_writes(self) -> None:
         source = PROMOTE_STABLE.read_text(encoding="utf-8")

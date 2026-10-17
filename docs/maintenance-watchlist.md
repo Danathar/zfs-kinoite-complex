@@ -14,7 +14,7 @@ When changing the Fedora major:
 
 1. update the base image in both `ci/defaults.json` and `Containerfile`
 2. verify the corresponding akmods image tag convention
-3. run the tests and a branch build
+3. run the tests and check the pull request build
 4. rebuild the shared cache on `main` before promotion
 
 ## OpenZFS
@@ -84,9 +84,7 @@ What bounds this is repository write access rather than the environment:
 dispatching a workflow needs a token with `actions: write`, so it is not a route
 open to fork pull requests. But the environment restriction is precisely the
 control meant to make the signing key harder to reach than ordinary write
-access, and it is absent. `build-branch.yml` is separately clean — it never
-references `SIGNING_SECRET`, which `tests/test_workflow_build_container.py` pins
-— but auditing only that workflow would hide the live path through `build.yml`.
+access, and it is absent.
 
 This cannot be checked from CI without an admin-scoped token, which is why it
 belongs here rather than in a test. Three ways to close it: configure the

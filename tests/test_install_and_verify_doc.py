@@ -1,11 +1,11 @@
 """
 Script: tests/test_install_and_verify_doc.py
 What: Joins docs/install-and-verify.md -- and README.md's copy of its host bootstrap -- to the
-build helper, workflows and files that its install, validation and branch-image steps describe.
+build helper, workflows and files that its install, validation and candidate-image steps describe.
 Doing: Parses the fenced blocks an operator copies, runs the in-image signing-policy helper with
 the inputs the build passes, and checks that the host bootstrap writes the same key path,
 registries.d file, discovery YAML and policy rule the image writes for itself; then re-derives
-the switch target, the post-boot checks, and the unsigned-branch and candidate-tag claims from
+the switch target, the post-boot checks, and the candidate-tag claims from
 the code that implements them.
 Why: The page is the one README sends an operator to before a first `bootc switch`, and no test
 read it as a subject. Its references under `tests/` read one thing back out: the
@@ -50,8 +50,7 @@ ZFS_INSTALLER = REPO_ROOT / "containerfiles" / "zfs-akmods" / "install_zfs_from_
 PROMOTE = REPO_ROOT / "ci_tools" / "promote_stable.py"
 WORKFLOWS = REPO_ROOT / ".github" / "workflows"
 BUILD = WORKFLOWS / "build.yml"
-BUILD_BRANCH = WORKFLOWS / "build-branch.yml"
-BUILD_WORKFLOWS = ("build.yml", "build-branch.yml", "build-pr.yml")
+BUILD_WORKFLOWS = ("build.yml", "build-pr.yml")
 
 # Both files carry the host bootstrap an operator pastes before the first switch.
 BOOTSTRAP_DOCS = (DOC, README)
@@ -177,7 +176,7 @@ class ImageInputsTests(unittest.TestCase):
                     "signing_key_filename: ${{ steps.defaults.outputs.image_name }}.pub", text
                 )
         org = tagging_context.export_registry_context_values(
-            repository_owner=_image_repo().split("/")[1], actor_name="someone"
+            repository_owner=_image_repo().split("/")[1]
         )["image_org"]
         self.assertEqual(_image_repo(), f"ghcr.io/{org}/{_image_name()}")
         self.assertEqual(_signing_key_filename(), f"{_image_name()}.pub")
@@ -291,8 +290,7 @@ class SwitchAndVerifyTargetTests(unittest.TestCase):
                 self.assertEqual(set(refs), {f"{_image_repo()}:latest"})
 
     def test_the_switch_enforces_the_policy_step_1_wrote(self) -> None:
-        # Every copy an operator pastes; the plain switch belongs only to the unsigned
-        # branch-image section, which gives it in prose and never as a block.
+        # Every copy an operator pastes; the docs give no plain switch.
         for doc in BOOTSTRAP_DOCS:
             switches = [
                 shlex.split(line)
@@ -348,44 +346,14 @@ class QuickValidationTests(unittest.TestCase):
         self.assertIn(str(Path(by_path.group(1)).parent), fragment)
 
 
-class BranchAndCandidateImageTests(unittest.TestCase):
-    """The unsigned `br-*` rules and the signed `candidate-*` alternative."""
+class CandidateImageTests(unittest.TestCase):
+    """The signed `candidate-*` alternative for testing a change."""
 
     def setUp(self) -> None:
         self.section = " ".join(
-            _section(DOC.read_text(encoding="utf-8"), "Testing An Unsigned Branch Image").split()
+            _section(DOC.read_text(encoding="utf-8"), "Testing A Change Before It Reaches latest").split()
         )
 
-    def test_branch_tags_are_br_prefixed(self) -> None:
-        self.assertIn("`br-*` branch tags are **deliberately unsigned**", self.section)
-        prefix = tagging_context.build_branch_metadata("feature/x")
-        tag = tagging_context.build_branch_image_tag(branch_tag_prefix=prefix, fedora_version="44")
-        self.assertTrue(tag.startswith("br-"), tag)
-
-    def test_branch_images_are_published_through_the_unsigned_opt_in(self) -> None:
-        self.assertIn("publish test images through an explicit unsigned opt-in", self.section)
-        text = BUILD_BRANCH.read_text(encoding="utf-8")
-        step = text[text.index("- name: Push unsigned branch test image"):]
-        step = step[: step.index("\n      - name:", 1)] if "\n      - name:" in step else step
-        self.assertIn('allow_unsigned: "true"', step)
-
-    def test_a_signed_host_refuses_br_tags_because_they_share_its_repository(self) -> None:
-        # The refusal in rule 1 holds only because br-* tags land in the SAME repository the
-        # host's policy rule covers (matchRepository). A branch image pushed elsewhere would
-        # fall through to the host's default and be accepted.
-        self.assertIn("will refuse to pull an unsigned `br-*` tag", self.section)
-        self.assertEqual(
-            POLICY.update_policy(policy_data={}, image_repo="r", key_path=Path("k"))
-            ["transports"]["docker"]["r"][0]["signedIdentity"],
-            {"type": "matchRepository"},
-        )
-        for name in ("build.yml", "build-branch.yml"):
-            with self.subTest(workflow=name):
-                self.assertIn(
-                    "image_repo: ghcr.io/${{ steps.registry.outputs.image_org }}/"
-                    "${{ steps.defaults.outputs.image_name }}",
-                    (WORKFLOWS / name).read_text(encoding="utf-8"),
-                )
 
     @unittest.skipIf(yaml is None, "PyYAML not installed")
     def test_the_signed_alternative_is_a_dispatch_that_signs_but_does_not_promote(self) -> None:

@@ -60,7 +60,6 @@ KERNEL_RELEASE_MODULE = REPO_ROOT / "shared" / "kernel_release.py"
 BUILD_WORKFLOWS = (
     REPO_ROOT / ".github" / "workflows" / "build.yml",
     REPO_ROOT / ".github" / "workflows" / "build-pr.yml",
-    REPO_ROOT / ".github" / "workflows" / "build-branch.yml",
 )
 
 # The pages that send a reader here. The note is only reachable because these link it, and

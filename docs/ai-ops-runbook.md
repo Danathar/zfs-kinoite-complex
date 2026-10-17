@@ -86,19 +86,6 @@ Every file in `.github/workflows/` has an entry here.
 - **Detail:** [`quality.md`](./quality.md), "Reading a red build". It does not
   run for a change that touches only Markdown or `docs/**`.
 
-### `build-branch.yml` — "Build Branch Image"
-
-- **Means:** a branch other than `main` failed to build. Jobs: "Compute Branch
-  Tag", "Verify Shared ZFS Akmods Cache" and "Build Branch Image". A human's
-  push publishes an unsigned `br-*` test image. A bot's push publishes
-  nothing.
-- **First:** find the failing step. A registry or CDN error in a pull or push
-  step is usually a third-party outage, not this repository
-  ([`quality.md`](./quality.md), "Reading a red build").
-- **Detail:** branches under `ai-fix/` never trigger it, by design
-  ([`SECURITY-AI.md`](./SECURITY-AI.md), "What an agent branch can actually
-  cause here"). Old `br-*` tags are removed by `prune-registry.yml`.
-
 ### `test.yml` — "Run Python Tests"
 
 - **Means:** lint, the unit suite or a per-module coverage floor failed. The
@@ -148,6 +135,7 @@ Every file in `.github/workflows/` has an entry here.
 - **First:** read the log. The line `mode: dry run (nothing deleted)` or
   `mode: delete` says which it was. A line starting `FAILED to delete` means
   one version was not removed; read the reason beside it.
+- **Old tags:** old `br-*` tags are removed by `prune-registry.yml`.
 - **Detail:** the retention rule is the header of
   `.github/workflows/prune-registry.yml` and is tested by
   `tests/test_prune_registry.py`. A person dispatches the delete, after

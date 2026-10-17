@@ -16,7 +16,7 @@ What is pinned, and what is not:
   * Every backticked path exists, and each `[file](link), "Heading"` cross-reference names a heading
     that exists in the linked page.
   * The behaviours the page asserts, one test each: the triggers and defaults it states for
-    build.yml, build-branch.yml, build-pr.yml, test.yml, prune-registry.yml, ai-fix.yml and
+    build.yml, build-pr.yml, test.yml, prune-registry.yml, ai-fix.yml and
     labeler.yml; the log lines it tells the reader to search for; the sticky issue titles, label and
     closing rule; and the hook's refusal and exit code.
 
@@ -89,11 +89,6 @@ NOT_FILES = {
 EXPECTED_QUOTED = {
     "build.yml": ["Build And Promote Main Image", "Evaluate Stable Signal Gate"],
     "build-pr.yml": ["Validate Pull Request Image Build", "Build PR Image (No Push)"],
-    "build-branch.yml": [
-        "Build Branch Image",
-        "Compute Branch Tag",
-        "Verify Shared ZFS Akmods Cache",
-    ],
     "test.yml": ["Run Python Tests", "Python Unit Tests", "Lint with ruff"],
     "labeler.yml": ["Labeler", "Apply area labels"],
     "nightly-compliance.yml": ["Nightly compliance"],
@@ -315,11 +310,11 @@ class QuotedNames(RunbookTest):
     def test_names_quoted_in_an_entry_belong_to_that_workflow_or_the_cross_reference_set(
         self,
     ) -> None:
-        # Stricter than the global check: inside the entry for build-pr.yml, "Build Branch Image"
-        # would be a real name from another workflow and still be wrong. The names an entry may
-        # quote from a *different* workflow are the ones its text explains (the required check
-        # `Python Unit Tests`, which the ai-fix entry is about).
-        cross = {"ai-fix.yml": {"Python Unit Tests"}, "build-branch.yml": set()}
+        # Stricter than the global check: inside the entry for build-pr.yml, "Build And Promote
+        # Main Image" would be a real name from another workflow and still be wrong. The names
+        # an entry may quote from a *different* workflow are the ones its text explains (the
+        # required check `Python Unit Tests`, which the ai-fix entry is about).
+        cross = {"ai-fix.yml": {"Python Unit Tests"}}
         for file, section in self.sections.items():
             names = yaml_names(workflow_text(file)) | cross.get(file, set()) | OTHER_QUOTED
             for quoted in QUOTED_RE.findall(collapse(section)):
@@ -448,9 +443,9 @@ class BuildEntry(RunbookTest):
         self.assertIn("`reason=stable-signal-unchanged`", self.text)
 
 
-class PullRequestAndBranchEntries(RunbookTest):
+class PullRequestEntry(RunbookTest):
     def test_markdown_only_changes_start_neither_build_workflow_nor_production(self) -> None:
-        for file in ("build.yml", "build-pr.yml", "build-branch.yml"):
+        for file in ("build.yml", "build-pr.yml"):
             with self.subTest(workflow=file):
                 ignored = indented_block(top_block(workflow_text(file), "on"), "paths-ignore")
                 self.assertIn("- docs/**", ignored)
@@ -464,15 +459,6 @@ class PullRequestAndBranchEntries(RunbookTest):
         others = names - {"Build PR Image (No Push)", "Install skopeo and cosign"}
         pushy = sorted(n for n in others if re.search(r"push|sign", n, re.IGNORECASE))
         self.assertEqual(pushy, [])
-
-    def test_branch_workflow_excludes_main_and_agent_branches(self) -> None:
-        on = top_block(workflow_text("build-branch.yml"), "on")
-        ignored = indented_block(on, "branches-ignore")
-        self.assertEqual(ignored, ["- main", "- 'ai-fix/**'"])
-
-    def test_branch_image_publish_is_skipped_for_a_bot(self) -> None:
-        step = step_block(workflow_text("build-branch.yml"), "Push unsigned branch test image")
-        self.assertIn("if: steps.registry.outputs.actor_is_bot != 'true'", step)
 
     def test_the_old_branch_tags_are_in_the_prune_rule(self) -> None:
         header = workflow_text("prune-registry.yml").split("on:")[0]

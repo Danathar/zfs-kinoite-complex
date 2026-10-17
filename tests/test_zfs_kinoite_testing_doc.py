@@ -2,19 +2,19 @@
 Script: tests/test_zfs_kinoite_testing_doc.py
 What: Joins docs/zfs-kinoite-testing.md -- the deep design document for this repository's
 build -- to the tree it describes: the image refs and tag formats, the build arguments the
-composite action passes, the ordered cache-reuse checks, the read-only rules for branch and
+composite action passes, the ordered cache-reuse checks, the read-only rule for
 pull-request validation, and the signing and promotion paths.
 Doing: Recomputes each claim from the thing that owns it -- `ci_tools/tagging_context.py`,
 `ci_tools/pin_akmods_cache.py` and `ci_tools/promote_stable.py` for the tag shapes,
 `ci/defaults.json` for the repository names and the akmods pin,
 `ci_tools/check_akmods_cache.py` for the four cache checks and their order,
 `.github/actions/build-native-image/action.yml` and `Containerfile` for the build
-arguments, and the three build workflows for what each one is allowed to do.
+arguments, and the two build workflows for what each one is allowed to do.
 Why: This page is where a reader is sent to learn what the build actually does. Every
 statement in it is a hand-copy of something that lives in the machine, and the page was read
 by no test as a subject, so a hand-copy could go stale with nothing to catch it.
 Goal: Make a renamed build argument, a new one nobody documented, a moved tag format, a
-reordered cache check or a branch workflow that stops being read-only fail here, instead of
+reordered cache check or a pull-request workflow that stops being read-only fail here, instead of
 leaving this page describing a build this repository no longer has.
 
 Before this file, `docs/zfs-kinoite-testing.md` was opened by no test as a subject. The two
@@ -59,11 +59,7 @@ import unittest
 from pathlib import Path
 
 from ci_tools.pin_akmods_cache import akmods_cache_image_tag
-from ci_tools.tagging_context import (
-    build_branch_image_tag,
-    build_branch_metadata,
-    build_candidate_tag,
-)
+from ci_tools.tagging_context import build_candidate_tag
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DOC = REPO_ROOT / "docs" / "zfs-kinoite-testing.md"
@@ -81,7 +77,6 @@ RESOLVE = REPO_ROOT / "ci_tools" / "resolve_build_inputs.py"
 IN_IMAGE_INSTALL = REPO_ROOT / "containerfiles" / "zfs-akmods" / "install_zfs_from_akmods_cache.py"
 
 BUILD_MAIN = WORKFLOW_DIR / "build.yml"
-BUILD_BRANCH = WORKFLOW_DIR / "build-branch.yml"
 BUILD_PR = WORKFLOW_DIR / "build-pr.yml"
 
 # The registry owner is lower-cased by `normalize_owner` before it reaches any ref, so every
@@ -290,38 +285,6 @@ class MainArtifactTests(unittest.TestCase):
         self.assertIn("return pinned_ref, digest", pin)
 
 
-class BranchArtifactTests(unittest.TestCase):
-    """`### Branch Artifacts` promises a branch run publishes one tag and refreshes nothing."""
-
-    @classmethod
-    def setUpClass(cls) -> None:
-        cls.items = numbered_items(section(doc_text(), "### Branch Artifacts"))
-        cls.branch_yaml = strip_yaml_comments(BUILD_BRANCH.read_text(encoding="utf-8"))
-
-    def test_the_branch_ref_matches_the_two_helpers_that_build_it(self) -> None:
-        prefix = build_branch_image_tag(branch_tag_prefix="br-<branch>", fedora_version="<fedora>")
-        self.assertIn(f"`ghcr.io/{IMAGE_ORG}/{defaults()['IMAGE_NAME']}:{prefix}`", self.items[0])
-
-    def test_the_br_prefix_is_the_one_build_branch_metadata_produces(self) -> None:
-        self.assertEqual(build_branch_metadata("my-branch"), "br-my-branch")
-
-    def test_a_bot_authored_run_stops_before_pushing_any_public_tag(self) -> None:
-        self.assertIn("bot-authored branch runs stop after local validation", normalized(self.items[1]))
-        self.assertIn("do not push any public tag", normalized(self.items[1]))
-        # The gate is the `actor_is_bot` output, checked both ways in the workflow.
-        self.assertIn("if: steps.registry.outputs.actor_is_bot != 'true'", self.branch_yaml)
-        self.assertIn("if: steps.registry.outputs.actor_is_bot == 'true'", self.branch_yaml)
-
-    def test_a_branch_run_never_refreshes_the_shared_cache(self) -> None:
-        item = normalized(self.items[2])
-        self.assertIn("never publish branch-specific cache tags", item)
-        self.assertIn("never refresh the shared one", item)
-        # The branch job runs the read-only verifier and has no rebuild knob at all.
-        self.assertIn("prepare-validation-build", self.branch_yaml)
-        self.assertNotIn("rebuild_akmods", self.branch_yaml)
-        self.assertNotIn("allow_cache_rebuild", self.branch_yaml)
-
-
 class BuildInputResolutionTests(unittest.TestCase):
     """`### 1. Detect Base Kernel Stream` -- the two modes and the primary-kernel policy."""
 
@@ -398,7 +361,7 @@ class AkmodsSourceTests(unittest.TestCase):
 
     def test_every_workflow_path_really_does_clone_that_commit(self) -> None:
         # "every workflow path also clones the resolved commit once" -- the main workflow
-        # through the prepare-main-akmods action, and branch and pull-request validation
+        # through the prepare-main-akmods action, and pull-request validation
         # through `ci_tools/prepare_validation_build.py`, which calls the same helper.
         self.assertIn("Separate from cache reuse, every workflow path also clones", self.body)
         action = strip_yaml_comments(
@@ -412,12 +375,10 @@ class AkmodsSourceTests(unittest.TestCase):
         validation = (REPO_ROOT / "ci_tools" / "prepare_validation_build.py").read_text(encoding="utf-8")
         self.assertIn("from ci_tools.akmods_clone_pinned import clone_pinned", validation)
         self.assertIn("clone_pinned(", validation)
-        for workflow in (BUILD_BRANCH, BUILD_PR):
-            with self.subTest(workflow=workflow.name):
-                self.assertIn(
-                    "ci_tools.cli prepare-validation-build",
-                    strip_yaml_comments(workflow.read_text(encoding="utf-8")),
-                )
+        self.assertIn(
+            "ci_tools.cli prepare-validation-build",
+            strip_yaml_comments(BUILD_PR.read_text(encoding="utf-8")),
+        )
 
 
 class CacheInspectionTests(unittest.TestCase):
@@ -495,19 +456,16 @@ class CacheRebuildTests(unittest.TestCase):
         self.assertIn(f"`{defaults()['AKMODS_REPO']}`", self.items[1])
 
     def test_the_dispatch_input_the_page_tells_a_reader_to_use_is_on_main_only(self) -> None:
-        # `build-branch.yml` carries a `workflow_dispatch` trigger of its own, so the claim
-        # is not "no other workflow can be dispatched" -- it is that no other workflow
-        # offers this input, and the branch one hard-codes the refresh off.
+        # No other workflow offers this input: pull-request validation has no
+        # `workflow_dispatch` inputs at all.
         self.assertIn("`rebuild_akmods=true`", normalized(self.body))
         main_inputs = strip_yaml_comments(BUILD_MAIN.read_text(encoding="utf-8")).split("jobs:", 1)[0]
         self.assertIn("rebuild_akmods:", main_inputs)
-        for workflow in (BUILD_BRANCH, BUILD_PR):
-            with self.subTest(workflow=workflow.name):
-                triggers = strip_yaml_comments(workflow.read_text(encoding="utf-8")).split("jobs:", 1)[0]
-                self.assertNotIn("rebuild_akmods:", triggers)
+        triggers = strip_yaml_comments(BUILD_PR.read_text(encoding="utf-8")).split("jobs:", 1)[0]
+        self.assertNotIn("rebuild_akmods:", triggers)
 
     def test_pull_request_validation_is_read_only_and_never_publishes(self) -> None:
-        self.assertIn("pull request validation is likewise read-only", normalized(self.body))
+        self.assertIn("pull request validation is read-only", normalized(self.body))
         pr_yaml = strip_yaml_comments(BUILD_PR.read_text(encoding="utf-8"))
         self.assertNotIn("podman push", pr_yaml)
         self.assertNotIn("skopeo copy", pr_yaml)
@@ -525,7 +483,7 @@ class BuildArgumentTests(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
-        cls.body = section(doc_text(), "### 4. Build Candidate Or Branch Image")
+        cls.body = section(doc_text(), "### 4. Build Candidate Image")
         cls.documented = [BACKTICKED_RE.findall(item)[0] for item in numbered_items(cls.body)]
         cls.passed = BUILD_ARG_RE.findall(BUILD_ACTION.read_text(encoding="utf-8"))
 
@@ -557,10 +515,8 @@ class BuildArgumentTests(unittest.TestCase):
     def test_ci_passes_the_digest_pinned_cache_ref_the_page_promises(self) -> None:
         self.assertIn("CI passes the digest-pinned cache ref resolved by the earlier akmods job",
                       normalized(self.body))
-        for workflow in (BUILD_MAIN, BUILD_BRANCH):
-            with self.subTest(workflow=workflow.name):
-                yaml_text = strip_yaml_comments(workflow.read_text(encoding="utf-8"))
-                self.assertIn("akmods_image_pinned", yaml_text)
+        yaml_text = strip_yaml_comments(BUILD_MAIN.read_text(encoding="utf-8"))
+        self.assertIn("akmods_image_pinned", yaml_text)
 
     def test_the_modules_load_drop_in_the_page_links_is_installed_by_the_build(self) -> None:
         self.assertIn("../files/usr/lib/modules-load.d/zfs.conf", LINK_RE.findall(self.body))
@@ -581,7 +537,6 @@ class SigningTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.body = normalized(section(doc_text(), "### 5. Sign Published Tags"))
         cls.main_yaml = strip_yaml_comments(BUILD_MAIN.read_text(encoding="utf-8"))
-        cls.branch_yaml = strip_yaml_comments(BUILD_BRANCH.read_text(encoding="utf-8"))
 
     def test_the_environment_named_here_is_the_one_the_signing_jobs_declare(self) -> None:
         self.assertIn("`production-signing` environment", self.body)
@@ -606,20 +561,6 @@ class SigningTests(unittest.TestCase):
                       self.body)
         self.assertNotIn("cosign", strip_yaml_comments(PROMOTE.read_text(encoding="utf-8")).lower()
                          .split("def verify_candidate_signature")[0].split("import")[0])
-
-    def test_the_branch_workflow_never_references_the_key(self) -> None:
-        self.assertIn("branch runs are not *intended* to sign", self.body)
-        self.assertIn("the environment itself does not currently enforce that", self.body)
-        self.assertNotIn("SIGNING_SECRET", self.branch_yaml)
-        self.assertNotIn("environment: production-signing", self.branch_yaml)
-
-    def test_the_unsigned_branch_push_is_the_explicit_opt_in_the_page_names(self) -> None:
-        self.assertIn("`allow_unsigned` opt-in", self.body)
-        self.assertIn('allow_unsigned: "true"', self.branch_yaml)
-
-    def test_automation_accounts_stop_before_the_push_entirely(self) -> None:
-        self.assertIn("automation accounts such as Renovate stop before the push entirely", self.body)
-        self.assertIn("actor_is_bot", self.branch_yaml)
 
 
 class PromotionTests(unittest.TestCase):
@@ -663,18 +604,16 @@ class ConstraintsTests(unittest.TestCase):
     def test_the_section_still_states_five_constraints(self) -> None:
         self.assertEqual(len(self.items), 5)
 
-    def test_branch_testing_must_not_overwrite_latest(self) -> None:
-        self.assertIn("Branch testing must not overwrite `latest`", self.items[2])
+    def test_testing_a_change_must_not_overwrite_latest(self) -> None:
+        self.assertIn("Testing a change must not overwrite `latest`", self.items[2])
         # `promote_stable` is the only thing that writes `:latest`, and only `build.yml`
         # runs it.
         self.assertIn(
             "ci_tools.cli promote-stable", strip_yaml_comments(BUILD_MAIN.read_text(encoding="utf-8"))
         )
-        for workflow in (BUILD_BRANCH, BUILD_PR):
-            with self.subTest(workflow=workflow.name):
-                self.assertNotIn(
-                    "promote-stable", strip_yaml_comments(workflow.read_text(encoding="utf-8"))
-                )
+        self.assertNotIn(
+            "promote-stable", strip_yaml_comments(BUILD_PR.read_text(encoding="utf-8"))
+        )
 
     def test_seeding_a_missing_cache_is_a_main_workflow_action(self) -> None:
         item = normalized(self.items[4])

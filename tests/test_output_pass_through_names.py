@@ -40,7 +40,6 @@ OUTPUT_REFERENCE = re.compile(r"\b(?:steps|needs)\.[A-Za-z0-9_-]+\.outputs\.([A-
 # Held in both directions: an entry whose output is gone, or no longer renames, fails too.
 RENAMES = {
     (".github/workflows/build.yml", "build-zfs-akmods", "fedora_version"): "version",
-    (".github/workflows/build-branch.yml", "build-branch-akmods", "fedora_version"): "version",
     (".github/actions/prepare-main-akmods/action.yml", None, "akmods_cache_exists"): "exists",
 }
 
@@ -78,7 +77,6 @@ class PassThroughOutputNameTests(unittest.TestCase):
         for where in (
             (".github/actions/prepare-main-akmods/action.yml", None),
             (".github/workflows/build.yml", "build-zfs-akmods"),
-            (".github/workflows/build-branch.yml", "build-branch-akmods"),
         ):
             with self.subTest(where=where):
                 self.assertIn("base_image_pinned", names.get(where, set()))

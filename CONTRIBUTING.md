@@ -133,7 +133,7 @@ them alone means "tested".
 |---|---|---|---|
 | **Unit coverage** | Decision logic, with **every** external call mocked | `test.yml`, on every PR and push | Yes |
 | **End-to-end (`tests/e2e/`)** | The process boundary a workflow step depends on: exit status, and the `GITHUB_OUTPUT` file a later step reads | `test.yml`, on every PR and push | **No** — the code under test runs in a child process |
-| **Production execution** | The same modules against a real registry, real `cosign`, real `git` remote, real `podman` | `build.yml`, `build-pr.yml`, `build-branch.yml`, `akmods-failure-triage.yml` — daily | **No** |
+| **Production execution** | The same modules against a real registry, real `cosign`, real `git` remote, real `podman` | `build.yml`, `build-pr.yml`, `akmods-failure-triage.yml` — daily | **No** |
 
 The first row is the important caveat. As
 [`docs/code-reading-guide.md`](./docs/code-reading-guide.md#running-tests)

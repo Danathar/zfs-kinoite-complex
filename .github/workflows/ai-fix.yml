@@ -43,10 +43,7 @@ name: AI fix
 #
 # An `ai-fix/*` branch publishes nothing at all. build.yml runs only on push to
 # main. build-pr.yml validates the pull request and stops before any push or
-# signing step. build-branch.yml would have published an unsigned `br-*` tag for
-# any branch, so `ai-fix/**` is excluded from its trigger -- pinned by
-# tests/test_workflow_build_container.py, because it is one line and easy to drop
-# by accident.
+# signing step.
 #
 # It is inert, not broken, without credentials. If neither ANTHROPIC_API_KEY nor
 # CLAUDE_CODE_OAUTH_TOKEN is set, every trigger stops at `preflight`, says so in

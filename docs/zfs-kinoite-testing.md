@@ -18,9 +18,9 @@ The objective is to validate that we can safely:
 
 1. Kinoite is an ostree/bootc-style image, so ZFS integration must happen during image build.
 2. ZFS compatibility can lag new Fedora kernels.
-3. Branch testing must not overwrite `latest`.
+3. Testing a change must not overwrite `latest`.
 4. pull request (PR) validation should exercise the real build logic but should not push anything.
-5. pull request validation stays read-only, and branch builds are read-only against shared production state too: they may reuse the shared akmods cache but never rebuild or republish it. Seeding a missing cache is a `main` workflow action (`workflow_dispatch` with `rebuild_akmods=true`).
+5. pull request validation is read-only against shared production state: it may reuse the shared akmods cache but never rebuild or republish it. Seeding a missing cache is a `main` workflow action (`workflow_dispatch` with `rebuild_akmods=true`).
 
 ## Artifact Strategy
 
@@ -31,12 +31,6 @@ The objective is to validate that we can safely:
 3. stable audit tag: `ghcr.io/danathar/zfs-kinoite-complex:stable-<run>-<sha>`
 4. shared akmods cache image: `ghcr.io/danathar/zfs-kinoite-complex-akmods:main-<fedora>`
    - final image builds consume the digest-pinned form: `ghcr.io/danathar/zfs-kinoite-complex-akmods@sha256:<digest>`
-
-### Branch Artifacts
-
-1. human-authored branch image: `ghcr.io/danathar/zfs-kinoite-complex:br-<branch>-<fedora>`
-2. bot-authored branch runs stop after local validation and do not push any public tag
-3. shared akmods cache stays the same shared source image; branch builds never publish branch-specific cache tags and never refresh the shared one. When it does not cover the current primary kernel, the branch's akmods job fails fast with instructions to seed it from the `main` workflow
 
 ## End-To-End Build Flow
 
@@ -85,8 +79,8 @@ Separate from cache reuse, every workflow path also clones the resolved
 That check exists because:
 
 1. an out-of-date shared cache can hide a broken source ref for a while
-2. branch and pull request validation should still prove that the resolved akmods commit SHA is
-   fetchable, even when they do not end up rebuilding the cache
+2. pull request validation should still prove that the resolved akmods commit SHA is
+   fetchable, even when it does not end up rebuilding the cache
 
 What that resolved commit actually is:
 
@@ -122,16 +116,15 @@ If the cache is missing, out of date, or a manual rebuild is requested, the work
    build recorded before pushing (`AKMODS_BUILT_IMAGE_ID`), so an image another
    run pushed to the shared tag in between is never pinned or signed
 
-Branch note:
+Pull request note:
 
-- branch builds cannot run this refresh path -- it is exclusive to the `main`
-  workflow. A branch targeting a kernel or ZFS version the shared cache does
-  not cover fails fast in its akmods job with instructions to run the `main`
-  workflow with `rebuild_akmods=true`, then re-run the branch
-- pull request validation is likewise read-only and fails fast instead of
-  publishing cache changes
+- pull request validation cannot run this refresh path -- it is exclusive to the
+  `main` workflow
+- pull request validation is read-only and fails fast instead of publishing
+  cache changes. A change targeting a kernel or ZFS version the shared cache
+  does not cover needs the `main` workflow run with `rebuild_akmods=true` first
 
-### 4. Build Candidate Or Branch Image
+### 4. Build Candidate Image
 
 The final image build is standard OCI composition now.
 
@@ -169,15 +162,6 @@ for the environment's current, unrestricted branch policy).
 
 Stable `latest` is promoted by copying the already-signed candidate digest, not
 by signing a second time.
-
-Branch note:
-
-- branch runs are not *intended* to sign, but the environment itself does not
-  currently enforce that — see the watchlist entry linked above
-- human-authored branch runs push an UNSIGNED `br-*` test image via an explicit
-  `allow_unsigned` opt-in -- usable only on fresh, never-enforced throwaway VMs,
-  since enforced machines refuse unsigned tags under this repository's policy
-- automation accounts such as Renovate stop before the push entirely
 
 ### 6. Promote Candidate To Stable
 

@@ -395,7 +395,7 @@ class ParserGuardTests(unittest.TestCase):
 
     def test_the_core_workflow_bullets_parse(self) -> None:
         claims = core_workflow_claims()
-        self.assertGreaterEqual(len(claims), 4, f"implausibly few workflows: {claims}")
+        self.assertGreaterEqual(len(claims), 3, f"implausibly few workflows: {claims}")
         for workflow, bullets in claims.items():
             with self.subTest(workflow=workflow):
                 self.assertTrue(bullets, "workflow bullet with no claims under it")
@@ -426,7 +426,7 @@ class ParserGuardTests(unittest.TestCase):
     def test_the_image_building_workflows_are_found(self) -> None:
         names = [path.name for path in image_building_workflows()]
         self.assertIn("build.yml", names)
-        self.assertGreaterEqual(len(names), 3, names)
+        self.assertGreaterEqual(len(names), 2, names)
 
 
 class RepositoryLayoutTests(unittest.TestCase):

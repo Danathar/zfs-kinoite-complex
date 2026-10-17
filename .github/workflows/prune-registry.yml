@@ -38,6 +38,10 @@ permissions:
 jobs:
   prune:
     name: Prune old package versions
+    # Only `main` runs this job. It holds `packages: write`, and a dispatch on
+    # another ref would run that ref's ci_tools/ code with it. Scheduled runs
+    # always run on the default branch.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-26.04
     timeout-minutes: 10
     permissions:

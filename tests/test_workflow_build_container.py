@@ -144,6 +144,64 @@ class PullRequestWorkflowTests(unittest.TestCase):
         )
 
 
+class PackageWriteRefTests(unittest.TestCase):
+    """
+    A job holding `packages: write` runs only on `main`.
+
+    Any workflow with `workflow_dispatch` can be started against another ref, and then it
+    runs that ref's code. A package-write token there can overwrite or delete registry
+    tags. Each such job must either guard on `github.ref` itself, use the
+    `production-signing` environment (restricted to `main` in repository settings), or
+    need a job that guards on `github.ref`.
+    """
+
+    MAIN_GUARD = "github.ref == 'refs/heads/main'"
+
+    @staticmethod
+    def _jobs(text: str) -> dict[str, str]:
+        # Jobs are the two-space-indented keys under the top-level `jobs:` key; each
+        # body runs to the next one. Comments are stripped first so a commented-out
+        # line cannot count as a guard.
+        body = _without_comments(text).split("\njobs:\n", 1)[1]
+        parts = re.split(r"^  ([A-Za-z0-9_-]+):[ \t]*$", body, flags=re.MULTILINE)
+        return dict(zip(parts[1::2], parts[2::2]))
+
+    @staticmethod
+    def _needs(job: str) -> list[str]:
+        inline = re.search(r"^    needs:[ \t]*(\S.*)$", job, re.MULTILINE)
+        if inline:
+            return [name.strip() for name in inline.group(1).strip("[]").split(",")]
+        block = re.search(r"^    needs:[ \t]*\n((?:      - .*\n)+)", job, re.MULTILINE)
+        return re.findall(r"^      - (\S+)", block.group(1), re.MULTILINE) if block else []
+
+    def test_every_package_writer_is_bound_to_main(self) -> None:
+        checked = 0
+        paths = sorted([*WORKFLOW_DIR.glob("*.yml"), *WORKFLOW_DIR.glob("*.yaml")])
+        for path in paths:
+            text = path.read_text(encoding="utf-8")
+            if "\njobs:\n" not in text:
+                continue
+            jobs = self._jobs(text)
+            guarded = {
+                name
+                for name, job in jobs.items()
+                if re.search(rf"^    if:[ \t]*{re.escape(self.MAIN_GUARD)}", job, re.MULTILINE)
+            }
+            for name, job in jobs.items():
+                if not re.search(r"^      packages:[ \t]*write[ \t]*$", job, re.MULTILINE):
+                    continue
+                checked += 1
+                with self.subTest(workflow=path.name, job=name):
+                    self.assertTrue(
+                        name in guarded
+                        or re.search(r"^    environment:[ \t]*production-signing[ \t]*$", job, re.MULTILINE)
+                        or any(need in guarded for need in self._needs(job)),
+                        f"{path.name}:{name} holds packages: write but nothing binds it to main",
+                    )
+        # build.yml has four package-write jobs and prune-registry.yml one.
+        self.assertEqual(checked, 5, "the scan found a different number of package-write jobs")
+
+
 class ProductionSigningTests(unittest.TestCase):
     """
     The production path signs everything it publishes.

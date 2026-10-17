@@ -84,6 +84,11 @@ hypothetical future workflow:
 - `promote-stable` is conditioned on `github.event.inputs.promote_to_stable ==
   'true'`, and that input **defaults to `true`**.
 
+`prune-registry.yml`'s job, the only other one with `packages: write`, has the
+same guard. `tests/test_workflow_build_container.py` fails if a job holding
+`packages: write` is not bound to `main` by a guard, the environment, or a job
+it needs.
+
 The two guards are independent. The job guard lives in `build.yml`, so a branch
 whose copy drops it can run the akmods job again; editing workflow files needs
 the Workflows permission. The environment restriction lives in GitHub settings,

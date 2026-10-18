@@ -236,8 +236,16 @@ gh pr list --state merged --limit 1000 --json mergedBy \
 
 A merge to `main` builds, signs and promotes the image, so the required checks
 are the gate. The ruleset requires a pull request and a passing
-`Python Unit Tests`; it requires no approving review, and it allows no bypass
-actors.
+`Python Unit Tests`; it requires no approving review except the code owner's on
+Tier 3 paths, and it allows no bypass actors. It applies to the Hive app as to
+anyone else.
+
+The App's merges have included pull requests that changed code the signing jobs
+run (#402, #434, #436), with no approval. The maintainer chose to gate that
+(#454): [`.github/CODEOWNERS`](../.github/CODEOWNERS) lists the Tier 3 paths
+from [`risk-tiers.md`](./risk-tiers.md), and the ruleset requires the code
+owner's approval for them, so the App can still merge a Tier 3 pull request,
+but only after the maintainer has approved it on GitHub.
 
 Agent sessions working in this repository do not merge on their own initiative.
 [`AGENTS.md`](../AGENTS.md) section 0 rule 6 says not to

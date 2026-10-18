@@ -19,13 +19,16 @@ how much of it to do.
 
 **Anything touching the seven files in `AGENTS.md` section 0 rule 2**, plus the
 ZFS line, anything pool-facing, the files the image installs onto every booted
-machine, the policy file that says what each workflow's token may do, the
-ruleset that keeps `main` behind a pull request, and the files that decide what
-an agent may run here without a prompt.
+machine, every workflow file, the policy file that says what each workflow's
+token may do, the ruleset that keeps `main` behind a pull request, the file
+that says who must approve all of these, and the files that decide what an
+agent may run here without a prompt.
 Labelled `area/safety-critical`.
 
 - `.github/workflows/build.yml`
 - `.github/actions/publish-native-image/`
+- `.github/actions/install-signing-tools/`, the local action the signing jobs
+  run: it installs the cosign binary that receives the signing key
 - `ci_tools/sign_image.py`
 - `ci_tools/promote_stable.py`
 - `ci_tools/check_akmods_cache.py`
@@ -35,11 +38,18 @@ Labelled `area/safety-critical`.
   machine: the ZFS module autoload, the PrivateTmp=yes drop-in that hardens
   brew's first-boot unit, a login-shell PATH fragment and tmpfiles.d entries
 - `cosign.pub`, `ci/defaults.json`'s ZFS and base-image values
+- `.github/workflows/`, every workflow and not only `build.yml`, because once a
+  workflow is on `main` any job in it can declare the production-signing
+  environment and be handed the key that signs the published image. The cost:
+  every workflow change waits for the owner, Renovate's pin bumps included
 - `.github/policies/workflow-permissions.json`, because a token that gains
   `packages: write` can push an image to the registry these machines pull from
 - `.github/rulesets/`, because the ruleset in it is what keeps `main`, and so
   the signing build, behind a pull request. Loosening it reopens the direct
   push; see [`branch-protection.md`](./branch-protection.md)
+- `.github/CODEOWNERS`, because it lists the paths in this tier and the ruleset
+  requires the code owner's approval for them. A line dropped from it takes
+  that path out from behind the owner
 - `.claude/settings.json`, `.claude/hooks/`, `.claude/commands/`, `tests/run_tests.py`:
   together these are the agent permission boundary. The settings file is the permission table: its deny list keeps
   signing, registry pushes, merges and workflow dispatch away from an agent,
@@ -64,22 +74,27 @@ to import those pools, which breaks the recovery path everything else assumes.
 That is not a tier, it is a refusal (`AGENTS.md` section 0 rule 1).
 
 **An agent may not complete a Tier 3 change unattended.** It may propose one,
-with the analysis, on a branch.
+with the analysis, on a branch. GitHub enforces this: every path above is in
+[`.github/CODEOWNERS`](../.github/CODEOWNERS), and the ruleset requires the
+code owner's approving review before a pull request that touches one can merge
+([`branch-protection.md`](./branch-protection.md#the-ruleset)).
 
 ### Tier 2 — can break the build or a published artifact indirectly
 
 The rest of the image and the decision logic: `Containerfile`,
 `build_files/`, the other `ci_tools/` and `shared/` modules, `ci/defaults.json`,
-`renovate.json`, and workflows other than `build.yml`. Labelled `area/build`,
-`area/ci`, `area/ci-tools`.
+and `renovate.json`. Labelled `area/build`, `area/ci`, `area/ci-tools`; the
+workflow files the CI label also matches are Tier 3.
 
 **What it requires:** rubric sections 1, 4, 5 and 6. A green unit suite is not
 sufficient evidence — `Containerfile` and `build_files/` execute only inside an
 image build, so say how the change was verified or say plainly that it was not.
 
-Watch specifically for a widened `permissions:` block, a new secret reference,
-or a new external action. Those are Tier 3 questions arriving inside a Tier 2
-diff. A widened block cannot arrive alone: the unit suite fails until
+Watch specifically for a new external action in a composite action under
+`.github/actions/`. A widened `permissions:` block, a new secret reference, a
+new `environment:` or a new external action in a workflow is a Tier 3 question,
+and since every workflow file is Tier 3 it waits for the owner's approval. A
+widened block cannot arrive alone: the unit suite fails until
 `.github/policies/workflow-permissions.json` changes in the same pull request,
 and that file is Tier 3.
 

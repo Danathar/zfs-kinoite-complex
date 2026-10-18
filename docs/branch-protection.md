@@ -44,11 +44,29 @@ applies as-is. What each rule does:
 - **No bypass actors.** A bypass for Actions or for an App hands back the direct
   push this exists to stop.
 - **`deletion` and `non_fast_forward`** stop `main` being deleted or rewritten.
-- **`pull_request` with 0 approvals.** GitHub does not let anyone approve their
-  own pull request. On a single-maintainer repository, requiring one approval
-  means nothing can ever merge, including the change that relaxes the rule.
-  What 0 still enforces is that every change arrives as a pull request and is
-  merged through one.
+- **`pull_request` with 0 approvals, and code owner review required.** GitHub
+  does not let anyone approve their own pull request. On a single-maintainer
+  repository, requiring one approval for *every* pull request means nothing can
+  ever merge, including the change that relaxes the rule. What 0 still enforces
+  is that every change arrives as a pull request and is merged through one.
+  `require_code_owner_review` is what puts the owner on the merge button where
+  it matters: [`.github/CODEOWNERS`](../.github/CODEOWNERS) lists only the
+  Tier 3 paths ([`risk-tiers.md`](./risk-tiers.md)), so a pull request that
+  touches one of them cannot merge, by anyone or any token, until the owner
+  approves it on GitHub, and that approval is on record. Any other pull request
+  touches no listed path and merges on the required check alone. That is why
+  `CODEOWNERS` has no catch-all `*` line, and `tests/test_codeowners.py` fails
+  if one comes back.
+
+  The cost: the owner is the only code owner and cannot approve their own pull
+  request, so a pull request the owner opens that touches a Tier 3 path cannot
+  merge either. Either have an agent open it and approve that, or add a bypass
+  for the admin role in `pull_request` mode (`{"actor_id": 5, "actor_type":
+  "RepositoryRole", "bypass_mode": "pull_request"}` in `bypass_actors`). That
+  bypass lets an admin merge a pull request past *all* of its rules, the
+  required check included, so it is not in the file. Every workflow file is
+  Tier 3, so Renovate's pull requests that bump a pin in a workflow, or in
+  `publish-native-image/`, also wait for the owner's approval.
 - **One required check, `Python Unit Tests`.** It is the only check every pull
   request gets. `test.yml` runs it on every pull request, with no path filter
   and no `if:`. `Build PR Image (No Push)` in `build-pr.yml` is not required,

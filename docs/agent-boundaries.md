@@ -27,6 +27,7 @@ much review a change needs is [`risk-tiers.md`](./risk-tiers.md).
 | Gate | What it stops | Holds for | Explained in |
 | --- | --- | --- | --- |
 | [`.github/rulesets/main.json`](../.github/rulesets/main.json) | Any change reaching `main` except as a pull request merge. Deleting or rewriting `main`. It has no bypass actors. | every agent and every person | [branch-protection.md](./branch-protection.md#the-ruleset) |
+| [`.github/CODEOWNERS`](../.github/CODEOWNERS), with the ruleset's `require_code_owner_review` | Merging a pull request that touches a Tier 3 path before the owner has approved it on GitHub. | every agent and every person | [branch-protection.md](./branch-protection.md#the-ruleset) |
 | The required `Python Unit Tests` check in [`test.yml`](../.github/workflows/test.yml) | Merging a pull request whose unit suite, `ruff check` or per-module coverage floors fail. Many tests read the documents, so a page that drifts from the files it describes fails here too. | every agent and every person | [quality.md](./quality.md#the-gates) |
 | [`.github/policies/workflow-permissions.json`](../.github/policies/workflow-permissions.json) | A workflow's `GITHUB_TOKEN` gaining a scope the policy file does not grant. `tests/test_workflow_permissions_policy.py` fails until the same pull request changes both files. | every agent | [SECURITY-AI.md](./SECURITY-AI.md#what-an-agent-may-do-unattended) |
 | The `preflight` job in [`ai-fix.yml`](../.github/workflows/ai-fix.yml) | An agent started by a bot, from a fork, or with no credentials. The agent job it starts has no `packages: write` and no `SIGNING_SECRET`. | the agent `ai-fix.yml` starts | [multi-agent.md](./multi-agent.md#how-work-reaches-an-agent) |
@@ -39,7 +40,7 @@ Code's format, and an agent on another backend does not read them. The runner
 is a gate only because the settings file allows it and not `pytest` itself.
 The gates that hold for every agent are the ones on GitHub's side.
 
-The first three rows stop a merge, not a publish. The permissions-policy test
+The first four rows stop a merge, not a publish. The permissions-policy test
 runs inside `Python Unit Tests`, and `build.yml` runs neither, so the daily build signs and promotes whatever is on `main`.
 [`quality.md`](./quality.md#the-first-three-block-a-merge-not-a-publish) says
 what does stop a publish.
@@ -49,10 +50,11 @@ what does stop a publish.
 These are real rules, and nothing mechanical stops an agent breaking them.
 Review is what catches it.
 
-- **A person merges.** The ruleset needs no approval, because a sole maintainer
-  cannot approve their own pull request. So a token that can write contents
-  could merge a green pull request through the API. Only Claude Code sessions
-  have the merge command denied. [`multi-agent.md`](./multi-agent.md#who-merges)
+- **A person merges what is not Tier 3.** The ruleset needs no approval outside
+  the Tier 3 paths, because a sole maintainer cannot approve their own pull
+  request. So a token that can write contents could merge a green pull request
+  that touches none of them through the API. Only Claude Code sessions have the
+  merge command denied. [`multi-agent.md`](./multi-agent.md#who-merges)
   records who has merged so far.
 - **Never weaken a fail-closed check.** [`AGENTS.md`](../AGENTS.md) section 0
   rule 1. No test can tell a relaxed guard from a fixed cause.
@@ -68,15 +70,17 @@ Review is what catches it.
   [`SECURITY-AI.md`](./SECURITY-AI.md#labels-carry-authority--automation-must-not-apply-them)
   has the list.
 
-## Why there is no CODEOWNERS file
+## Why CODEOWNERS lists only Tier 3
 
 A `CODEOWNERS` file is the usual way to put a gate on part of a repository, and
-here it would gate nothing. The ruleset sets `require_code_owner_review` to
-`false` and needs no approval, for the reason above. A `CODEOWNERS` file would
-only ask the one maintainer to review every pull request, which is already what
-happens.
+here it gates exactly one tier. The ruleset sets `require_code_owner_review` to
+`true` and needs no other approval, for the reason above.
+[`.github/CODEOWNERS`](../.github/CODEOWNERS) lists the Tier 3 paths from
+[`risk-tiers.md`](./risk-tiers.md) and nothing else, so a pull request that
+touches one waits for the owner's approval and any other pull request does not.
+A catch-all `*` line would put every pull request behind that approval, and the
+owner could not merge their own.
 
 When there is a second reviewer,
 [`branch-protection.md`](./branch-protection.md#when-there-is-a-second-reviewer)
-is where the ruleset changes. Code-owner review belongs in the same change,
-with a `CODEOWNERS` file naming the Tier 3 paths.
+is where the ruleset changes, and the second reviewer joins the Tier 3 lines.

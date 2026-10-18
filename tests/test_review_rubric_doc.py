@@ -42,6 +42,8 @@ import textwrap
 import unittest
 from pathlib import Path
 
+from tests.test_labeler_config import files_under, glob_to_regex
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DOC = REPO_ROOT / "docs" / "review-rubric.md"
 AGENTS = REPO_ROOT / "AGENTS.md"
@@ -477,15 +479,25 @@ class SafetyCriticalFileListTests(unittest.TestCase):
         text = LABELER_CONFIG.read_text(encoding="utf-8")
         block = text.split("'area/safety-critical':", 1)
         self.assertEqual(len(block), 2, ".github/labeler.yml no longer defines area/safety-critical")
-        globs = set()
+        globs = []
         for line in block[1].splitlines():
             stripped = line.strip()
             if stripped.startswith("- '") and stripped.endswith("'"):
-                globs.add(_resolve(stripped[3:-1].removesuffix("/**"), self.tracked))
+                globs.append(glob_to_regex(stripped[3:-1]))
             elif stripped.startswith("'") and stripped.endswith("':"):
                 break
+        # Matched as globs: `.github/workflows/**` covers build.yml, and a directory
+        # rule 2 names is covered when every tracked file under it is.
+        uncovered = {
+            path
+            for path in self.rule_paths
+            if not all(
+                any(g.match(f) for g in globs)
+                for f in files_under(path.rstrip("/"), self.tracked)
+            )
+        }
         self.assertEqual(
-            self.rule_paths - globs,
+            uncovered,
             set(),
             "area/safety-critical no longer covers every file AGENTS.md section 0 rule 2 names",
         )

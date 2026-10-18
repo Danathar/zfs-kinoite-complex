@@ -76,7 +76,13 @@ merges agent pull requests once their required checks are green; the maintainer
 chose that. Pull requests labelled `hold` are not merged automatically and wait
 for a maintainer. Merged pull requests have included one labelled
 `area/safety-critical`, so that label does not exclude a pull request from App
-merges.
+merges. What does hold one back is the ruleset: it requires the code owner's
+approval for every path [`.github/CODEOWNERS`](../.github/CODEOWNERS) lists,
+which are the Tier 3 paths, so the App cannot merge a Tier 3 pull request until
+the owner has approved it ([`branch-protection.md`](./branch-protection.md#the-ruleset)).
+`.github/CODEOWNERS` owns every file under `.github/workflows/`, because once a
+workflow is on `main` any job in it can declare the `production-signing`
+environment and be handed the signing key.
 
 Some labels also have a description that calls them an **approval to auto-merge
 on green CI**. As of this writing, every label whose description says so:

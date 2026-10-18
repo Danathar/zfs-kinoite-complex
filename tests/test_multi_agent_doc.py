@@ -174,10 +174,15 @@ class RulesetClaimTests(unittest.TestCase):
         self.assertNotIn("merge_queue", self.rules)
         self.assertIn("The ruleset has no merge queue", self.page)
 
-    def test_no_bypass_and_no_required_approving_review(self) -> None:
+    def test_no_bypass_and_no_approval_but_the_code_owners(self) -> None:
         self.assertEqual(self.ruleset["bypass_actors"], [])
         self.assertEqual(self.rules["pull_request"]["required_approving_review_count"], 0)
-        self.assertIn("it requires no approving review, and it allows no bypass actors", self.page)
+        self.assertIs(self.rules["pull_request"]["require_code_owner_review"], True)
+        self.assertIn(
+            "it requires no approving review except the code owner's on Tier 3 paths, "
+            "and it allows no bypass actors",
+            self.page,
+        )
 
     def test_pull_request_checks_cancel_older_runs_for_the_same_ref(self) -> None:
         for path in (TEST_WORKFLOW, BUILD_PR):

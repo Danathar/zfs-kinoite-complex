@@ -129,12 +129,14 @@ Every file in `.github/workflows/` has an entry here.
 
 ### `boot-test.yml` — "Boot test"
 
-- **Means:** once a day it boots the published `:latest`, by digest, in a
-  throwaway VM on the runner (bcvk), logs in over SSH, and checks that the
-  `zfs` and `kmod-zfs` packages are installed, that the `zfs` module loaded at
-  boot, and that `zpool list` reaches it. Its job is `boot`. It runs after
-  `build.yml` has moved `:latest`, so it gates nothing: red means the image a
-  user would pull now failed.
+- **Means:** after every `build.yml` run on `main` (the daily scheduled one
+  included, even when its gate skipped the build) it boots the published
+  `:latest`, by digest, in a throwaway VM on the runner (bcvk), logs in over
+  SSH, and checks that the `zfs` and `kmod-zfs` packages are installed, that
+  the `zfs` module loaded at boot, and that `zpool list` reaches it. Its job is
+  `boot`. It runs after `build.yml` has moved `:latest`, so it gates nothing.
+  Red means the boot test failed against the image a user would pull now, not
+  yet that the image is broken: see **First**.
 - **First:** read the run's summary. It names the digest booted and each
   check's result. A summary saying the VM never reached the checks is a VM
   that did not boot or never answered SSH; read the `boot-test-*` artifact's
@@ -182,11 +184,13 @@ Every file in `.github/workflows/` has an entry here.
 
 - **Means:** runs after `nightly-compliance.yml`, `prune-registry.yml`,
   `agent-audit.yml` or `boot-test.yml` finishes. Its job "Open, update or close the tracking
-  issue" opens one issue when a scheduled run on `main` fails, comments on
-  that issue when it fails again, and closes it when the next scheduled run
-  passes. The issue title is `Scheduled run failing:` followed by the
-  workflow's name, and its author is `app/github-actions`. It applies no
-  label.
+  issue" opens one issue when a tracked run on `main` fails, comments on
+  that issue when it fails again, and closes it when the next tracked run
+  passes. Tracked means a scheduled run of the other three, or a
+  `boot-test.yml` run that a build's completion started (`workflow_run`),
+  since it has no schedule. The issue title is `Scheduled run failing:`
+  followed by the workflow's name, for Boot test too, and its author is
+  `app/github-actions`. It applies no label.
 - **First:** open the run linked in the issue and use that workflow's entry on
   this page. A cancelled run, or a run dispatched by hand, neither opens nor
   closes the issue: a green dry run of `prune-registry.yml` says nothing about

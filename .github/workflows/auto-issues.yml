@@ -11,7 +11,8 @@ name: Auto issues
 # the cron line. This turns that red run into an issue someone will see. The
 # monthly Agent audit trail is the same: a finding fails a run nobody is
 # watching, and its findings sit in that run's summary. So is Boot test, the
-# only thing that boots the published image.
+# only thing that boots the published image; it runs after every build of
+# main, started by build.yml rather than a clock.
 #
 # What it watches, and what it deliberately does not:
 #
@@ -39,11 +40,13 @@ name: Auto issues
 # The next passing scheduled run on the default branch closes it, the same way
 # akmods-failure-triage.yml closes its sticky issue on a green build.
 #
-# Only scheduled runs count, in both directions. A person who dispatches a run
-# is watching it. And a dispatched run need not check what the scheduled one
-# does: Prune registry's schedule is always a dry run, while a dispatch with
-# `delete: true` deletes. Letting a green dry run close an issue opened by a
-# failed delete would claim a fix nobody made.
+# Only unattended runs count, in both directions: scheduled runs, and Boot
+# test runs that build.yml's completion started (`workflow_run`), since Boot
+# test has no schedule of its own. A person who dispatches a run is watching
+# it. And a dispatched run need not check what the scheduled one does: Prune
+# registry's schedule is always a dry run, while a dispatch with `delete: true`
+# deletes. Letting a green dry run close an issue opened by a failed delete
+# would claim a fix nobody made.
 #
 # It applies no label. ai-fix.yml acts on a label, and a failure report is not
 # a request for an agent to change anything.
@@ -102,10 +105,22 @@ jobs:
             echo "$WORKFLOW ran on $HEAD_REPO@$HEAD_BRANCH, not $REPO@$DEFAULT_BRANCH; nothing to track."
             exit 0
           fi
-          if [ "$EVENT" != "schedule" ]; then
-            echo "$WORKFLOW ran on a $EVENT event; only scheduled runs are tracked."
-            exit 0
-          fi
+          # Scheduled runs, and Boot test runs a build started (see the
+          # header). Anything else, a dispatch above all, neither opens nor
+          # closes.
+          case "$EVENT" in
+            schedule) ;;
+            workflow_run)
+              if [ "$WORKFLOW" != "Boot test" ]; then
+                echo "$WORKFLOW ran on a workflow_run event; only Boot test's are tracked."
+                exit 0
+              fi
+              ;;
+            *)
+              echo "$WORKFLOW ran on a $EVENT event; only scheduled runs and Boot test's workflow_run runs are tracked."
+              exit 0
+              ;;
+          esac
 
           # A cancelled or skipped run is neither a pass nor a failure. Closing
           # on one would hide a failure nobody has fixed.

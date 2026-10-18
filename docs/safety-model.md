@@ -33,7 +33,7 @@ substitute for testing the image on disposable hardware and test pools. The
 unit tests are not among those gates: they run in `test.yml`, a separate
 workflow that promotion does not wait on (see [`quality.md`](./quality.md)).
 
-After promotion, `boot-test.yml` boots the published `:latest` once a day in a
+After promotion, `boot-test.yml` boots the published `:latest` after every build of `main` in a
 throwaway VM on a GitHub runner, logs in over SSH, and checks that the ZFS
 packages are installed, the module loaded at boot, and `zpool list` reaches it.
 It reports; it does not stop or roll back a promotion, and it creates no pool.

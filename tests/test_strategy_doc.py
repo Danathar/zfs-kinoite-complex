@@ -45,7 +45,6 @@ SLUG = "Danathar/zfs-kinoite-complex"
 # who added it should read it.
 SCHEDULED = (
     "agent-audit.yml",
-    "boot-test.yml",
     "build.yml",
     "nightly-compliance.yml",
     "prune-registry.yml",

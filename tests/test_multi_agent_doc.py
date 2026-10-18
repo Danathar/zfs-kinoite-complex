@@ -14,7 +14,7 @@ page names as an approval label is on SECURITY-AI.md's list.
 Why: The page is prose about files that change. "There is no orchestrator" stops being true the
 day someone adds one, and "the ruleset has no merge queue" stops being true the day someone
 turns one on; in both cases the page keeps reading as confident. Pull requests here are judged
-one at a time by a non-strict required check, so a stale statement about that check is a wrong
+one at a time by a strict required check, so a stale statement about that check is a wrong
 instruction to whoever merges.
 Goal: Make an orchestrator file added without updating the page, a changed ruleset, a renamed
 trigger label or a dropped merge deny rule fail here, on the pull request that causes it.
@@ -164,11 +164,11 @@ class RulesetClaimTests(unittest.TestCase):
             re.compile(r"^    name: Python Unit Tests$", re.MULTILINE),
         )
 
-    def test_strict_policy_is_off(self) -> None:
+    def test_strict_policy_is_on(self) -> None:
         self.assertIs(
-            self.rules["required_status_checks"]["strict_required_status_checks_policy"], False
+            self.rules["required_status_checks"]["strict_required_status_checks_policy"], True
         )
-        self.assertIn("`strict_required_status_checks_policy` to `false`", self.page)
+        self.assertIn("`strict_required_status_checks_policy` to `true`", self.page)
 
     def test_no_merge_queue_rule(self) -> None:
         self.assertNotIn("merge_queue", self.rules)

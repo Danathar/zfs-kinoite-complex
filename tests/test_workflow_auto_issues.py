@@ -148,6 +148,7 @@ class TrackStepTests(unittest.TestCase):
         head_branch: str = "main",
         head_repo: str = REPO,
         list_rc: int = 0,
+        workflow: str = "Nightly compliance",
     ) -> subprocess.CompletedProcess[str]:
         (self.log / "open-issues.json").write_text(json.dumps(open_issues or []), encoding="utf-8")
         return subprocess.run(
@@ -160,7 +161,7 @@ class TrackStepTests(unittest.TestCase):
                 "GH_TOKEN": "stub",
                 "REPO": REPO,
                 "DEFAULT_BRANCH": "main",
-                "WORKFLOW": "Nightly compliance",
+                "WORKFLOW": workflow,
                 "EVENT": event,
                 "HEAD_BRANCH": head_branch,
                 "HEAD_REPO": head_repo,
@@ -252,6 +253,7 @@ class TrackStepTests(unittest.TestCase):
             "another repository": {"head_repo": "someone/zfs-kinoite-complex"},
             "a push": {"event": "push"},
             "a pull request": {"event": "pull_request"},
+            "a workflow_run of a workflow other than Boot test": {"event": "workflow_run"},
         }
         for label, overrides in cases.items():
             with self.subTest(label):
@@ -270,6 +272,22 @@ class TrackStepTests(unittest.TestCase):
                 )
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(self._calls(), [])
+
+    def test_a_boot_test_the_build_started_opens_and_closes_its_issue(self) -> None:
+        # Boot test has no schedule: build.yml's completion starts it, so its
+        # unattended runs arrive as workflow_run events.
+        title = "Scheduled run failing: Boot test"
+        result = self._run(conclusion="failure", workflow="Boot test", event="workflow_run")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        writes = self._writes()
+        self.assertEqual([call[:2] for call in writes], [["issue", "create"]])
+        self.assertIn(title, writes[0])
+
+        (self.log / "count").unlink()
+        issues = [{"number": 13, "title": title, "author": BOT}]
+        result = self._run(conclusion="success", workflow="Boot test", event="workflow_run", open_issues=issues)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([call[:3] for call in self._writes()], [["issue", "close", "13"]])
 
     def test_a_failed_issue_listing_fails_the_step_instead_of_filing_a_duplicate(self) -> None:
         result = self._run(conclusion="failure", list_rc=1)

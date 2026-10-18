@@ -182,27 +182,29 @@ doing the work has to keep:
 4. **Keep a pull request to one change.** A small pull request that touches
    few files has few ways to overlap with another.
 
-### Two green pull requests can be red together
+### A green pull request can fall behind `main`
 
 The required check is `Python Unit Tests`. The ruleset in
 [`.github/rulesets/main.json`](../.github/rulesets/main.json) sets
-`strict_required_status_checks_policy` to `false`. In plain terms: GitHub does
-not make a pull request catch up with `main` before it merges. A pull request
-is judged by the code it was tested with, not by what `main` has become.
+`strict_required_status_checks_policy` to `true`. In plain terms: GitHub makes
+a pull request catch up with `main`, and pass `Python Unit Tests` that way,
+before it merges. A pull request is judged by the code `main` will have after
+the merge, not only by the code it was first tested with.
 
-So if pull request A and pull request B each pass, and both change the same
-function from different directions, merging A and then B can leave `main`
-broken even though neither ever showed red. The failure then shows on `main`,
-and a push to `main` that changes more than documentation starts `build.yml`,
-the workflow that signs and promotes an image. See
+That closes the gap where pull request A and pull request B each pass, both
+change the same function from different directions, and merging A and then B
+leaves `main` broken even though neither ever showed red. It matters here
+because a push to `main` that changes more than documentation starts
+`build.yml`, the workflow that signs and promotes an image. See
 [`branch-protection.md`](./branch-protection.md) for the ruleset itself, and
 [`safety-model.md`](./safety-model.md) for what a bad `main` can reach.
 
-The ruleset has no merge queue (a GitHub feature that tests each pull request on
-top of the ones ahead of it), so nothing serialises merges. The protection is a
-step the merger takes: when two open pull requests touch the same files, merge
-one, update the other branch from `main`, wait for `Python Unit Tests` to
-rerun, and only then merge it.
+The cost is that every merge makes the other open pull requests stale. GitHub
+blocks each one as behind `main` until its branch is updated from `main` and
+`Python Unit Tests` reruns. A pull request blocked that way needs an update,
+not a fix, unless the rerun then fails on the pair. The ruleset has no merge
+queue (a GitHub feature that tests each pull request on top of the ones ahead
+of it), so nothing does that update for you.
 
 To check what the live ruleset says rather than trust this page:
 

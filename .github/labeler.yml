@@ -32,8 +32,16 @@
 'area/safety-critical':
   - changed-files:
       - any-glob-to-any-file:
-          - '.github/workflows/build.yml'
+          # Every workflow, not only build.yml (rule 2's first file). Once a
+          # workflow is on main, any job in it can declare the
+          # production-signing environment and get the signing key.
+          # docs/risk-tiers.md puts the whole directory in Tier 3, and
+          # .github/CODEOWNERS owns it.
+          - '.github/workflows/**'
           - '.github/actions/publish-native-image/**'
+          # The local action build.yml's signing jobs run to install the cosign
+          # that receives the signing key.
+          - '.github/actions/install-signing-tools/**'
           - 'ci_tools/sign_image.py'
           - 'ci_tools/promote_stable.py'
           - 'ci_tools/check_akmods_cache.py'
@@ -61,6 +69,10 @@
           # puts it in Tier 3: loosening it reopens a direct push to main, and a
           # push to main starts the build that signs and promotes.
           - '.github/rulesets/**'
+          # Who must approve a change to every path above. docs/risk-tiers.md
+          # puts it in Tier 3: the ruleset requires code-owner review, so
+          # dropping a line here takes that path out from behind the owner.
+          - '.github/CODEOWNERS'
           # The agent permission boundary. docs/risk-tiers.md puts it in Tier 3:
           # settings.json is the allow/deny table and registers the hook, the
           # hook keeps the allow-listed commands inside that table, run_tests.py

@@ -61,7 +61,7 @@ NOT_ROOT_PATHS: dict[str, str | None] = {
     "main": None,  # the branch
     "packages: write": None,  # a permission
     "branch-protection.md": "docs/branch-protection.md",  # link text, relative to docs/
-    "build.yml": ".github/workflows/build.yml",  # "workflows other than `build.yml`"
+    "build.yml": ".github/workflows/build.yml",  # "every workflow and not only `build.yml`"
 }
 
 # Tracked files that docs/risk-tiers.md assigns to no tier: no path in any

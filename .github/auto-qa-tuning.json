@@ -68,6 +68,7 @@
     { "workflow": "build.yml", "job": "sign-akmods-cache", "timeout_minutes": 30 },
     { "workflow": "build.yml", "job": "build-candidate-image", "timeout_minutes": 60,
       "note": "Scales with the upstream Fedora Kinoite base image." },
+    { "workflow": "build.yml", "job": "sign-candidate-image", "timeout_minutes": 30 },
     { "workflow": "build.yml", "job": "promote-stable", "timeout_minutes": 30 },
 
     { "workflow": "build-pr.yml", "job": "build-pr-image", "timeout_minutes": 60 },

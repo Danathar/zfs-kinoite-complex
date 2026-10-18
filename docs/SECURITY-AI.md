@@ -31,8 +31,10 @@ is testing-only today; the pipeline is real regardless.
 ## Signing keys and secrets
 
 **Never read a private key into a transcript.** `COSIGN_PRIVATE_KEY` comes from
-the `SIGNING_SECRET` repository secret and exists only in the signing steps of
-`build.yml` (`build.yml:271`) and `publish-native-image`. An agent has no reason
+the `SIGNING_SECRET` environment secret and exists only in the signing steps of
+`build.yml`'s two signing jobs, `sign-akmods-cache` and `sign-candidate-image`,
+which run nothing but code-owned code and `python3 -I ci_tools/sign_image.py`
+(#454). An agent has no reason
 to read, print, copy, or check the format of that key, and an encryption header
 on a key file is not permission — the passphrase is routinely empty.
 
@@ -63,7 +65,7 @@ update.
 
 | Secret | Used by | If it leaks |
 | --- | --- | --- |
-| `SIGNING_SECRET` | the signing steps in `build.yml`, via `publish-native-image` | Anyone can sign an image that verifies against the committed `cosign.pub`, and machines are configured to trust exactly that. **Highest severity in the repository.** |
+| `SIGNING_SECRET` | the signing steps of `build.yml`'s `sign-akmods-cache` and `sign-candidate-image` jobs | Anyone can sign an image that verifies against the committed `cosign.pub`, and machines are configured to trust exactly that. **Highest severity in the repository.** |
 | `GITHUB_TOKEN` | every workflow, scoped per job | Short-lived and bounded by that job's `permissions:` block. It is also what pushes to GHCR — `REGISTRY_TOKEN` is `${{ github.token }}`, not a stored credential. |
 | Agent credentials (`ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN`) | [`.github/workflows/ai-fix.yml`](../.github/workflows/ai-fix.yml), which is inert unless one of them is set. Whether either is configured is not visible to a token without admin scope, so this inventory does not assert that they are. | Billing, not repository access — they buy model calls and cannot themselves write here. |
 

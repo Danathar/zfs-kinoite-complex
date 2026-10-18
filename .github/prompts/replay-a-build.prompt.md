@@ -139,7 +139,7 @@ any other ref, such as a `replay/*` branch:
 - `build-zfs-akmods` runs only when `github.ref` is `refs/heads/main`, and every
   later job needs it. On another ref the whole build is skipped and nothing is
   built, signed or published.
-- `sign-akmods-cache` and `build-candidate-image` declare `environment:
+- `sign-akmods-cache` and `sign-candidate-image` declare `environment:
   production-signing`, which admits only `main` (see
   [`maintenance-watchlist.md`](../../docs/maintenance-watchlist.md#closed-the-production-signing-environment-is-restricted-to-main)).
 

@@ -155,8 +155,11 @@ without requiring a manual `modprobe zfs`.
 
 ### 5. Sign Published Tags
 
-Candidate tags are signed after push by resolving the pushed tag to a digest and
-then signing that digest, inside the `production-signing` environment (see
+Candidate tags are signed after push by signing the digest podman reported for
+the push, once the run's transient tag is confirmed to hold it, and only then
+pointing the candidate tag at it. That happens in `sign-candidate-image`, a job
+of its own inside the `production-signing` environment that runs only
+code-owned code, with the signer as `python3 -I ci_tools/sign_image.py` (see
 [`maintenance-watchlist.md`](./maintenance-watchlist.md#closed-the-production-signing-environment-is-restricted-to-main)
 for the environment's branch policy and how to check it).
 

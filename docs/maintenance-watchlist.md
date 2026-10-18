@@ -72,15 +72,15 @@ hypothetical future workflow:
 
 - It carries a `workflow_dispatch` trigger, and `gh workflow run build.yml --ref
   <branch>` runs *that branch's* copy of the file.
-- `sign-akmods-cache` and `build-candidate-image` both declare `environment:
+- `sign-akmods-cache` and `sign-candidate-image` both declare `environment:
   production-signing` and consume `secrets.SIGNING_SECRET`.
 - Only `build-zfs-akmods` guards on `github.ref`: it runs only on
   `refs/heads/main`. It is privileged and holds `packages: write`, and without
   the guard a branch dispatch would run that branch's `ci_tools/` and
   `.github/actions/` code there and could republish the shared `main-<fedora>`
   akmods tag.
-  `sign-akmods-cache`, `build-candidate-image` and `promote-stable` all need it,
-  so on another ref nothing after it runs either.
+  `sign-akmods-cache`, `build-candidate-image`, `sign-candidate-image` and
+  `promote-stable` all need it, so on another ref nothing after it runs either.
 - `promote-stable` is conditioned on `github.event.inputs.promote_to_stable ==
   'true'`, and that input **defaults to `true`**.
 
@@ -103,7 +103,7 @@ to the environment.
 
 The signature policy the image installs uses `signedIdentity: matchRepository`
 ([`configure_signing_policy.py`](../files/scripts/configure_signing_policy.py)),
-and the signatures `sign-image` writes name the repository without a tag. Check
+and the signatures `ci_tools/sign_image.py` writes name the repository without a tag. Check
 one:
 
 ```bash

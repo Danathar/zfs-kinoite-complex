@@ -79,7 +79,7 @@ Two properties of the badge pipeline are deliberate:
 | Per-module coverage floors (`tests/check_coverage.py`) | same job | same |
 | `Evaluate Stable Signal Gate` (`build.yml`) | scheduled and `main` pushes | *skips* the build on a scheduled run when upstream has not moved (`build.yml:124`) — a skip, not a failure |
 | `check-akmods-cache` strict mode | before the candidate build | the build, if the cache does not carry a matching `kmod-zfs` |
-| `sign-image` | before publish | publishing — an unsigned production image is refused outright |
+| `ci_tools/sign_image.py` under `python3 -I` | in `sign-akmods-cache` and `sign-candidate-image`, before the candidate tag moves | publishing — an unsigned production image is refused outright, and the candidate tag is pointed only at a digest this signed and verified |
 | `promote-stable` digest re-read | after the copy to `:latest` | the run, not the copy — it detects a bad promotion, it does not prevent one. See the warning above. |
 | `nightly-compliance.yml` | 05:00 UTC daily, and on dispatch | nothing — it reports. See below. |
 | `boot-test.yml` | after every `build.yml` run on `main`, and on dispatch | nothing — it boots `:latest` after promotion and reports. |
@@ -219,7 +219,7 @@ Three things worth knowing before you conclude anything:
 
    The third one is the trap. Its message names a trusted root and a bundle
    format, so it reads like a signature-policy problem in this repository — and
-   it is not: it fails in a *tool installation* step, before `sign-image` or
+   it is not: it fails in a *tool installation* step, before `sign_image.py` or
    `check-akmods-cache` have run at all. Check which step failed before
    concluding anything about signing. The preceding `403` line is the tell.
 3. **A green pipeline is not a good image.** A successful run proves the build

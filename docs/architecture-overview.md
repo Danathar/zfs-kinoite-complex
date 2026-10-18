@@ -461,8 +461,8 @@ signed:
    pointed at `/mnt` -- so neither disk ever has to hold two unpacked copies of
    the image at once -- and finally re-tags the rechunked result back onto the
    same local tag `publish-native-image` expects.
-3. `publish-native-image`'s promote step copies the signed digest to the
-   requested tag with `skopeo copy --preserve-digests`, so that copy cannot
+3. `sign-candidate-image`'s last step copies the signed digest to the
+   candidate tag with `skopeo copy --preserve-digests`, so that copy cannot
    silently re-encode the manifest and drop Chunkah's layer annotations.
    `ci_tools/promote_stable.py`'s later `latest`/audit-tag copies already used
    `--preserve-digests` for the same reason.
@@ -561,12 +561,21 @@ What was intentionally given up:
 
 Publication signs the candidate digest before any user-facing tag is moved.
 
-The publish action:
+The publish action, in `build-candidate-image`, which holds no signing key:
 
 1. pushes a transient `*-unsigned-<run_id>` tag
-2. resolves that transient tag to a digest
-3. signs and verifies that digest
-4. copies the signed digest to the requested candidate tag
+2. reports the digest podman stored for it
+
+Then `sign-candidate-image`, the job that holds the key and runs only
+code-owned code, with signing itself done by `python3 -I ci_tools/sign_image.py`:
+
+1. confirms the transient tag resolves to that digest
+2. signs and verifies that digest
+3. copies the signed digest to the requested candidate tag
+
+Nothing the build job runs needs the owner's approval, so the signing job takes
+only the digest and the Fedora version from it. It works out the repository and
+both tags from `ci/defaults.json`, the commit and the run.
 
 The `*-unsigned-<run_id>` tag stays on the signed digest afterwards;
 `prune-registry.yml` removes it, and other throwaway tags, after two weeks.

@@ -716,7 +716,7 @@ class RechunkBandTests(unittest.TestCase):
         self.assertIn("`skopeo copy --preserve-digests`", doc())
         self.assertIn(
             "skopeo copy --multi-arch=all --preserve-digests",
-            read(".github/actions/publish-native-image/action.yml"),
+            read(".github/workflows/build.yml").split("\n  sign-candidate-image:\n", 1)[1],
         )
         self.assertIn("preserve_digests=True", read("ci_tools/promote_stable.py"))
 
@@ -762,13 +762,21 @@ def promotion_statement_calls() -> list[str]:
 class PublicationAndPromotionTests(unittest.TestCase):
     """Section "5. Promotion And Signing" lists both step sequences."""
 
-    def test_the_publish_action_takes_the_documented_four_steps(self) -> None:
-        items = numbered_list_after("The publish action:\n")
-        self.assertEqual(len(items), 4)
+    def test_the_publish_action_pushes_and_the_signing_job_signs(self) -> None:
+        items = numbered_list_after("The publish action, in `build-candidate-image`, which holds no signing key:\n")
+        self.assertEqual(len(items), 2)
         action = read(".github/actions/publish-native-image/action.yml")
         self.assertIn("-unsigned-${{ github.run_id }}", action)
         self.assertIn("unsigned-<run_id>", items[0])
-        self.assertIn("Sign transient image digest", action)
+        self.assertIn("--digestfile", action)
+        self.assertNotIn("cosign sign", action)
+        signing = numbered_list_after("`python3 -I ci_tools/sign_image.py`:\n")
+        self.assertEqual(len(signing), 3)
+        build = read(".github/workflows/build.yml")
+        job = build.split("\n  sign-candidate-image:\n", 1)[1].split("\n  promote-stable:\n", 1)[0]
+        for step in ("Confirm the pushed digest", "Sign candidate image", "Point the candidate tag at the signed digest"):
+            with self.subTest(step=step):
+                self.assertIn(f"- name: {step}\n", job)
 
     def test_the_promotion_list_names_every_step_main_takes_in_order(self) -> None:
         """

@@ -304,7 +304,8 @@ def ci_tool_error_messages() -> dict[str, list[list[str]]]:
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
-            if not (isinstance(node.func, ast.Name) and node.func.id == "CiToolError"):
+            # sign_image.py raises its own SigningError: it imports nothing from the repository.
+            if not (isinstance(node.func, ast.Name) and node.func.id in ("CiToolError", "SigningError")):
                 continue
             if not node.args:
                 continue
@@ -538,14 +539,31 @@ class Gates(unittest.TestCase):
         self.assertIn("should_build", pinned)
         self.assertIn("!= 'schedule'", pinned)
 
-    def test_the_three_publish_gates_are_cli_commands(self):
+    def test_the_signing_gate_is_the_isolated_script_both_signing_jobs_run(self):
         """
-        `check-akmods-cache`, `sign-image` and `promote-stable` are rows in the table and
-        subcommands of ci_tools/cli.py. A renamed command leaves the row naming nothing.
+        The signing row names `ci_tools/sign_image.py` under `python3 -I` and the two jobs that
+        run it. It is deliberately not a CLI command: the CLI imports every module, and none of
+        them may load next to the key.
+        """
+
+        row = next(r for r in self.rows if "ci_tools/sign_image.py" in BACKTICKED_RE.findall(r[0]))
+        self.assertIn("`ci_tools/sign_image.py` under `python3 -I`", row[0])
+        self.assertNotIn("sign-image", set(command_map()))
+        build = BUILD_YML.read_text(encoding="utf-8")
+        self.assertEqual(build.count("python3 -I ci_tools/sign_image.py"), 2)
+        for job in ("sign-akmods-cache", "sign-candidate-image"):
+            with self.subTest(job=job):
+                self.assertIn(f"`{job}`", row[1])
+                self.assertIn(f"\n  {job}:\n", build)
+
+    def test_the_two_publish_gates_are_cli_commands(self):
+        """
+        `check-akmods-cache` and `promote-stable` are rows in the table and subcommands of
+        ci_tools/cli.py. A renamed command leaves the row naming nothing.
         """
 
         commands = set(command_map())
-        for name in ("check-akmods-cache", "sign-image", "promote-stable"):
+        for name in ("check-akmods-cache", "promote-stable"):
             with self.subTest(command=name):
                 self.assertTrue(
                     any(name in BACKTICKED_RE.findall(row[0]) for row in self.rows),

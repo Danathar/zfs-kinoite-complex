@@ -116,7 +116,8 @@ WORKFLOW_VARIABLE_RES = (
 )
 
 # The three helpers in `ci_tools/common.py` that read one named environment variable.
-ENV_READERS = frozenset({"require_env", "optional_env", "require_env_or_default"})
+# `_required` is ci_tools/sign_image.py's own reader: that file imports nothing from the repository.
+ENV_READERS = frozenset({"require_env", "optional_env", "require_env_or_default", "_required"})
 
 ENV_SECTION = "Configuration And Environment Variables"
 COMMAND_SECTION = "Command Glossary"
@@ -493,7 +494,8 @@ class EnvironmentVariableTests(unittest.TestCase):
         read = read_variables()
         # One name per reader shape, so a read moved to a form the walk cannot see fails
         # here instead of quietly narrowing the join.
-        self.assertIn("IMAGE_TAG", read)  # require_env
+        self.assertIn("FEDORA_VERSION", read)  # require_env
+        self.assertIn("IMAGE_REPO", read)  # sign_image.py's _required
         self.assertIn("KCPATH", read)  # optional_env
         self.assertIn("AKMODS_UPSTREAM_REF", read)  # require_env_or_default
         self.assertIn("COSIGN_PASSWORD", read)  # os.environ.get
@@ -718,15 +720,17 @@ class PipelineClaimTests(unittest.TestCase):
         names = step_names(strip_yaml_comments(BUILD_YML.read_text(encoding="utf-8")))
         for label in ("Build candidate image locally", "Rechunk candidate image with Chunkah"):
             self.assertEqual(names.count(label), 1, f"{label!r} is not a unique step name")
-        self.assertEqual(names.count("Push and sign candidate image"), 1)
+        for label in ("Push candidate image", "Sign candidate image"):
+            self.assertEqual(names.count(label), 1, f"{label!r} is not a unique step name")
         self.assertLess(
             names.index("Build candidate image locally"),
             names.index("Rechunk candidate image with Chunkah"),
         )
         self.assertLess(
             names.index("Rechunk candidate image with Chunkah"),
-            names.index("Push and sign candidate image"),
+            names.index("Push candidate image"),
         )
+        self.assertLess(names.index("Push candidate image"), names.index("Sign candidate image"))
         # The lint the entry names runs inside the build step, from the Containerfile.
         self.assertIn("RUN bootc container lint", CONTAINERFILE.read_text(encoding="utf-8"))
 

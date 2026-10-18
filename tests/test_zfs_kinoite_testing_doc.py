@@ -549,8 +549,10 @@ class SigningTests(unittest.TestCase):
                       self.body)
 
     def test_a_candidate_is_signed_by_digest_after_the_push(self) -> None:
-        self.assertIn("resolving the pushed tag to a digest and then signing that digest", self.body)
-        self.assertIn("skopeo_inspect_digest", SIGN.read_text(encoding="utf-8"))
+        self.assertIn("signing the digest podman reported for the push", self.body)
+        # The signer takes a digest and never resolves a tag itself.
+        self.assertIn("DIGEST_RE.fullmatch(image_digest)", SIGN.read_text(encoding="utf-8"))
+        self.assertNotIn("skopeo", SIGN.read_text(encoding="utf-8"))
 
     def test_stable_is_promoted_by_copying_rather_than_signed_twice(self) -> None:
         self.assertIn("by copying the already-signed candidate digest, not by signing a second time",

@@ -60,16 +60,26 @@ all of them.
 The main workflow avoids leaving user-facing tags on unsigned content.
 
 `.github/actions/build-native-image/action.yml` builds the local image under the
-requested candidate tag. `.github/actions/publish-native-image/action.yml` then
-does this:
+requested candidate tag. In the same job, `build-candidate-image`, which holds
+no signing key, `.github/actions/publish-native-image/action.yml` then:
 
 1. retags it to a transient non-publishable tag:
    `candidate-<sha>-<fedora>-unsigned-<run_id>`
-2. pushes only the transient tag first
-3. resolves the transient tag to a digest
+2. pushes only the transient tag, and reports the digest podman stored
+
+Then `sign-candidate-image`, a separate job that receives the key and runs only
+code-owned code (`build.yml` itself, pinned actions, `install-signing-tools` and
+`python3 -I ci_tools/sign_image.py`):
+
+3. confirms the transient tag resolves to that digest
 4. signs that digest
 5. verifies that digest signature
 6. copies the same digest to the requested candidate tag
+
+It works out the repository, the candidate tag and the transient tag itself,
+from `ci/defaults.json`, the commit and the run, and takes only the digest and
+the Fedora version from the build job, because that job runs code nobody has to
+approve.
 
 The `-unsigned-<run_id>` tag is not removed afterwards, so despite the name it
 names a signed digest. It is transient only because

@@ -1,19 +1,20 @@
 """
 Script: tests/test_action_publish_native_image.py
-What: Executes the three shell steps of .github/actions/publish-native-image/action.yml --
-retag, push the transient tag, and promote the pushed digest to the requested tag.
-Doing: Extracts each step's `run:` body from the composite action with PyYAML and runs it under
-bash with the step's `env:` block resolved the way GitHub resolves it, against stub `buildah`,
-`podman` and `skopeo` binaries that record their argv and model a tiny tag-to-digest registry.
-Why: This action owns the publication sequence that keeps a user-facing tag from ever pointing
-at unsigned content: push a transient tag, sign that digest, then promote *that digest* to the
-requested tag and verify the promoted tag resolves to it. All of that is shell inside a
-composite action, and no tier runs it -- tests/test_workflow_build_container.py only text-matches
-the action's `if:` guard, `tests/e2e/` dispatches `ci_tools.cli` commands and never a workflow
-step, and the composite actions are outside `tests/check_coverage.py`'s manifest by design.
-A promotion that copied from the mutable transient *tag* instead of the signed digest, that
-dropped `--preserve-digests`, or whose digest cross-check stopped failing the step would publish
-exactly the thing this sequence exists to prevent, with every existing test still green.
+What: Executes the shell that publishes a candidate image: the retag and push steps of
+.github/actions/publish-native-image/action.yml, and the two steps of build.yml's
+sign-candidate-image job that confirm the pushed digest and then point the candidate tag at it.
+Doing: Extracts each step's `run:` body with PyYAML and runs it under bash with the step's `env:`
+block resolved the way GitHub resolves it, against stub `buildah`, `podman` and `skopeo` binaries
+that record their argv and model a tiny tag-to-digest registry.
+Why: This sequence keeps a user-facing tag from ever pointing at unsigned content: the build job
+pushes a transient tag and reports the digest podman stored; the signing job confirms the
+transient tag holds that digest, signs it, and only then copies *that digest* to the candidate
+tag and verifies the tag resolves to it. All of that is shell, and no other tier runs it --
+`tests/e2e/` dispatches `ci_tools.cli` commands and never a workflow step, and composite actions
+and workflow steps are outside `tests/check_coverage.py`'s manifest by design. A promotion that
+copied from the mutable transient *tag* instead of the signed digest, that dropped
+`--preserve-digests`, or whose digest cross-check stopped failing the step would publish exactly
+the thing this sequence exists to prevent, with every existing test still green.
 Goal: Make "the tag users pull resolves to the digest this run signed" fail here rather than in
 the registry, where the only symptom is a signature that does not match what is being pulled.
 
@@ -47,11 +48,14 @@ except ImportError:  # pragma: no cover - exercised only where PyYAML is absent
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ACTION_PATH = REPO_ROOT / ".github" / "actions" / "publish-native-image" / "action.yml"
+BUILD_PATH = REPO_ROOT / ".github" / "workflows" / "build.yml"
+SIGNING_JOB = "sign-candidate-image"
 
 RETAG_STEP = "Retag local image for transient publication"
 PUSH_STEP = "Push transient tag with podman"
-PROMOTE_STEP = "Promote pushed digest to requested tag"
-SIGN_STEP = "Sign transient image digest"
+CONFIRM_STEP = "Confirm the pushed digest"
+SIGN_STEP = "Sign candidate image"
+PROMOTE_STEP = "Point the candidate tag at the signed digest"
 
 # PATH must reach the stubs and must NOT reach a real buildah/podman/skopeo, which live in
 # /usr/bin on a runner. Only the stub directory plus a shell is offered, so an unstubbed call
@@ -83,12 +87,16 @@ tool=$(basename "$0")
 if [ "${tool}" != "skopeo" ]; then
   # The push step's auth file lives in a directory it deletes on exit, so its
   # mode and contents can only be read from inside the call it was written for.
+  # `--digestfile` is answered with $STUB_PUSH_DIGEST, the digest a registry
+  # would report having stored.
   prev=""
   for arg in "$@"; do
     if [ "${prev}" = "--authfile" ]; then
       stat -c '%a' "${arg}" > "${STUB_AUTH}"
       cat "${arg}" >> "${STUB_AUTH}"
-      break
+    fi
+    if [ "${prev}" = "--digestfile" ]; then
+      printf '%s' "${STUB_PUSH_DIGEST}" > "${arg}"
     fi
     prev=${arg}
   done
@@ -131,33 +139,34 @@ esac
 """
 
 
-def _action() -> dict:
-    return yaml.safe_load(ACTION_PATH.read_text(encoding="utf-8"))
+def _steps(where: str) -> list[dict]:
+    if where == "action":
+        return yaml.safe_load(ACTION_PATH.read_text(encoding="utf-8"))["runs"]["steps"]
+    return yaml.safe_load(BUILD_PATH.read_text(encoding="utf-8"))["jobs"][SIGNING_JOB]["steps"]
 
 
-def _step(name: str) -> dict:
+def _step(name: str, where: str = "action") -> dict:
     """
-    Return the composite step called `name`.
+    Return the step called `name`, from the composite action or from build.yml's signing job.
 
     Located by name rather than by position: a step inserted above it must not silently move
     these tests onto different shell.
     """
 
-    for step in _action()["runs"]["steps"]:
+    for step in _steps(where):
         if step.get("name") == name:
             return step
+    source = "publish-native-image/action.yml" if where == "action" else f"build.yml job {SIGNING_JOB}"
     raise AssertionError(
-        f"publish-native-image/action.yml has no step named {name!r}; this test executes "
-        "that step's shell and cannot find it"
+        f"{source} has no step named {name!r}; this test executes that step's shell and "
+        "cannot find it"
     )
 
 
-def _step_body(name: str) -> str:
-    body = _step(name).get("run")
+def _step_body(name: str, where: str = "action") -> str:
+    body = _step(name, where).get("run")
     if not body:
-        raise AssertionError(
-            f"publish-native-image/action.yml step {name!r} no longer has a `run:` body"
-        )
+        raise AssertionError(f"step {name!r} no longer has a `run:` body")
     return body
 
 
@@ -169,8 +178,10 @@ class Result:
         completed: subprocess.CompletedProcess,
         calls: list[str],
         auth: str = "",
+        outputs: str = "",
     ):
         self.returncode = completed.returncode
+        self.outputs = outputs.splitlines()
         self.stdout = completed.stdout
         self.stderr = completed.stderr
         self.calls = calls
@@ -195,8 +206,10 @@ class PublishActionStepTests(unittest.TestCase):
         self,
         step_name: str,
         *,
+        where: str = "action",
         registry_contents: dict[str, str] | None = None,
         copy_digest: str = "",
+        push_digest: str = SIGNED_DIGEST,
     ) -> Result:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -217,6 +230,7 @@ class PublishActionStepTests(unittest.TestCase):
             calls = root / "calls"
             calls.touch()
             auth = root / "auth"
+            outputs = root / "github_output"
 
             env = {
                 "PATH": f"{bindir}:{SAFE_PATH}",
@@ -224,17 +238,24 @@ class PublishActionStepTests(unittest.TestCase):
                 "STUB_AUTH": str(auth),
                 "STUB_REGISTRY": str(stub_registry),
                 "STUB_COPY_DIGEST": copy_digest,
-                # The step's own `env:` block, expressions resolved.
+                "STUB_PUSH_DIGEST": push_digest,
+                "GITHUB_OUTPUT": str(outputs),
+                # The steps' own `env:` blocks, expressions resolved. The action's
+                # steps read the first six, the signing job's steps the last four.
                 "IMAGE_REGISTRY": REGISTRY,
                 "IMAGE_NAME": IMAGE,
                 "IMAGE_TAG": TAG,
                 "TRANSIENT_IMAGE_TAG": TRANSIENT_TAG,
                 "REGISTRY_USER": REGISTRY_USER,
                 "REGISTRY_PASSWORD": REGISTRY_PASSWORD,
+                "IMAGE_REPO": f"{REGISTRY}/{IMAGE}",
+                "TRANSIENT_TAG": TRANSIENT_TAG,
+                "CANDIDATE_TAG": TAG,
+                "IMAGE_DIGEST": SIGNED_DIGEST,
             }
 
             completed = subprocess.run(
-                ["bash", "-c", _step_body(step_name)],
+                ["bash", "-c", _step_body(step_name, where)],
                 env=env,
                 cwd=tmp,
                 capture_output=True,
@@ -248,7 +269,8 @@ class PublishActionStepTests(unittest.TestCase):
                 if line.strip()
             ]
             captured = auth.read_text(encoding="utf-8") if auth.exists() else ""
-            return Result(completed, recorded, captured)
+            written = outputs.read_text(encoding="utf-8") if outputs.exists() else ""
+            return Result(completed, recorded, captured, written)
 
     def _promote(self, **kwargs) -> Result:
         """Promote against a registry that already holds the pushed transient tag."""
@@ -258,7 +280,7 @@ class PublishActionStepTests(unittest.TestCase):
             f"docker://{REGISTRY}/{IMAGE}@{SIGNED_DIGEST}": SIGNED_DIGEST,
         }
         contents.update(kwargs.pop("registry_contents", {}))
-        return self._run(PROMOTE_STEP, registry_contents=contents, **kwargs)
+        return self._run(PROMOTE_STEP, where="build", registry_contents=contents, **kwargs)
 
     # -- retag -------------------------------------------------------------
 
@@ -373,6 +395,56 @@ class PublishActionStepTests(unittest.TestCase):
 
         self.assertEqual(self._run(PUSH_STEP).auth_mode, "600")
 
+    def test_the_push_reports_the_digest_podman_stored(self) -> None:
+        """
+        The signing job signs the digest this step reports, so it must be podman's own.
+
+        It comes from `--digestfile`, what the registry said it stored, rather than from a
+        later read of the transient tag.
+        """
+
+        result = self._run(PUSH_STEP)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("--digestfile", result.calls[0])
+        self.assertEqual(result.outputs, [f"transient_tag={TRANSIENT_TAG}", f"digest={SIGNED_DIGEST}"])
+
+    def test_a_push_that_reports_no_usable_digest_fails_the_step(self) -> None:
+        for reported in ("", "sha256:short", "latest"):
+            with self.subTest(reported=reported):
+                result = self._run(PUSH_STEP, push_digest=reported)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn("digest=", "\n".join(result.outputs))
+
+    # -- confirm (build.yml, sign-candidate-image) --------------------------
+
+    def test_the_signed_digest_must_be_what_this_runs_transient_tag_holds(self) -> None:
+        """
+        The digest comes from a job whose code nobody has to approve, so it is checked
+        against the transient tag only this run can have created before anything is signed.
+        """
+
+        result = self._run(
+            CONFIRM_STEP,
+            where="build",
+            registry_contents={f"docker://{REGISTRY}/{IMAGE}:{TRANSIENT_TAG}": SIGNED_DIGEST},
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(len(result.calls), 1, result.calls)
+        self.assertIn(f"docker://{REGISTRY}/{IMAGE}:{TRANSIENT_TAG}", result.calls[0])
+
+    def test_a_digest_the_transient_tag_does_not_hold_is_refused(self) -> None:
+        result = self._run(
+            CONFIRM_STEP,
+            where="build",
+            registry_contents={f"docker://{REGISTRY}/{IMAGE}:{TRANSIENT_TAG}": STALE_DIGEST},
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Refusing to sign", result.stderr)
+
+    def test_a_transient_tag_that_does_not_resolve_is_refused(self) -> None:
+        result = self._run(CONFIRM_STEP, where="build", registry_contents={})
+        self.assertNotEqual(result.returncode, 0)
+
     # -- promote -----------------------------------------------------------
 
     def test_the_promotion_copies_the_signed_digest_and_not_the_transient_tag(
@@ -398,7 +470,7 @@ class PublishActionStepTests(unittest.TestCase):
         )
 
     def test_the_promotion_lands_on_the_requested_tag(self) -> None:
-        """The destination is the tag the caller asked for, registry-qualified."""
+        """The destination is the candidate tag, registry-qualified."""
 
         result = self._promote()
         copies = result.calls_matching("copy ")
@@ -456,27 +528,21 @@ class PublishActionStepTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
             [call.split()[0] for call in result.calls],
-            ["inspect", "copy", "inspect"],
-            "the step must inspect the transient tag, copy, then read the promoted tag back",
+            ["copy", "inspect"],
+            "the step must copy the signed digest, then read the promoted tag back",
         )
 
-    def test_a_failed_lookup_of_the_signed_digest_fails_the_step(self) -> None:
+    def test_a_failed_copy_of_the_signed_digest_fails_the_step(self) -> None:
         """
-        A promotion that cannot read the transient tag must fail, not report success.
+        A promotion that cannot copy the signed digest must fail, not report success.
 
-        Without `set -euo pipefail` this step failed *open*: a failed first `skopeo inspect`
-        left `transient_digest` empty, the copy of `...@` failed and was ignored, and
-        `final_digest` was empty too, so the guard compared "" against "" and the step exited
-        0 having promoted nothing. For `:latest` that was masked -- the tag already exists, so
-        the read-back returns the previous build's digest and the comparison fails closed --
-        but a tag that does not exist yet, such as a fresh `candidate-*` tag, would be reported
-        as published without ever having been written.
-
-        Driven with an empty stub registry, which is the fresh-tag case: neither the transient
-        tag nor the requested tag resolves.
+        Without `set -euo pipefail` a failed copy would be ignored, and for a tag that does not
+        exist yet, such as a fresh `candidate-*` tag, the read-back fails too, so the step could
+        end having promoted nothing. Driven with an empty stub registry, which is that case:
+        neither the signed digest nor the candidate tag resolves.
         """
 
-        result = self._run(PROMOTE_STEP, registry_contents={})
+        result = self._run(PROMOTE_STEP, where="build", registry_contents={})
         self.assertNotEqual(
             result.returncode,
             0,
@@ -484,61 +550,54 @@ class PublishActionStepTests(unittest.TestCase):
             f"promoted nothing: {result.calls}",
         )
 
-    def test_the_signed_digest_is_taken_from_the_transient_tag_this_job_pushed(
-        self,
-    ) -> None:
-        """
-        The first inspect names the transient tag, which only this run can have created.
-
-        Resolving the digest from the requested tag instead would sign off on whatever the
-        previous build left behind.
-        """
-
-        result = self._promote()
-        self.assertIn(
-            f"docker://{REGISTRY}/{IMAGE}:{TRANSIENT_TAG}",
-            result.calls[0],
-        )
-
 
 @unittest.skipIf(yaml is None, "PyYAML is not installed")
 class PublishActionSequenceTests(unittest.TestCase):
     """
-    The one invariant that spans steps: the tag that is signed is the tag that is promoted.
+    The one invariant that spans jobs: the tag that is pushed is the tag that is confirmed.
 
-    Each step recomputes `${{ inputs.image_tag }}-unsigned-${{ github.run_id }}` in its own
-    `env:` block, so the three copies can drift apart. If the signing step's copy ever stopped
-    matching the promotion's, the job would sign one image and publish another with every
-    step green -- the failure this whole sequence is built to make impossible.
+    The action's retag and push steps each compute
+    `${{ inputs.image_tag }}-unsigned-${{ github.run_id }}` in their own `env:` block, and the
+    signing job works the transient tag out again from the candidate tag and the run, because
+    it takes no tag from the build job. If those drifted apart, the confirm step would read a
+    tag this run never pushed.
     """
 
-    def _env_of(self, step_name: str) -> dict:
-        return _step(step_name).get("env") or {}
+    TRANSIENT_EXPRESSION = "${{ inputs.image_tag }}-unsigned-${{ github.run_id }}"
 
-    def test_the_signed_tag_and_the_promoted_transient_tag_are_the_same_expression(
-        self,
-    ) -> None:
-        signed = self._env_of(SIGN_STEP)["IMAGE_TAG"]
-        promoted = self._env_of(PROMOTE_STEP)["TRANSIENT_IMAGE_TAG"]
-        self.assertEqual(signed, promoted)
+    def _env_of(self, step_name: str, where: str = "action") -> dict:
+        return _step(step_name, where).get("env") or {}
 
-    def test_every_step_derives_the_transient_tag_the_same_way(self) -> None:
+    def test_the_retag_and_the_push_use_the_same_transient_tag(self) -> None:
         pushed = self._env_of(PUSH_STEP)["TRANSIENT_IMAGE_TAG"]
         retagged = self._env_of(RETAG_STEP)["TRANSIENT_IMAGE_TAG"]
-        promoted = self._env_of(PROMOTE_STEP)["TRANSIENT_IMAGE_TAG"]
-        self.assertEqual({pushed, retagged}, {promoted})
+        self.assertEqual({pushed, retagged}, {self.TRANSIENT_EXPRESSION})
+
+    def test_the_signing_job_derives_the_same_transient_tag(self) -> None:
+        # The action is handed the candidate tag as image_tag; the signing job appends the
+        # same suffix to the candidate tag it computes itself.
+        target = _step_body("Work out what to sign", "build")
+        self.assertIn('echo "transient_tag=${candidate_tag}-unsigned-${GITHUB_RUN_ID}"', target)
+        self.assertEqual(
+            self._env_of(CONFIRM_STEP, "build")["TRANSIENT_TAG"],
+            "${{ steps.target.outputs.transient_tag }}",
+        )
+
+    def test_the_confirmed_digest_is_the_one_signed_and_promoted(self) -> None:
+        digests = {
+            self._env_of(name, "build")["IMAGE_DIGEST"] for name in (CONFIRM_STEP, SIGN_STEP, PROMOTE_STEP)
+        }
+        self.assertEqual(digests, {"${{ needs.build-candidate-image.outputs.digest }}"})
 
     def test_the_transient_tag_is_unique_per_run(self) -> None:
         """
         `github.run_id` in the transient tag is what keeps two concurrent runs apart.
 
-        Without it both would push the same transient tag, and each could promote the
+        Without it both would push the same transient tag, and each could confirm the
         other's digest -- signed, but not by the run that published it.
         """
 
-        self.assertIn(
-            "github.run_id", self._env_of(PROMOTE_STEP)["TRANSIENT_IMAGE_TAG"]
-        )
+        self.assertIn("github.run_id", self._env_of(PUSH_STEP)["TRANSIENT_IMAGE_TAG"])
 
 
 if __name__ == "__main__":

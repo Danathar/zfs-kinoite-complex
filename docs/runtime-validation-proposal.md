@@ -8,8 +8,8 @@ real ZFS pool before moving `latest`. That boundary is intentional: a hosted
 runner is not a safe place to expose production pool devices or signing
 credentials to an experimental boot test.
 
-One part of step 4 below now runs on a clock: `boot-test.yml` boots the
-published `:latest` daily in a throwaway VM on a hosted runner, with no disk but
+One part of step 4 below now runs automatically: `boot-test.yml` boots the
+published `:latest` after every build of `main` in a throwaway VM on a hosted runner, with no disk but
 the image's own root, and checks over SSH that the ZFS packages are installed,
 the module loaded at boot, and `zpool list` reaches it. It runs after promotion
 and gates nothing, so the boundary above still holds.

@@ -27,7 +27,10 @@ the published image is still there and has not been refreshed. It does **not**
 mean the image boots: that badge is derived from the `Created` field on the
 published image, so it reports the artifact's age and nothing else.
 [`safety-model.md`](./safety-model.md) is explicit that CI never boots the image
-or imports a pool, so no badge here can tell you it works on a machine. That is a very different situation from a red build with a stale last
+or imports a pool before promotion, so no badge here can tell you it works on a
+machine. The closest signal is `boot-test.yml`, which boots `:latest` in a VM once a
+day after it has moved and checks that ZFS loads; it has no badge, and it creates no
+pool. That is a very different situation from a red build with a stale last
 good build, which means machines tracking `:latest` are drifting.
 
 **A cancelled run reads as a failed one.** The **build** badge is GitHub's own,
@@ -79,6 +82,7 @@ Two properties of the badge pipeline are deliberate:
 | `sign-image` | before publish | publishing — an unsigned production image is refused outright |
 | `promote-stable` digest re-read | after the copy to `:latest` | the run, not the copy — it detects a bad promotion, it does not prevent one. See the warning above. |
 | `nightly-compliance.yml` | 05:00 UTC daily, and on dispatch | nothing — it reports. See below. |
+| `boot-test.yml` | 08:23 UTC daily, and on dispatch | nothing — it boots `:latest` after promotion and reports. |
 
 > **A red `build.yml` does not prove `:latest` is untouched.** The candidate is
 > pushed and signed before the promotion job runs, and `promote_stable.py`

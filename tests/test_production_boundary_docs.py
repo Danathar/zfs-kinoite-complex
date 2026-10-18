@@ -321,7 +321,7 @@ class OpenFindingTests(unittest.TestCase):
         )
 
     def test_the_two_jobs_it_names_are_exactly_the_jobs_in_the_environment(self) -> None:
-        for name in ("`sign-akmods-cache`", "`build-candidate-image`"):
+        for name in ("`sign-akmods-cache`", "`sign-candidate-image`"):
             self.assertIn(name, self.section)
         in_environment = {
             name
@@ -331,14 +331,14 @@ class OpenFindingTests(unittest.TestCase):
         }
         self.assertEqual(
             in_environment,
-            {"sign-akmods-cache", "build-candidate-image"},
+            {"sign-akmods-cache", "sign-candidate-image"},
             "The watchlist names these two jobs as the ones that reach the production "
             "signing key. build.yml now scopes a different set to the environment.",
         )
 
     def test_both_named_jobs_consume_the_signing_secret(self) -> None:
         self.assertIn("`secrets.SIGNING_SECRET`".strip("`"), self.section)
-        for name in ("sign-akmods-cache", "build-candidate-image"):
+        for name in ("sign-akmods-cache", "sign-candidate-image"):
             body = "\n".join(self.jobs[name].children)
             self.assertIn(
                 "secrets.SIGNING_SECRET",
@@ -364,7 +364,7 @@ class OpenFindingTests(unittest.TestCase):
             condition.startswith("github.ref == 'refs/heads/main' && ("),
             f"build-zfs-akmods must require main before anything else: {condition}",
         )
-        for name in ("sign-akmods-cache", "build-candidate-image", "promote-stable"):
+        for name in ("sign-akmods-cache", "build-candidate-image", "sign-candidate-image", "promote-stable"):
             with self.subTest(job=name):
                 needs = "\n".join(self.jobs[name].children)
                 self.assertIn("build-zfs-akmods", needs, f"{name} no longer needs build-zfs-akmods")

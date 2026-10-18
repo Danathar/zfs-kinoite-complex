@@ -364,8 +364,10 @@ class CandidateImageTests(unittest.TestCase):
         self.assertEqual(on["workflow_dispatch"]["inputs"]["promote_to_stable"]["type"], "boolean")
         jobs = workflow["jobs"]
         # The candidate is built and signed whatever promote_to_stable says ...
-        self.assertEqual(jobs["build-candidate-image"]["environment"], "production-signing")
-        self.assertNotIn("promote_to_stable", str(jobs["build-candidate-image"].get("if", "")))
+        self.assertEqual(jobs["sign-candidate-image"]["environment"], "production-signing")
+        for job in ("build-candidate-image", "sign-candidate-image"):
+            with self.subTest(job=job):
+                self.assertNotIn("promote_to_stable", str(jobs[job].get("if", "")))
         # ... and only moving `latest` reads it.
         self.assertIn("github.event.inputs.promote_to_stable == 'true'", jobs["promote-stable"]["if"])
         tag = tagging_context.build_candidate_tag(github_sha="0" * 40, fedora_version="44")

@@ -751,21 +751,26 @@ class PublicationOrderTests(unittest.TestCase):
         the page fails here.
         """
 
-        for earlier, later in (
-            ("Retag local image for transient publication", "Push transient tag with podman"),
-            ("Push transient tag with podman", "Sign transient image digest"),
-            ("Sign transient image digest", "Promote pushed digest to requested tag"),
+        build = BUILD_WORKFLOW.read_text(encoding="utf-8")
+        signing_job = build.split("\n  sign-candidate-image:\n", 1)[1]
+        signing_job = re.split(r"\n  [a-z][\w-]*:\n", signing_job, maxsplit=1)[0]
+        signing_steps = re.findall(r"^      - name: (.+)$", signing_job, re.MULTILINE)
+        for names, earlier, later in (
+            (self.step_names, "Retag local image for transient publication", "Push transient tag with podman"),
+            (signing_steps, "Confirm the pushed digest", "Sign candidate image"),
+            (signing_steps, "Sign candidate image", "Point the candidate tag at the signed digest"),
         ):
             with self.subTest(earlier=earlier, later=later):
-                self.assertIn(earlier, self.step_names)
-                self.assertIn(later, self.step_names)
-                self.assertLess(self.step_names.index(earlier), self.step_names.index(later))
+                self.assertIn(earlier, names)
+                self.assertIn(later, names)
+                self.assertLess(names.index(earlier), names.index(later))
         documented = [text for _, text in self.items]
         retag = next(i for i, text in enumerate(documented) if text.startswith("retags it"))
         push = next(i for i, text in enumerate(documented) if text.startswith("pushes only"))
+        confirm = next(i for i, text in enumerate(documented) if text.startswith("confirms the transient tag"))
+        sign = next(i for i, text in enumerate(documented) if text.startswith("signs that digest"))
         promote = next(i for i, text in enumerate(documented) if text.startswith("copies the same digest"))
-        self.assertLess(retag, push)
-        self.assertLess(push, promote)
+        self.assertEqual([retag, push, confirm, sign, promote], sorted([retag, push, confirm, sign, promote]))
 
     def test_the_transient_tag_shape_is_the_one_the_action_builds(self) -> None:
         """

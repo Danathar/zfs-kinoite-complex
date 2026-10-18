@@ -97,7 +97,7 @@ This page defines terms used across this repository's docs and workflow comments
 
 - `BASE_IMAGE`: base Fedora Kinoite image ref passed to the root `Containerfile`.
 - `BREW_IMAGE`: Homebrew payload OCI image ref passed to the root `Containerfile`. CI passes the digest-pinned `DEFAULT_BREW_IMAGE` from `ci/defaults.json`; the `Containerfile` default is a local-build convenience only.
-- `IMAGE_REPO`: final OS image repository path used when writing signing policy.
+- `IMAGE_REPO`: final OS image repository path used when writing signing policy. In `build.yml`'s two signing jobs it is the `ghcr.io/<owner>/<name>` repository `ci_tools/sign_image.py` signs in, built from `ci/defaults.json` and the repository owner, never taken from a build job.
 - `SIGNING_KEY_FILENAME`: public-key filename installed into the image for future signature verification.
 - `DEFAULT_BASE_IMAGE`: checked-in default for the base image ref, read from `ci/defaults.json` unless the environment overrides it.
 - `DEFAULT_BREW_IMAGE`: checked-in default for the Homebrew payload image ref, read from `ci/defaults.json` unless the environment overrides it.
@@ -133,9 +133,9 @@ This page defines terms used across this repository's docs and workflow comments
 - `IMAGE_ORG`: normalized image-owner portion used in GHCR paths.
 - `IMAGE_REGISTRY`: GHCR registry path for this owner, `ghcr.io/` followed by `IMAGE_ORG`. Exported by the same helper call that exports `IMAGE_ORG`.
 - `IMAGE_NAME`: final OS image repository name.
-- `IMAGE_TAG`: image tag being pushed, signed, or promoted.
+- `IMAGE_TAG`: image tag being pushed or promoted.
 - `HAS_SIGNING_SECRET`: workflow-local boolean that records whether `SIGNING_SECRET` is configured.
-- `IMAGE_DIGEST`: digest the caller already pinned for the image being signed; when set, `sign-image` signs it directly instead of re-resolving `IMAGE_TAG`, which another workflow could have moved meanwhile.
+- `IMAGE_DIGEST`: digest of the image being signed. `ci_tools/sign_image.py` signs exactly this digest and never resolves a tag, because a tag another run can republish could have moved meanwhile.
 
 ### Workflow Control And Audit
 

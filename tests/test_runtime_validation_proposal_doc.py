@@ -585,7 +585,7 @@ class FutureAutomationTests(unittest.TestCase):
         )
         self.assertEqual(
             sorted(needs),
-            ["build-candidate-image", "build-zfs-akmods", "sign-akmods-cache"],
+            ["build-candidate-image", "build-zfs-akmods", "sign-akmods-cache", "sign-candidate-image"],
             "The proposal's last sentence says the operator is still the final runtime "
             "validation step, and 'Until then' makes that conditional on no workflow gate "
             "existing. promote-stable's gates changed. If one of them boots the image, this "

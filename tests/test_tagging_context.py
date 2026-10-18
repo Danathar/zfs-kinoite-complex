@@ -137,6 +137,23 @@ class TaggingEntrypointTests(unittest.TestCase):
         self.assertEqual(outputs["candidate_tag"], "candidate-deadbee-43")
         self.assertIn("candidate-deadbee-43", printed)
 
+    def test_the_signing_job_builds_the_same_candidate_tag(self) -> None:
+        """
+        build.yml's sign-candidate-image works the candidate tag out again in shell,
+        from the commit and the Fedora version, rather than trusting the build job's
+        output. promote_stable.py looks the tag up by this function's shape, so the two
+        must agree.
+        """
+
+        build = (Path(__file__).resolve().parent.parent / ".github" / "workflows" / "build.yml").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('candidate_tag="candidate-${GITHUB_SHA::7}-${FEDORA_VERSION}"', build)
+        self.assertEqual(
+            build_candidate_tag(github_sha="0123456789abcdef", fedora_version="44"),
+            "candidate-0123456-44",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

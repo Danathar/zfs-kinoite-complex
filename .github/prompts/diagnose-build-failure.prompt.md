@@ -66,8 +66,10 @@ response to each is different:
 | `Refusing to promote run <n>: run <m> has already promoted a newer image to latest.` | The promote job of an older build ran after a newer run had already promoted — almost always a re-run of a finished run, which keeps its old run number. Moving `:latest` now would move it backwards, and an older image may be unable to import pools a newer one upgraded. The check runs before either copy, so **no tag moved**; `:latest` is still run `<m>`'s image. | Nothing to fix and nothing to re-run. Say that the re-run was refused and that `:latest` did not move. Never delete `stable-*` tags to get past it (AGENTS.md section 0 rule 1). A deliberate rollback is a new run, which gets a higher run number, and is the maintainer's call (AGENTS.md section 0 rule 6). If a *new* run is refused too, promotion is running under a workflow whose run count is lower than the existing `stable-*` tags — escalate. |
 | `Missing tag list in skopeo list-tags output for <ref>` | The registry answered the tag listing with no tag list, so the promote job could not tell whether a newer run had already promoted. It fails closed before any tag moves. | Usually a transient registry failure (see step 4). |
 | `GITHUB_RUN_NUMBER is not a run number: <value>` | The promote job's run number was not a plain number, so it cannot be compared with the `stable-<run>-<sha>` tags. No tag moved. | A repository problem: look at how `build.yml` sets the promote job's environment. |
-| `Failed to resolve digest for <ref>` / `Missing digest in skopeo inspect output for <ref>` | A registry read returned a manifest with no digest — usually a transient registry or CDN failure, sometimes a deleted tag. | Check whether the ref still exists. If it does, this is very likely transient (see step 4). |
-| `SIGNING_SECRET is empty; cannot sign published image.` | The signing job ran without its secret, typically because the run came from a context that does not get one. | Confirm the trigger. A branch or fork run is not supposed to sign. |
+| `Missing digest in skopeo inspect output for <ref>` | A registry read returned a manifest with no digest — usually a transient registry or CDN failure, sometimes a deleted tag. | Check whether the ref still exists. If it does, this is very likely transient (see step 4). |
+| `SIGNING_SECRET is empty; cannot sign published image.` | A signing job (`sign-akmods-cache` or `sign-candidate-image`, the only two that hold the key) ran without its secret, typically because the run came from a context that does not get one. | Confirm the trigger. A branch or fork run is not supposed to sign. |
+| `Refusing to sign: <value> is not a lowercase ghcr.io/<owner>/<name> repository.` | `ci_tools/sign_image.py` was handed an `IMAGE_REPO` that is not this repository's own lowercase ghcr.io package. It signs only what the workflow names explicitly and never resolves a tag, so nothing was signed. | A wiring problem in the signing job's `IMAGE_REPO` in `.github/workflows/build.yml`. Do **not** widen the accepted pattern. |
+| `Refusing to sign: <value> is not a sha256 digest.` | `ci_tools/sign_image.py` was handed an `IMAGE_DIGEST` that is not a full `sha256:` digest, for example empty because the push step did not output one. Nothing was signed and the candidate tag has not moved. | Check that `build-candidate-image` (or the akmods cache pin) actually produced a `digest` output. Do **not** let signing fall back to resolving a tag. |
 | `Missing required verification key file: <path>` | `cosign.pub` is not where the signing or promotion step expects it. | A repository problem, not upstream. |
 | `Replay lock file not found: <path>` | Replay mode was requested with no lock file. | See [`replay-a-build.prompt.md`](replay-a-build.prompt.md). |
 
@@ -88,12 +90,14 @@ format, so it reads like a signing problem here. It is not — it fails while
 *installing* `cosign`, not while using it.
 
 But do not then conclude that nothing ran. `install-signing-tools` is invoked in
-three separate `build.yml` jobs — `preflight`, `sign-akmods-cache` and
-`promote-stable` — and again inside `publish-native-image`, which runs *after*
-the transient image has been pushed. A 403 in `preflight`'s copy means almost
-nothing happened; the same 403 in `promote-stable`'s means the candidate was
-already built, signed and published. **Identify which job's installer failed
-before describing the state of the run.**
+four separate `build.yml` jobs — `preflight`, `sign-akmods-cache`,
+`sign-candidate-image` and `promote-stable`. `build-candidate-image` pushes the
+image but holds no key and installs no `cosign`. A 403 in `preflight`'s copy
+means almost nothing happened; the same 403 in `sign-candidate-image`'s means
+the candidate was built and pushed under a transient tag but not signed, and
+the candidate tag has not moved; in `promote-stable`'s it means the candidate
+was already built, signed and published. **Identify which job's installer
+failed before describing the state of the run.**
 
 For any of them: say so, name the job and the step, and note that a re-run is
 the maintainer's call — this repo does not retry automatically, and a re-run of

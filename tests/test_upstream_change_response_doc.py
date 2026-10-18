@@ -86,12 +86,13 @@ DOC_HEADINGS = (
 # build.yml that can actually be the failed one. Asserted exhaustive in both directions: an
 # area naming no job sends a responder looking for something that does not exist, and a job no
 # area covers is a failure class the page cannot triage.
+# Signing is two jobs: one signs the shared akmods cache, the other the candidate image.
 AREA_TO_JOB = {
-    "input resolution": "preflight",
-    "akmods": "build-zfs-akmods",
-    "image composition": "build-candidate-image",
-    "signing": "sign-akmods-cache",
-    "promotion": "promote-stable",
+    "input resolution": ("preflight",),
+    "akmods": ("build-zfs-akmods",),
+    "image composition": ("build-candidate-image",),
+    "signing": ("sign-akmods-cache", "sign-candidate-image"),
+    "promotion": ("promote-stable",),
 }
 
 # The six values first triage step 2 says to record, mapped to the `inputs` key of
@@ -675,13 +676,14 @@ class FirstTriageAreaTests(unittest.TestCase):
 
     def test_every_documented_area_names_a_job_that_exists(self) -> None:
         for area in self._documented_areas():
-            with self.subTest(area=area):
-                self.assertIn(AREA_TO_JOB[area], self.jobs)
+            for job in AREA_TO_JOB[area]:
+                with self.subTest(area=area, job=job):
+                    self.assertIn(job, self.jobs)
 
     def test_every_job_in_the_build_workflow_is_covered_by_an_area(self) -> None:
         # The direction that catches the stale page: a job added to build.yml is a failure
         # class step 1 cannot place, and a responder would have nowhere to put it.
-        self.assertEqual(sorted(self.jobs), sorted(AREA_TO_JOB.values()))
+        self.assertEqual(sorted(self.jobs), sorted(job for jobs in AREA_TO_JOB.values() for job in jobs))
 
 
 class FirstTriageRecordTests(unittest.TestCase):

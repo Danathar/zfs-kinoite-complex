@@ -510,10 +510,10 @@ class CoreWorkflowClaimTests(unittest.TestCase):
         self.assertIn("no push and no signing", claims["build-pr.yml"])
         production = (WORKFLOW_DIR / "build.yml").read_text(encoding="utf-8")
         self.assertIn("./.github/actions/publish-native-image", production)
-        self.assertIn("cli sign-image", production)
+        self.assertIn("python3 -I ci_tools/sign_image.py", production)
         pull_request = (WORKFLOW_DIR / "build-pr.yml").read_text(encoding="utf-8")
         self.assertNotIn("./.github/actions/publish-native-image", pull_request)
-        self.assertNotIn("cli sign-image", pull_request)
+        self.assertNotIn("sign_image.py", pull_request)
 
     def test_scheduled_runs_really_are_gated_on_the_stable_signal(self) -> None:
         # "scheduled runs skip when the upstream Kinoite base image has not

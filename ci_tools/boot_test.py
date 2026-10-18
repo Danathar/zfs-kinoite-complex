@@ -110,13 +110,19 @@ def guest_script() -> str:
         f'state="$(timeout {SETTLE_TIMEOUT_SECONDS} systemctl is-system-running --wait 2>/dev/null)"',
         f'echo "{MARKER}STATE ${{state:-timeout}}"',
         f'echo "{MARKER}INFO kernel $(uname -r)"',
-        f'zfs version 2>/dev/null | while read -r line; do echo "{MARKER}INFO zfs-version $line"; done',
     ]
     for name, command in GUEST_CHECKS:
         lines += [
             f"if out=\"$({command})\"; then status=pass; else status=fail; fi",
             f'echo "{MARKER}CHECK {name} $status $(printf %s "$out" | head -n 1)"',
         ]
+    # Only after the checks: OpenZFS's libzfs_init runs `modprobe zfs` when the
+    # module is absent, so any zfs or zpool command before module:zfs would load
+    # the module and hide a boot that failed to. zpool:list comes after
+    # module:zfs in GUEST_CHECKS for the same reason.
+    lines.append(
+        f'zfs version 2>/dev/null | while read -r line; do echo "{MARKER}INFO zfs-version $line"; done'
+    )
     lines += [
         "systemctl --failed --plain --no-legend --full | while read -r unit _; do",
         f'  echo "{MARKER}FAILED-UNIT $unit"',
@@ -251,7 +257,14 @@ def boot(image: str, work: Path, attempt: int) -> tuple[GuestReport, str]:
         )
         output = proc.stdout + proc.stderr
     except subprocess.TimeoutExpired as exc:
-        partial = f"{exc.stdout or ''}{exc.stderr or ''}"
+        # TimeoutExpired carries bytes even with text=True. Interpolated as-is,
+        # they become a b'...' repr with escaped newlines, the marker lines are
+        # lost, and a boot whose checks ran and failed looks like one that never
+        # ran them, which earns a retry that could pass.
+        partial = "".join(
+            part.decode(errors="replace") if isinstance(part, bytes) else (part or "")
+            for part in (exc.stdout, exc.stderr)
+        )
         output = partial + f"\nbcvk timed out after {BOOT_TIMEOUT_SECONDS}s"
     finally:
         # Killing bcvk leaves the VM's container running, holding its memory

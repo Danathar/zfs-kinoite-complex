@@ -15,6 +15,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -107,6 +108,47 @@ class GuestScriptTests(unittest.TestCase):
         self.assertTrue(systemctl)
         for line in systemctl:
             self.assertIn("SYSTEMD_PAGER= ", line)
+
+
+class ModuleCheckOrderTests(unittest.TestCase):
+    """module:zfs has to see the module as the boot left it."""
+
+    def test_nothing_runs_zfs_or_zpool_before_the_module_check(self) -> None:
+        # OpenZFS's libzfs_init runs `modprobe zfs` when the module is absent, so
+        # a zfs or zpool command ahead of module:zfs would load the module and
+        # pass a boot whose modules-load.d entry never loaded it.
+        lines = guest_script().splitlines()
+        module_check = next(i for i, line in enumerate(lines) if "/sys/module/zfs" in line)
+        callers = [i for i, line in enumerate(lines) if re.search(r"(?<![\w/:-])(zfs|zpool) ", line)]
+        self.assertTrue(callers, "the script no longer runs zfs or zpool at all")
+        self.assertGreater(min(callers), module_check, [lines[i] for i in callers])
+
+
+class BootTimeoutTests(unittest.TestCase):
+    """A boot that hits the timeout after the guest printed its results."""
+
+    def test_the_checks_printed_before_the_timeout_are_kept(self) -> None:
+        # subprocess.TimeoutExpired carries bytes even with text=True. Read as a
+        # bytes repr, a failed check would look like checks that never ran, and
+        # the retry could turn the run green.
+        failing = passing_session().replace("CHECK module:zfs pass", "CHECK module:zfs fail")
+
+        def fake_run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+            if command[0] == "bcvk":
+                raise subprocess.TimeoutExpired(command, 1, output=failing.encode(), stderr=b"")
+            return subprocess.CompletedProcess(command, 0)
+
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch.object(script.subprocess, "run", side_effect=fake_run),
+            contextlib.redirect_stdout(open(os.devnull, "w")),
+        ):
+            report, output = script.boot("ghcr.io/danathar/zfs-kinoite-complex@sha256:" + "c" * 64, Path(tmp), 1)
+        self.assertTrue(report.done)
+        statuses = {check["name"]: check["status"] for check in report.checks}
+        self.assertEqual(statuses["module:zfs"], "fail")
+        self.assertNotIn("b'", output)
+        self.assertIn("bcvk timed out", output)
 
 
 class ParseTests(unittest.TestCase):

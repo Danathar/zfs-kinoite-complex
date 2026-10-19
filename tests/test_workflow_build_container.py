@@ -343,7 +343,18 @@ class SigningTargetTests(unittest.TestCase):
 
     def test_a_forged_candidate_tag_or_fedora_version_is_refused(self) -> None:
         good_tag = f"candidate-{self.SHA[:7]}-44"
-        for fedora, reported in (("44", "latest"), ("44", "stable-1-abc"), ("44;latest", good_tag), ("", good_tag)):
+        injected = "\nimage_repo=ghcr.io/someone/zfs-kinoite-complex"
+        for fedora, reported in (
+            ("44", "latest"),
+            ("44", "stable-1-abc"),
+            ("44;latest", good_tag),
+            ("", good_tag),
+            # Both outputs come from jobs nobody has to approve, so a forger can
+            # make the reported tag agree with a bad Fedora version. The number
+            # check alone must refuse these, including a second GITHUB_OUTPUT line.
+            ("44;latest", f"{good_tag};latest"),
+            (f"44{injected}", f"{good_tag}{injected}"),
+        ):
             with self.subTest(fedora=fedora, reported=reported):
                 result, temp = self._run(
                     "Work out what to sign", {"FEDORA_VERSION": fedora, "REPORTED_CANDIDATE_TAG": reported}
@@ -367,6 +378,83 @@ class SigningTargetTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 1)
                 self.assertIn("Refusing to sign", result.stderr)
                 self.assertFalse((temp / "seen").exists(), "the signer ran on a forged repository")
+
+
+class SigningJobWiringTests(unittest.TestCase):
+    """
+    Every step of sign-candidate-image uses the target the job worked out itself.
+
+    SigningTargetTests runs "Work out what to sign" in isolation, and
+    tests/test_action_publish_native_image.py runs the confirm and promote steps with
+    their env supplied by hand. Neither is worth anything if a later step reads the
+    repository or the tag from build-candidate-image instead of from `steps.target`,
+    so these pin each step's inputs and the outputs the job takes from other jobs at all.
+    """
+
+    def setUp(self) -> None:
+        self.jobs = PackageWriteRefTests._jobs((WORKFLOW_DIR / "build.yml").read_text(encoding="utf-8"))
+        self.job = self.jobs["sign-candidate-image"]
+
+    def _step_env(self, name: str) -> dict[str, str]:
+        step = self.job.split(f"name: {name}\n", 1)[1]
+        block = re.search(r"^        env:\n((?:          \S.*\n)+)", step, re.MULTILINE)
+        self.assertIsNotNone(block, f"{name} has no env block")
+        assert block is not None
+        pairs = (line.strip().split(": ", 1) for line in block.group(1).splitlines())
+        return {key: value for key, value in pairs}
+
+    def test_only_the_digest_fedora_version_and_reported_tag_come_from_other_jobs(self) -> None:
+        refs = re.findall(r"needs\.([\w-]+)\.outputs\.([\w-]+)", self.job)
+        self.assertEqual(
+            set(refs),
+            {
+                ("build-zfs-akmods", "fedora_version"),
+                ("build-candidate-image", "candidate_tag"),
+                ("build-candidate-image", "digest"),
+            },
+        )
+        # The reported tag is only ever cross-checked, never used.
+        self.assertEqual(refs.count(("build-candidate-image", "candidate_tag")), 1)
+        self.assertEqual(
+            self._step_env("Work out what to sign")["REPORTED_CANDIDATE_TAG"],
+            "${{ needs.build-candidate-image.outputs.candidate_tag }}",
+        )
+
+    def test_each_step_after_the_target_uses_the_target(self) -> None:
+        repo = "${{ steps.target.outputs.image_repo }}"
+        digest = "${{ needs.build-candidate-image.outputs.digest }}"
+        expected = {
+            "Confirm the pushed digest": {
+                "IMAGE_REPO": repo,
+                "TRANSIENT_TAG": "${{ steps.target.outputs.transient_tag }}",
+                "IMAGE_DIGEST": digest,
+            },
+            "Sign candidate image": {
+                "IMAGE_REPO": repo,
+                "IMAGE_DIGEST": digest,
+                "COSIGN_PRIVATE_KEY": "${{ secrets.SIGNING_SECRET }}",
+            },
+            "Point the candidate tag at the signed digest": {
+                "IMAGE_REPO": repo,
+                "CANDIDATE_TAG": "${{ steps.target.outputs.candidate_tag }}",
+                "IMAGE_DIGEST": digest,
+            },
+        }
+        for name, env in expected.items():
+            with self.subTest(step=name):
+                self.assertEqual(self._step_env(name), env)
+
+    def test_the_digest_is_confirmed_before_it_is_signed_and_signed_before_the_tag_moves(self) -> None:
+        order = [
+            self.job.index(f"name: {name}\n")
+            for name in (
+                "Work out what to sign",
+                "Confirm the pushed digest",
+                "Sign candidate image",
+                "Point the candidate tag at the signed digest",
+            )
+        ]
+        self.assertEqual(order, sorted(order))
 
 
 class ProductionSigningTests(unittest.TestCase):

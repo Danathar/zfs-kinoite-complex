@@ -64,7 +64,10 @@ SAFE_PATH = "/usr/bin:/bin"
 
 REGISTRY = "ghcr.io/danathar"
 IMAGE = "zfs-kinoite-complex"
-TAG = "latest"
+# The shape build.yml's sign-candidate-image job works out (`candidate-<sha7>-<fedora>`). Not
+# `latest`: that job must never move `latest`, so a fixture tag of `latest` would let a
+# promotion step that wrote to `:latest` instead of the candidate tag pass.
+TAG = "candidate-0123456-44"
 RUN_ID = "34266369977"
 TRANSIENT_TAG = f"{TAG}-unsigned-{RUN_ID}"
 
@@ -321,8 +324,8 @@ class PublishActionStepTests(unittest.TestCase):
         """
         Nothing user-facing is pushed before the signature exists.
 
-        The sequence's entire guarantee is that `:latest` appears only after the digest under
-        it has been signed, so this step must mention the requested tag only as the stem the
+        The sequence's entire guarantee is that the candidate tag appears only after the digest
+        under it has been signed, so this step must mention the requested tag only as the stem the
         transient tag is cut from.
         """
 
@@ -493,12 +496,27 @@ class PublishActionStepTests(unittest.TestCase):
         self.assertIn("--preserve-digests", copies[0])
         self.assertIn("--multi-arch=all", copies[0])
 
+    def test_the_promotion_never_writes_latest(self) -> None:
+        """
+        The signing job moves only the candidate tag; promote-stable alone moves `latest`.
+
+        A step that pointed `latest` at the digest would skip promote-stable's gates, so
+        `promote_to_stable=false` would no longer keep a candidate off `latest`.
+        """
+
+        result = self._promote()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(
+            [call for call in result.calls if f"{IMAGE}:latest" in call],
+            result.calls,
+        )
+
     def test_a_digest_that_changes_in_flight_fails_the_step(self) -> None:
         """
         The cross-check is the last thing standing between a signature and the bits.
 
         If the promoted tag resolves to anything other than the signed digest, the step must
-        fail the job rather than leave `:latest` pointing at unsigned content. Driven by
+        fail the job rather than leave the candidate tag pointing at unsigned content. Driven by
         making the copy land a different digest, which is what a manifest re-encode does.
         """
 

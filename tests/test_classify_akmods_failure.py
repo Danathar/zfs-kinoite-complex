@@ -776,5 +776,31 @@ class MainTests(unittest.TestCase):
             self.assertIn("artifacts/akmods-failure.json", stdout)
 
 
+class FailureKindDocsTests(unittest.TestCase):
+    """
+    `.github/scripts/README.md` is where a maintainer looks up what a sticky
+    issue's failure kind means. `transient-network` was added (#466) without a
+    line there, and nothing noticed; this ties every kind the module can return
+    to that list.
+    """
+
+    README = Path(__file__).resolve().parent.parent / ".github" / "scripts" / "README.md"
+
+    @staticmethod
+    def _kinds() -> list[str]:
+        return [value for name, value in vars(script).items() if name.startswith("FAILURE_KIND_")]
+
+    def test_the_scan_finds_every_kind_the_classifier_returns(self) -> None:
+        returned = (FAILURE_KIND_UPSTREAM_COMPAT, FAILURE_KIND_TRANSIENT_NETWORK, FAILURE_KIND_UNKNOWN)
+        for kind in returned:
+            self.assertIn(kind, self._kinds())
+
+    def test_every_failure_kind_is_described_in_the_scripts_readme(self) -> None:
+        text = self.README.read_text(encoding="utf-8")
+        for kind in self._kinds():
+            with self.subTest(kind=kind):
+                self.assertIn(f"- `{kind}` means", text)
+
+
 if __name__ == "__main__":
     unittest.main()

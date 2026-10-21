@@ -124,6 +124,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from typing import NamedTuple
@@ -1493,7 +1494,7 @@ class GateBehaviourTests(GateRunner, unittest.TestCase):
         # absent has weakened itself by accident.
         bindir = Path(tempfile.mkdtemp(prefix="gate-path-"))
         try:
-            for name in ("git", "realpath", "cat", "printf"):
+            for name in ("git", "realpath", "cat", "printf", "timeout"):
                 found = shutil.which(name)
                 if found:
                     (bindir / name).symlink_to(found)
@@ -1524,6 +1525,44 @@ class GateBehaviourTests(GateRunner, unittest.TestCase):
             check=False,
         )
         self.assertEqual(result.returncode, 2, result.stderr)
+
+    def test_it_fails_closed_when_timeout_is_missing(self) -> None:
+        # Without timeout the reading has no bound, and a hook that overruns
+        # Claude Code's hook timeout lets the command run, so the hook refuses
+        # as it does without jq.
+        bindir = Path(tempfile.mkdtemp(prefix="gate-path-"))
+        try:
+            for name in ("git", "realpath", "cat", "printf", "jq"):
+                found = shutil.which(name)
+                if found:
+                    (bindir / name).symlink_to(found)
+            result = subprocess.run(
+                [BASH, str(GATE)],
+                input=payload("git diff HEAD~1 HEAD"),
+                capture_output=True,
+                text=True,
+                timeout=60,
+                cwd=str(REPO_ROOT),
+                env={"PATH": str(bindir), "CLAUDE_PROJECT_DIR": str(REPO_ROOT)},
+                check=False,
+            )
+            self.assertEqual(result.returncode, 2, result.stderr)
+            self.assertIn("needs timeout", result.stderr)
+        finally:
+            shutil.rmtree(bindir, ignore_errors=True)
+
+    def test_a_command_too_long_to_read_in_the_budget_is_refused(self) -> None:
+        # Claude Code runs the command when a PreToolUse hook overruns its
+        # timeout, which is 60 seconds here because the settings entry sets
+        # none. Unbounded, this 60 KB string took 61 s to refuse under
+        # LC_ALL=C, so it ran. Under the budget it is refused at 10 s.
+        command = "git status -- " + "a " * 30000 + "; git diff /dev/null ./cosign.key"
+        started = time.monotonic()
+        result = self.run_gate(command)
+        elapsed = time.monotonic() - started
+        self.assertEqual(result.returncode, 2, result.stderr[:200])
+        self.assertIn("took longer than 10 seconds to check", result.stderr)
+        self.assertLess(elapsed, 30)
 
 
 class Row(NamedTuple):

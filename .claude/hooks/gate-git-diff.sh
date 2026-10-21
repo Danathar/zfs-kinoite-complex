@@ -164,10 +164,18 @@
 # literal paths. Nothing here is named `~`, and the alternative is a
 # containment test that has to know how each word was quoted.
 #
-# What it still cannot see, stated rather than implied: a command that hides a
-# git invocation behind another interpreter (`sh -c ...`), one that changes
-# directory out of the repository first, and anything a command reads or writes
-# once it has started. A git argument built at runtime (`git diff $x $y`,
+# A program this hook does not step over can still run the words after it,
+# or a string it hands to a shell: `setarch x86_64 gh pr view 1 --jq env`,
+# `strace -o log git diff ...`, `sh -c '...'`, `script -qc '...'`. No allow
+# rule covers them, so the default mode prompts, but bypass and auto modes
+# prompt for nothing; so a command such a program would run is read on its
+# own and refused when it would be refused standing alone (see the scan
+# above `exit 0` at the end of this file).
+#
+# What it still cannot see, stated rather than implied: a command such a
+# program takes from somewhere this hook cannot read -- a file, standard
+# input, a variable -- one that changes directory out of the repository
+# first, and anything a command reads or writes once it has started. A git argument built at runtime (`git diff $x $y`,
 # `$(...)`, a backtick, `$'\x74'`) is no longer waved through -- every `$` and
 # backtick in a word of a git invocation is refused, see `EXPAND_MSG` -- but
 # that is a refusal, not an inspection. `xargs` is the one runtime reader
@@ -260,6 +268,12 @@ command_string="$(printf '%s' "${payload}" | jq -r '.tool_input.command // empty
   refuse 'blocked: this PreToolUse hook could not parse the tool payload as JSON, so it cannot tell whether the call reads a denied path. It refuses rather than letting the call through uninspected.'
 
 [[ -n "${command_string}" ]] || exit 0
+
+# This file, by a path that still names it after the `cd` below: a command a
+# program it does not step over would run is read by running this hook on
+# that command alone (see `read_alone`).
+gate_self="${BASH_SOURCE[0]}"
+[[ "${gate_self}" == /* ]] || gate_self="${PWD}/${gate_self}"
 
 cd "${CLAUDE_PROJECT_DIR:-.}" 2>/dev/null || true
 
@@ -529,8 +543,9 @@ end_word
 # interpreter: `env -S 'git diff /dev/null ./cosign.key'` (GNU and uutils
 # `--split-string`) splits its quoted string into a command this scan never
 # sees as words, so any `-S`, clustered (`-iS`) or long, after `env` is
-# refused outright. `sh -c ...` and `eval` remain the interpreters the
-# header says this hook does not see behind.
+# refused outright. `sh -c ...`, `script -c ...` and `eval` are not
+# wrappers here; the scan at the end of this file reads the command string
+# each of them carries.
 #
 # The cost is a backtick assignment (`X=\`date\``): the split ends the word
 # `X=` at the backtick, and the backtick then opens in command position. The
@@ -1524,5 +1539,353 @@ for ((idx = 0; idx < ${#words[@]}; idx++)); do
     in_git=1
   fi
 done
+
+# A gated command behind a program this hook does not step over.
+#
+# `is_wrapper` names the wrappers the name scan steps over, but no list of
+# programs that run their arguments as a command is complete: `setarch
+# x86_64 gh pr view 1 --jq env`, `strace -o /dev/null gh ...`, `prlimit git
+# diff ...` and `setpriv git diff ...` run the words after them, and `sh -c
+# '...'`, `script -qc '...'` and `eval '...'` hand a shell a whole string.
+# The git scans above open at any `git` word, so the plain-file read behind
+# `setarch` was already refused, but the gh filter rule reads gh only as a
+# command's name, and a command string is one word to every scan here, so
+# `setarch x86_64 gh pr view 1 --json number --jq env` printed GH_TOKEN and
+# `script -qc 'git diff /dev/null ./.env' /dev/null` printed the file. None
+# of them matches an allow rule, so the default mode prompts, but bypass and
+# auto modes prompt for nothing, and the fleet settled that every gate
+# refuses the protected action behind any program
+# (Danathar/atomic-image-builder#781).
+#
+# So in a command whose name is neither git nor the start of a gated prefix,
+# each later word where git or a gated prefix starts is read as a command
+# of its own, from that word to the end of the command, and so is each
+# command string a later word carries: the word itself when it holds more
+# than one word, the value after a long option's `=`, and every tail of a
+# short-option cluster (`-qc'git diff ...'`). Such a string is unquoted the
+# way bash would hand it over, `$'...'` included, and skipped when it is not
+# valid shell, since a shell handed it runs nothing. Each is read by running
+# this hook on it alone, inside the same budget, and the command is refused
+# when that reading refuses -- so `setarch x86_64 git diff HEAD` and
+# `sh -c 'git status'` stay allowed. What the program carries for the
+# command it runs -- an assignment before it, an export earlier in the
+# string, a redirection -- is held to the rules git and the gated prefixes
+# are held to. A program that only prints or matches its words
+# (`ARGUMENT_ONLY_PROGRAMS`), typed as its bare name, `/usr/bin/<name>` or
+# `/bin/<name>`, is not read at all, so `echo gh pr view 1 --jq env` and
+# `grep -rn 'git diff --no-index' docs` stay allowed. A command name built at
+# runtime behind such a program (`setarch x86_64 $G diff ...`) is not read;
+# it is one of the residuals the header names.
+ARGUMENT_ONLY_PROGRAMS=(echo printf grep egrep fgrep)
+
+# The first word of each gated command, for a cheap test before the full one:
+# as a list, and as one space-delimited string to match a word against.
+gated_first_words=(git)
+for prefix in "${GATED_PREFIXES[@]}"; do
+  gated_first_words+=("${prefix%% *}")
+done
+GATED_FIRST_WORDS=" ${gated_first_words[*]} "
+
+# The characters that separate the words of a command string, besides
+# whitespace: the shell's own punctuation and the quote marks.
+COMMAND_STRING_SEPARATORS=';&|()<>`'"'"'"'
+
+# shellcheck disable=SC2016 # the backticks quote command spellings for the reader
+UNLISTED_TAIL='That program is not one this hook steps over (command, env, nice, nohup, timeout and the other wrappers the name scan reads), so no allow rule covers what it runs and Claude Code prompts for it only in the default mode; bypass and auto modes prompt for nothing, so a command such a program would run -- the words from a git or allow-listed name onward (`setarch x86_64 gh pr view ...`, `strace -o log git diff ...`) or a command string it hands a shell (`sh -c '"'"'...'"'"'`, `script -qc '"'"'...'"'"'`) -- is read as though it stood alone. echo, printf and grep only print or match their words and are not read. Run the command on its own instead.'
+
+# Whether git or a gated prefix starts at word $1 of the command string.
+gated_name_at() {
+  local at="$1" base="${words[$1]##*/}" prefix k
+  local -a parts
+  [[ "${base}" == git ]] && return 0
+  [[ "${GATED_FIRST_WORDS}" == *" ${base} "* ]] || return 1
+  for prefix in "${GATED_PREFIXES[@]}"; do
+    read -ra parts <<<"${prefix}"
+    [[ "${base}" == "${parts[0]}" ]] || continue
+    for ((k = 1; k < ${#parts[@]}; k++)); do
+      [[ "${kinds[at + k]:-}" == word && "${words[at + k]}" == "${parts[k]}" ]] || continue 2
+    done
+    return 0
+  done
+  return 1
+}
+
+# Whether a command string names git or a gated prefix at any of its words,
+# cut at whitespace and COMMAND_STRING_SEPARATORS. Sets `text_git` when the
+# name is git, whose stdin rule then applies.
+text_gated_name() {
+  local at base prefix k
+  local -a pieces parts
+  text_git=0
+  IFS=$' \t\n' read -r -d '' -a pieces <<<"${1//["${COMMAND_STRING_SEPARATORS}"]/ }" || true
+  for ((at = 0; at < ${#pieces[@]}; at++)); do
+    base="${pieces[at]##*/}"
+    if [[ "${base}" == git ]]; then
+      text_git=1
+      return 0
+    fi
+    [[ "${GATED_FIRST_WORDS}" == *" ${base} "* ]] || continue
+    for prefix in "${GATED_PREFIXES[@]}"; do
+      read -ra parts <<<"${prefix}"
+      [[ "${base}" == "${parts[0]}" ]] || continue
+      for ((k = 1; k < ${#parts[@]}; k++)); do
+        [[ "${pieces[at + k]:-}" == "${parts[k]}" ]] || continue 2
+      done
+      return 0
+    done
+  done
+  return 1
+}
+
+# The word a program receives for a word as typed, in `unquoted`: quotes
+# removed and backslash escapes undone the way bash does both, and an ANSI-C
+# `$'...'` decoded with printf's own escapes, which are bash's for that form
+# (`\xHH`, `\NNN`, `\uHHHH`, `\n`, `\t`, ...). The spellings kept by the split
+# above drop every quote mark and backslash, which reads `'.[] | .name'`
+# inside a double-quoted string as an unquoted glob and `$'\x67it'` as no
+# git at all.
+unquote_word() {
+  local raw="$1" ch next quote='' ansi='' decoded i
+  unquoted=''
+  for ((i = 0; i < ${#raw}; i++)); do
+    ch="${raw:i:1}"
+    if [[ "${quote}" == ansi ]]; then
+      if [[ "${ch}" == $'\\' ]]; then
+        ansi+="${ch}${raw:i+1:1}"
+        ((i++))
+      elif [[ "${ch}" == "'" ]]; then
+        # shellcheck disable=SC2059 # the escapes are the format's own, and every % is doubled
+        printf -v decoded -- "${ansi//%/%%}"
+        unquoted+="${decoded}"
+        quote=''
+      else
+        ansi+="${ch}"
+      fi
+      continue
+    fi
+    if [[ "${quote}" == "'" ]]; then
+      if [[ "${ch}" == "'" ]]; then quote=''; else unquoted+="${ch}"; fi
+      continue
+    fi
+    if [[ "${ch}" == $'\\' ]]; then
+      next="${raw:i+1:1}"
+      if [[ "${quote}" == '"' && "${next}" != [\$\`\"\\] ]]; then
+        unquoted+="${ch}"
+      else
+        unquoted+="${next}"
+        ((i++))
+      fi
+      continue
+    fi
+    if [[ "${quote}" == '"' ]]; then
+      if [[ "${ch}" == '"' ]]; then quote=''; else unquoted+="${ch}"; fi
+      continue
+    fi
+    case "${ch}" in
+    "'" | '"') quote="${ch}" ;;
+    '$')
+      if [[ "${raw:i+1:1}" == "'" ]]; then
+        quote=ansi
+        ansi=''
+        ((i++))
+      else
+        unquoted+='$'
+      fi
+      ;;
+    *) unquoted+="${ch}" ;;
+    esac
+  done
+}
+
+# The command strings an unquoted word may hand to a shell, in `texts`: the
+# word itself when it holds more than one word of its own, the value after a
+# long option's `=`, and every tail of a short-option cluster, since which
+# letter takes a value is not modelled and trying each can only over-refuse.
+command_string_texts() {
+  local word="$1" cut
+  texts=()
+  [[ "${word}" == *["${COMMAND_STRING_SEPARATORS}"$' \t\n']* ]] && texts+=("${word}")
+  if [[ "${word}" == --* ]]; then
+    [[ "${word}" == *=* ]] && texts+=("${word#*=}")
+  elif [[ "${word}" =~ ^-[A-Za-z0-9]+ ]]; then
+    for ((cut = 2; cut <= ${#BASH_REMATCH[0]}; cut++)); do
+      texts+=("${word:cut}")
+    done
+  fi
+}
+
+# The command that starts at word $1, as typed, up to the end of its own
+# command: a `$(...)`, a backtick or a process substitution inside it is
+# carried along, and the separator that ends it is where it stops. $2 is 1
+# when the command is itself inside a backtick, whose closing backtick ends
+# it.
+command_text_from() {
+  local k depth=0 tick=0 w
+  command_text=''
+  for ((k = $1; k < ${#words[@]}; k++)); do
+    w="${words[k]}"
+    case "${kinds[k]}" in
+    sep)
+      # shellcheck disable=SC2016 # the literal `$(` is the separator's name
+      if [[ "${w}" == '$(' ]]; then
+        ((depth++))
+        command_text+='('
+        continue
+      fi
+      if [[ "${w}" == '(' && "${raw_words[k - 1]:-}" == [\<\>]'(' ]]; then
+        ((depth++))
+        continue
+      fi
+      if [[ "${w}" == '$)' || "${w}" == ')' ]] && ((depth > 0)); then
+        ((depth--))
+        command_text+=' )'
+        continue
+      fi
+      if [[ "${w}" == '`' ]] && ((tick || $2 == 0)); then
+        ((tick = !tick))
+        command_text+=' `'
+        continue
+      fi
+      ((depth > 0 || tick)) || break
+      command_text+=" ${w}"
+      ;;
+    target) command_text+=" ${redirects[k]}${raw_words[k]}" ;;
+    *) command_text+=" ${raw_words[k]}" ;;
+    esac
+  done
+  command_text="${command_text# }"
+}
+
+# Run this hook on one command alone, inside the budget this run is already
+# under, and refuse when that run does. Any exit but 0 is a refusal: the
+# hook fails closed on a reading it could not finish.
+read_alone() {
+  local inner="$1" reason status
+  # shellcheck disable=SC2069 # stderr is the reason to keep, stdout is dropped
+  reason="$(jq -cn --arg c "${inner}" '{tool_name: "Bash", tool_input: {command: $c}}' |
+    "${BASH:-bash}" "${gate_self}" --within-budget 2>&1 >/dev/null)"
+  status=$?
+  ((status == 0)) && return 0
+  reason="${reason#blocked: }"
+  refuse "blocked: ${seg_program} runs \`${inner}\` as a command of its own, and that command is refused here on its own: ${reason:-this hook could not finish reading it.} ${UNLISTED_TAIL}"
+}
+
+refuse_behind() {
+  refuse "blocked: ${seg_program} runs a command this hook covers as a command of its own, so what is written on ${seg_program} for it is held to the same rules: ${1#blocked: } ${UNLISTED_TAIL}"
+}
+
+# What is written on the program for the command it runs, decided when the
+# command ends, because a redirection can follow the word it applies to.
+finish_segment() {
+  ((seg_hit)) || return 0
+  ((seg_assign)) && refuse_behind "${GATED_ENV_MSG}"
+  ((export_idx >= 0 && seg_hit_idx > export_idx)) && refuse_behind "${EXPORT_ENV_MSG}"
+  if ((seg_writes)); then
+    ((seg_git)) && refuse_behind "${REDIRECT_MSG}"
+    refuse_behind "${GATED_REDIRECT_MSG}"
+  fi
+  ((seg_git && seg_reads)) && refuse_behind "${STDIN_MSG}"
+  return 0
+}
+
+reset_segment() {
+  seg_named=0   # the command's name has been seen
+  seg_reading=0 # the name is a program whose later words are read
+  seg_assign=0  # an assignment stands before the name
+  seg_hit=0     # a gated command runs behind it
+  seg_hit_idx=-1
+  seg_git=0    # and that command is git
+  seg_writes=0 # a redirection of this command opens a path for writing
+  seg_reads=0  # or puts a file on stdin
+  seg_program=''
+}
+
+seg_stack=() # the outer command's state while a nested one is read
+reset_segment
+for ((idx = 0; idx < ${#words[@]}; idx++)); do
+  word="${words[idx]}"
+  case "${kinds[idx]}" in
+  sep)
+    top=''
+    ((${#seg_stack[@]})) && top="${seg_stack[-1]%% *}"
+    opens=''
+    # shellcheck disable=SC2016 # the literal `$(` is the separator's name
+    if [[ "${word}" == '$(' ]]; then
+      opens=s
+    elif ((idx > 0)) && [[ "${word}" == '(' && "${raw_words[idx - 1]}" == [\<\>]'(' ]]; then
+      opens=p
+    elif [[ "${word}" == '`' && "${top}" != b ]]; then
+      opens=b
+    fi
+    if [[ -n "${opens}" ]]; then
+      seg_stack+=("${opens} ${seg_named} ${seg_reading} ${seg_assign} ${seg_hit} ${seg_hit_idx} ${seg_git} ${seg_writes} ${seg_reads} ${seg_program}")
+      reset_segment
+      continue
+    fi
+    finish_segment
+    if [[ (-n "${top}") && ("${word}" == '$)' && "${top}" == s || "${word}" == ')' && "${top}" == p || "${word}" == '`' && "${top}" == b) ]]; then
+      read -r _ seg_named seg_reading seg_assign seg_hit seg_hit_idx seg_git seg_writes seg_reads seg_program <<<"${seg_stack[-1]}"
+      unset 'seg_stack[-1]'
+      continue
+    fi
+    reset_segment
+    continue
+    ;;
+  target)
+    redirection_writes_a_path "${redirects[idx]}" "${word}" && seg_writes=1
+    redirection_reads_a_path "${redirects[idx]}" "${word}" && seg_reads=1
+    continue
+    ;;
+  *) ;;
+  esac
+  if ((!seg_named)); then
+    if ((${command_names[idx]:-0} == 0)); then
+      ((${name_assignments[idx]:-0})) && seg_assign=1
+      continue
+    fi
+    seg_named=1
+    seg_program="${raw_words[idx]}"
+    seg_reading=1
+    gated_name_at "${idx}" && seg_reading=0
+    typed="${raw_words[idx]//[\'\"]/}"
+    for program in "${ARGUMENT_ONLY_PROGRAMS[@]}"; do
+      case "${typed}" in
+      "${program}" | "/usr/bin/${program}" | "/bin/${program}") seg_reading=0 ;;
+      *) ;;
+      esac
+    done
+    continue
+  fi
+  ((seg_reading)) || continue
+  if gated_name_at "${idx}"; then
+    seg_hit=1
+    ((seg_hit_idx < 0)) && seg_hit_idx=${idx}
+    [[ "${word##*/}" == git ]] && seg_git=1
+    in_tick=0
+    ((${#seg_stack[@]})) && [[ "${seg_stack[-1]}" == 'b '* ]] && in_tick=1
+    command_text_from "${idx}" "${in_tick}"
+    read_alone "${command_text}"
+  fi
+  # A command string, looked for only in a word that names a gated command
+  # somewhere in it, or that carries an ANSI-C quote that could spell one.
+  candidate=0
+  for first in "${gated_first_words[@]}"; do
+    [[ "${word}" == *"${first}"* ]] && candidate=1
+  done
+  [[ "${raw_words[idx]}" == *"\$'"* ]] && candidate=1
+  ((candidate)) || continue
+  unquote_word "${raw_words[idx]}"
+  command_string_texts "${unquoted}"
+  for text in "${texts[@]+"${texts[@]}"}"; do
+    [[ -n "${text}" ]] || continue
+    text_gated_name "${text}" || continue
+    "${BASH:-bash}" -O extglob -n -c "${text}" 2>/dev/null || continue
+    seg_hit=1
+    ((seg_hit_idx < 0)) && seg_hit_idx=${idx}
+    ((text_git)) && seg_git=1
+    read_alone "${text}"
+  done
+done
+finish_segment
 
 exit 0

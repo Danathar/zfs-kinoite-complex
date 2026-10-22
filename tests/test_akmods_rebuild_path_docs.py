@@ -215,6 +215,8 @@ class RebuildVerificationStepTests(unittest.TestCase):
             "ZFS_VERSION": "2.4.4",
             "REQUIRE_MATCH": "true",
             "AKMODS_IMAGE_PINNED": pinned,
+            "REGISTRY_ACTOR": "Danathar",
+            "REGISTRY_TOKEN": "registry-token-value",
         }
         matched = AkmodsCacheStatus(
             source_image="ghcr.io/danathar/zfs-kinoite-complex-akmods:main-43",

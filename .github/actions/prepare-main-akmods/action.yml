@@ -373,5 +373,9 @@ runs:
         ZFS_VERSION: ${{ steps.resolve.outputs.zfs_version }}
         AKMODS_IMAGE_PINNED: ${{ steps.pin_akmods.outputs.akmods_image_pinned }}
         REQUIRE_MATCH: "true"
+        # The cache check requires the registry login, so it is passed here too
+        # rather than relied on as a side effect of the build step's login.
+        REGISTRY_ACTOR: ${{ inputs.registry_actor }}
+        REGISTRY_TOKEN: ${{ inputs.registry_token }}
       run: |
         python3 -m ci_tools.cli check-akmods-cache

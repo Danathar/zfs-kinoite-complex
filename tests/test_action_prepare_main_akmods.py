@@ -705,6 +705,13 @@ class StepWiringTests(unittest.TestCase):
         self.assertEqual(env["ZFS_VERSION"], ZFS_PATCH_VERSION)
         self.assertEqual(env["AKMODS_REPO"], INPUTS["akmods_repo"])
 
+    def test_the_post_rebuild_verification_carries_the_registry_login(self) -> None:
+        """The cache check requires the pair, so this step must be handed it explicitly."""
+
+        env = _run_step(VERIFY_STEP).only_call.env
+        self.assertEqual(env["REGISTRY_ACTOR"], INPUTS["registry_actor"])
+        self.assertEqual(env["REGISTRY_TOKEN"], INPUTS["registry_token"])
+
     def test_the_post_rebuild_verification_checks_the_digest_the_run_consumes(self) -> None:
         """
         The verification is handed the pin step's digest, and runs after that step.

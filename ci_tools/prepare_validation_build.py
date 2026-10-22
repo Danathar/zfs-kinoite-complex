@@ -19,6 +19,28 @@ from ci_tools.common import (
 )
 from ci_tools.resolve_build_inputs import resolve_build_inputs, write_resolved_build_outputs
 
+# Registry replies that mean "you are not allowed to look", as opposed to "this
+# does not exist". GHCR deliberately refuses to distinguish the two for an
+# anonymous caller: it answers a read of a private or nonexistent package with a
+# bearer-token 403 rather than `manifest unknown`.
+#
+# Kept local rather than alongside `is_missing_image_error` in common.py because
+# it only improves one error message here. Nothing branches on it, so a false
+# positive costs a slightly-off hint and nothing more.
+_REGISTRY_AUTH_ERROR_MARKERS = (
+    "unauthorized",
+    "authentication required",
+    "denied",
+    "403 forbidden",
+    "401 unauthorized",
+)
+
+
+def _looks_like_a_permission_error(message: str) -> bool:
+    """True when a registry failure reads as a permission problem."""
+    normalized = message.lower()
+    return any(marker in normalized for marker in _REGISTRY_AUTH_ERROR_MARKERS)
+
 
 def main() -> None:
     image_org = normalize_owner(require_env("GITHUB_REPOSITORY_OWNER"))
@@ -35,13 +57,39 @@ def main() -> None:
     upstream_repo = require_env_or_default("AKMODS_UPSTREAM_REPO")
     clone_pinned(upstream_repo, inputs.akmods_upstream_ref)
 
-    status = inspect_akmods_cache(
-        image_org=image_org,
-        source_repo=source_repo,
-        fedora_version=inputs.version,
-        kernel_release=inputs.kernel_release,
-        zfs_version=inputs.zfs_version,
-    )
+    # A permission error escapes as a bare skopeo failure, which lands before the
+    # guidance below and so never reaches it; the log would show only a raw
+    # bearer-token 403. This workflow reads the cache anonymously (no registry
+    # login), so on a fork whose GHCR package is private -- the default for a new
+    # package -- that is exactly what happens. Everything that is not
+    # permission-shaped propagates untouched.
+    try:
+        status = inspect_akmods_cache(
+            image_org=image_org,
+            source_repo=source_repo,
+            fedora_version=inputs.version,
+            kernel_release=inputs.kernel_release,
+            zfs_version=inputs.zfs_version,
+        )
+    except CiToolError as exc:
+        if not _looks_like_a_permission_error(str(exc)):
+            raise
+        raise CiToolError(
+            "Could not read the shared akmods cache package "
+            f"ghcr.io/{image_org}/{source_repo}: the registry refused the request.\n"
+            "\n"
+            "This is a permission error, not a missing or stale cache, so "
+            "rebuilding the cache will not fix it. Validation runs read that "
+            "package anonymously, which only works while it is public.\n"
+            "\n"
+            "If you are running this in a fork of this repository, that is the "
+            "likely cause: GitHub creates a new GHCR package as private. Set it "
+            "to public under Packages -> the akmods package -> Package settings "
+            "-> Change visibility.\n"
+            "\n"
+            f"Underlying registry error: {exc}"
+        ) from exc
+
     if not status.reusable:
         # Branch/PR paths intentionally do not rebuild the shared akmods tag;
         # the repair action is a main-workflow rebuild_akmods run.

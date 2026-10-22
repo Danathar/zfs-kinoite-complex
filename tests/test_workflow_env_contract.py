@@ -59,12 +59,8 @@ RUNNER_DEFAULTS = frozenset(
 # Steps that run a credential-reading command without setting the pair, each with the step
 # that established registry login before it. Held in both directions below, so an entry whose
 # step starts passing credentials, or stops following the login, fails instead of going dead.
-LOGGED_IN_BY_EARLIER_STEP = {
-    (
-        ".github/actions/prepare-main-akmods/action.yml",
-        "Verify the rebuilt cache matches the resolved ZFS version",
-    ): "Build and publish shared self-hosted ZFS akmods image",
-}
+# Empty today: every step that reads the pair is handed it explicitly.
+LOGGED_IN_BY_EARLIER_STEP: dict[tuple[str, str], str] = {}
 
 # Commands that receive the pair only to hand it to upstream tooling in a subprocess, so no
 # `ci_tools` code reads it. Each must still visibly run that tooling's login.
@@ -270,8 +266,8 @@ class WorkflowEnvContractTests(unittest.TestCase):
         """
         Half a credential is read as none, so a step missing one half pulls anonymously.
 
-        That is required-and-fatal only for `check-stable-signal` and `promote-stable`. The
-        other readers fall back to `creds=None` without a word, which is why the pair is
+        That is required-and-fatal only for `check-akmods-cache`, `check-stable-signal` and
+        `promote-stable`. The other readers fall back to `creds=None` without a word, which is why the pair is
         checked per step and not only through `require_env`.
         """
 
@@ -336,7 +332,9 @@ class WorkflowEnvContractTests(unittest.TestCase):
         required = {
             command for command in ENTRY_POINTS if CREDENTIAL_PAIR <= _reads(command).required
         }
-        self.assertEqual(required, {"check-stable-signal", "promote-stable"})
+        self.assertEqual(
+            required, {"check-akmods-cache", "check-stable-signal", "promote-stable"}
+        )
 
 
 if __name__ == "__main__":

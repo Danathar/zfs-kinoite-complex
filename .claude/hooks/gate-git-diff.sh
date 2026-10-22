@@ -1613,27 +1613,77 @@ gated_name_at() {
 # Whether a command string names git or a gated prefix at any of its words,
 # cut at whitespace and COMMAND_STRING_SEPARATORS. Sets `text_git` when the
 # name is git, whose stdin rule then applies.
+#
+# The shell the string is handed to removes quotes and backslashes and
+# expands braces and globs before it looks a name up, so `g""it`, `g\it`,
+# `g$""it`, `g{,}it`, `{git,diff}` and `/usr/bin/g?t` all run git. The string
+# is read again with those quote characters taken out, once with the braces
+# and commas taken out (`g{,}it` is `git`) and once with them as separators
+# (`{git,diff}` is `git diff`), and a word holding a glob character is
+# matched as the pattern it is. A name built from a variable is not found,
+# as the header says.
 text_gated_name() {
-  local at base prefix k
+  local spelled="${1//[\"\'\\\$]/}" text
+  for text in "$1" "${spelled//[\{\},]/}" "${spelled//[\{\},]/ }"; do
+    text_names_gated "${text}" && return 0
+  done
+  return 1
+}
+
+# Whether a word cut from a command string is the name $2: as itself, or as
+# a glob that matches it.
+piece_names() {
+  [[ "$1" == "$2" ]] && return 0
+  # shellcheck disable=SC2053 # the word is matched as a pattern on purpose
+  [[ "$1" == *[*?[]* && "$2" == $1 ]]
+}
+
+text_names_gated() {
+  local at base prefix k first
   local -a pieces parts
   text_git=0
   IFS=$' \t\n' read -r -d '' -a pieces <<<"${1//["${COMMAND_STRING_SEPARATORS}"]/ }" || true
   for ((at = 0; at < ${#pieces[@]}; at++)); do
     base="${pieces[at]##*/}"
-    if [[ "${base}" == git ]]; then
+    if piece_names "${base}" git; then
       text_git=1
       return 0
     fi
-    [[ "${GATED_FIRST_WORDS}" == *" ${base} "* ]] || continue
     for prefix in "${GATED_PREFIXES[@]}"; do
       read -ra parts <<<"${prefix}"
-      [[ "${base}" == "${parts[0]}" ]] || continue
+      piece_names "${base}" "${parts[0]}" || continue
       for ((k = 1; k < ${#parts[@]}; k++)); do
         [[ "${pieces[at + k]:-}" == "${parts[k]}" ]] || continue 2
       done
       return 0
     done
   done
+  return 1
+}
+
+# Whether a word, as typed, is one the shell turns into git or a gated
+# prefix only by expanding it: a brace group (`{git,diff}` is `git diff`) or a
+# glob that holds a `/` (`/usr/bin/g?t` is `/usr/bin/git`). Sets `expanded`
+# to the words the shell makes of it, so the command can be read from there
+# as the shell will run it: `ls /usr/bin/g*` reads `git` alone, which passes,
+# rather than a glob in command position, which is refused. A glob with no
+# `/` matches files in the working directory, not a program, so
+# `find . -name '*.sh'` is not read as the `*.sh` command.
+expands_to_gated_name() {
+  local spelled="${1//[\"\'\\\$]/}" first
+  expanded=''
+  if [[ "$1" == *"{"* ]]; then
+    for expanded in "${spelled//[\{\},]/}" "${spelled//[\{\},]/ }"; do
+      text_names_gated "${expanded}" && return 0
+    done
+  fi
+  if [[ "$1" == */* && "$1" == *[*?[]* ]]; then
+    for first in "${gated_first_words[@]}"; do
+      expanded="${first}"
+      piece_names "${spelled##*/}" "${first}" && return 0
+    done
+  fi
+  expanded=''
   return 1
 }
 
@@ -1857,22 +1907,28 @@ for ((idx = 0; idx < ${#words[@]}; idx++)); do
     continue
   fi
   ((seg_reading)) || continue
-  if gated_name_at "${idx}"; then
+  expanded=''
+  if gated_name_at "${idx}" || expands_to_gated_name "${raw_words[idx]}"; then
     seg_hit=1
     ((seg_hit_idx < 0)) && seg_hit_idx=${idx}
-    [[ "${word##*/}" == git ]] && seg_git=1
+    [[ "${word##*/}" == git || "${expanded%% *}" == git ]] && seg_git=1
     in_tick=0
     ((${#seg_stack[@]})) && [[ "${seg_stack[-1]}" == 'b '* ]] && in_tick=1
     command_text_from "${idx}" "${in_tick}"
+    [[ -n "${expanded}" ]] && command_text="${expanded}${command_text#"${raw_words[idx]}"}"
     read_alone "${command_text}"
   fi
   # A command string, looked for only in a word that names a gated command
   # somewhere in it, or that carries an ANSI-C quote that could spell one.
   candidate=0
+  # The word as typed with the quote characters the shell removes taken out
+  # (`g$""it` is `git`), and any glob, which may match a gated name it does
+  # not spell (`/usr/bin/g?t`).
+  spelled="${raw_words[idx]//[\"\'\\\$\{\},]/}"
   for first in "${gated_first_words[@]}"; do
-    [[ "${word}" == *"${first}"* ]] && candidate=1
+    [[ "${word}" == *"${first}"* || "${spelled}" == *"${first}"* ]] && candidate=1
   done
-  [[ "${raw_words[idx]}" == *"\$'"* ]] && candidate=1
+  [[ "${raw_words[idx]}" == *"\$'"* || "${raw_words[idx]}" == *[*?[]* ]] && candidate=1
   ((candidate)) || continue
   unquote_word "${raw_words[idx]}"
   command_string_texts "${unquoted}"

@@ -237,6 +237,16 @@ def main() -> None:
     kernel_release = require_env("KERNEL_RELEASE")
     source_repo = require_env("AKMODS_REPO")
     zfs_version = require_env("ZFS_VERSION")
+    # Required, not optional: falling back to anonymous access when a workflow
+    # forgets to pass the login is how this went unnoticed. A public cache
+    # package answers anonymous calls, so the omission stays invisible until
+    # someone forks the repository and their private package answers `denied`.
+    # An anonymous `cosign verify` would also fail on auth, and the caller reads
+    # any verify failure as "not signed", so a correctly signed cache would be
+    # rejected and rebuilt on every run without saying why. Failing here names
+    # the missing variable instead. `inspect_akmods_cache` reads the pair from
+    # the environment, so this call only enforces that it is present.
+    registry_creds_from_env(required=True)
     # Strict mode is used after a rebuild, where "no reusable cache" is not a
     # normal answer but a failure: it means the cache this run just published
     # does not contain the ZFS version this run resolved and is about to label

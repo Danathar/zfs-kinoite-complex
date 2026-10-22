@@ -649,8 +649,27 @@ class RequireMatchModeTests(unittest.TestCase):
         "KERNEL_RELEASE": "6.18.16-200.fc43.x86_64",
         "AKMODS_REPO": "zfs-kinoite-complex-akmods",
         "ZFS_VERSION": "2.4.4",
+        "REGISTRY_ACTOR": "Danathar",
+        "REGISTRY_TOKEN": "registry-token-value",
     }
     _PINNED = "ghcr.io/danathar/zfs-kinoite-complex-akmods@sha256:" + "e" * 64
+
+    def test_main_requires_registry_credentials(self) -> None:
+        # Anonymous access is not an acceptable fallback: it works on a public
+        # cache package, so a workflow that forgot the login would look fine
+        # and only break for someone forking the repository. Fail where the
+        # cause is visible, naming the variable, before any registry call.
+        for missing in ("REGISTRY_ACTOR", "REGISTRY_TOKEN"):
+            with self.subTest(missing=missing):
+                env = {**self._ENV, missing: ""}
+                with patch.dict(os.environ, env, clear=False), patch(
+                    "ci_tools.check_akmods_cache.inspect_akmods_cache"
+                ) as inspect_cache, self.assertRaises(CiToolError) as context:
+                    os.environ.pop("REQUIRE_MATCH", None)
+                    main()
+
+                self.assertIn(missing, str(context.exception))
+                inspect_cache.assert_not_called()
 
     def test_require_match_raises_when_the_rebuilt_cache_does_not_match(self) -> None:
         mismatched = AkmodsCacheStatus(
@@ -848,6 +867,8 @@ class ReuseDecisionOutputTests(unittest.TestCase):
         "KERNEL_RELEASE": "6.18.16-200.fc43.x86_64",
         "AKMODS_REPO": "zfs-kinoite-complex-akmods",
         "ZFS_VERSION": "2.4.4",
+        "REGISTRY_ACTOR": "Danathar",
+        "REGISTRY_TOKEN": "registry-token-value",
     }
 
     def _run_main(self, status: AkmodsCacheStatus) -> tuple[str, str]:

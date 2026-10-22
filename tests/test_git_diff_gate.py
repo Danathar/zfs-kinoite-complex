@@ -2348,6 +2348,153 @@ CORPUS: tuple[Row, ...] = (
         "allowed",
         "echo, printf and grep only print or match their words, so they are not read",
     ),
+    # A literal path to the first word of a gated prefix reaches the same tool
+    # and is read as that tool, the way /usr/bin/git already was (#479).
+    Row(
+        "command name",
+        "/usr/bin/gh pr view 1 --json number --jq env",
+        "refused",
+        "a path to gh is held to the filter rule; read only as a path it printed GH_TOKEN",
+        "gojq",
+    ),
+    Row(
+        "command name",
+        "/usr/bin/skopeo inspect docker://x >cosign.pub",
+        "refused",
+        "a path to skopeo is held to the redirection rule; read only as a path the shell "
+        "truncated the trust anchor",
+        "an output redirection",
+    ),
+    Row(
+        "command name",
+        "/usr/bin/cosign verify x >cosign.pub",
+        "refused",
+        "the same for a path to cosign",
+        "an output redirection",
+    ),
+    Row(
+        "command name",
+        "/usr/bin/gh pr view 1 --json number --jq .number",
+        "allowed",
+        "a path to gh naming a field passes as the bare spelling does",
+    ),
+    # The shell removes quotes and backslashes and expands braces and globs
+    # before it looks a name up, so a string or a word that spells git or gh
+    # only once those are gone still runs it (#479). Each refused row below
+    # exited 0 before.
+    Row(
+        "command name",
+        'sh -c \'g""it diff /dev/null ./.env\'',
+        "refused",
+        'an empty quote inside the name: the shell joins g and it into git',
+        "as a command of its own",
+    ),
+    Row(
+        "command name",
+        "script -qc 'g\\it diff /dev/null ./.env' /dev/null",
+        "refused",
+        'a backslash inside the name, behind script',
+        "as a command of its own",
+    ),
+    Row(
+        "command name",
+        'sh -c \'g$""it diff /dev/null ./.env\'',
+        "refused",
+        'an empty locale string inside the name',
+        "as a command of its own",
+    ),
+    Row(
+        "command name",
+        'watch -n1 \'g""it diff /dev/null ./.env\'',
+        "refused",
+        'the same in the string watch hands to a shell',
+        "as a command of its own",
+    ),
+    Row(
+        "command name",
+        'sh -c \'g""h pr view 1 --json number --jq env\'',
+        "refused",
+        'a quoted gh name in a shell string',
+        "as a command of its own",
+    ),
+    Row(
+        "command name",
+        "sh -c 'g{,}it diff /dev/null ./.env'",
+        "refused",
+        'a brace group the shell expands to git git',
+        "as a command of its own",
+    ),
+    Row(
+        "command name",
+        "sh -c '/usr/bin/g?t diff /dev/null ./.env'",
+        "refused",
+        'a glob the shell matches to /usr/bin/git in a string',
+        "as a command of its own",
+    ),
+    Row(
+        "command name",
+        'setarch x86_64 {git,diff} /dev/null ./.env',
+        "refused",
+        'a brace group behind a program that the shell turns into git diff',
+        "as a command of its own",
+    ),
+    Row(
+        "command name",
+        'setarch x86_64 /usr/bin/g?t diff /dev/null ./.env',
+        "refused",
+        'a glob behind a program that the shell matches to /usr/bin/git',
+        "as a command of its own",
+    ),
+    Row(
+        "command name",
+        'setarch x86_64 /usr/bin/g[i]t diff /dev/null ./.env',
+        "refused",
+        'a bracket glob behind a program',
+        "as a command of its own",
+    ),
+    Row(
+        "command name",
+        'setarch x86_64 /usr/bin/g? pr view 1 --json number --jq env',
+        "refused",
+        'a glob behind a program that matches gh',
+        "as a command of its own",
+    ),
+    Row(
+        "command name",
+        'sh -c \'g""it status\'',
+        "allowed",
+        'a quoted name in a string that passes alone',
+    ),
+    Row(
+        "command name",
+        'awk -F: \'$1 == "root" {print $7}\' /etc/passwd',
+        "allowed",
+        'program text with quotes, a $ and braces that names no gated command',
+    ),
+    Row(
+        "command name",
+        'setarch x86_64 cat {a,b}.txt',
+        "allowed",
+        'a brace group behind a program that names no gated command',
+    ),
+    Row(
+        "command name",
+        "setarch x86_64 find . -name '*.sh'",
+        "allowed",
+        'a quoted glob with no / matches files, not a program, and is not read as a name',
+    ),
+    Row(
+        "command name",
+        'ls /usr/bin/g*',
+        "allowed",
+        'a path glob is read as the name it matches, and git alone passes',
+    ),
+    Row(
+        "command name",
+        "sh -c 'ls /usr/bin/g*'",
+        "allowed",
+        'the same path glob in a shell string',
+    ),
     # --- 5. an option that loads or writes ---------------------------------
     Row(
         "options",
@@ -2805,6 +2952,48 @@ MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
         "  if ((seg_writes)); then",
         "  if false; then",
         ">.env setarch x86_64 git diff HEAD",
+    ),
+    (
+        "reading a string again with its quotes taken out",
+        'for text in "$1" "${spelled//[\\{\\},]/}" "${spelled//[\\{\\},]/ }"; do',
+        'for text in "$1"; do',
+        "sh -c 'g\"\"it diff /dev/null ./.env'",
+    ),
+    (
+        "matching a word with a glob character as a pattern",
+        '[[ "$1" == *[*?[]* && "$2" == $1 ]]',
+        "false",
+        "sh -c '/usr/bin/g?t diff /dev/null ./.env'",
+    ),
+    (
+        "reading a word the shell expands into a gated name behind a program",
+        '|| expands_to_gated_name "${raw_words[idx]}"; then',
+        "; then",
+        "setarch x86_64 {git,diff} /dev/null ./.env",
+    ),
+    (
+        "reading the expanded word as the name it becomes",
+        '[[ -n "${expanded}" ]] && command_text=',
+        "false && command_text=",
+        "ls /usr/bin/g*",
+    ),
+    (
+        "a glob in the command-string prefilter",
+        '|| "${raw_words[idx]}" == *[*?[]* ]] && candidate=1',
+        "]] && candidate=1",
+        "sh -c '/usr/bin/g?t diff /dev/null ./.env'",
+    ),
+    (
+        "reading a path to a gated prefix's first word as that word",
+        "    git | gh | cosign | skopeo | python3)",
+        "    git | gitx)",
+        "/usr/bin/gh pr view 1 --json number --jq env",
+    ),
+    (
+        "the quote-stripped spelling in the command-string prefilter",
+        '|| "${spelled}" == *"${first}"* ]] && candidate=1',
+        "]] && candidate=1",
+        "sh -c 'g$\"\"it diff /dev/null ./.env'",
     ),
 )
 

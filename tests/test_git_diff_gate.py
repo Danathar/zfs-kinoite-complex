@@ -2348,6 +2348,36 @@ CORPUS: tuple[Row, ...] = (
         "allowed",
         "echo, printf and grep only print or match their words, so they are not read",
     ),
+    # A literal path to the first word of a gated prefix reaches the same tool
+    # and is read as that tool, the way /usr/bin/git already was (#479).
+    Row(
+        "command name",
+        "/usr/bin/gh pr view 1 --json number --jq env",
+        "refused",
+        "a path to gh is held to the filter rule; read only as a path it printed GH_TOKEN",
+        "gojq",
+    ),
+    Row(
+        "command name",
+        "/usr/bin/skopeo inspect docker://x >cosign.pub",
+        "refused",
+        "a path to skopeo is held to the redirection rule; read only as a path the shell "
+        "truncated the trust anchor",
+        "an output redirection",
+    ),
+    Row(
+        "command name",
+        "/usr/bin/cosign verify x >cosign.pub",
+        "refused",
+        "the same for a path to cosign",
+        "an output redirection",
+    ),
+    Row(
+        "command name",
+        "/usr/bin/gh pr view 1 --json number --jq .number",
+        "allowed",
+        "a path to gh naming a field passes as the bare spelling does",
+    ),
     # The shell removes quotes and backslashes and expands braces and globs
     # before it looks a name up, so a string or a word that spells git or gh
     # only once those are gone still runs it (#479). Each refused row below
@@ -2952,6 +2982,12 @@ MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
         '|| "${raw_words[idx]}" == *[*?[]* ]] && candidate=1',
         "]] && candidate=1",
         "sh -c '/usr/bin/g?t diff /dev/null ./.env'",
+    ),
+    (
+        "reading a path to a gated prefix's first word as that word",
+        "    git | gh | cosign | skopeo | python3)",
+        "    git | gitx)",
+        "/usr/bin/gh pr view 1 --json number --jq env",
     ),
     (
         "the quote-stripped spelling in the command-string prefilter",

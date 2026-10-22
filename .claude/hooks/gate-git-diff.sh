@@ -746,9 +746,20 @@ for ((idx = 0; idx < ${#words[@]}; idx++)); do
     fi
     continue
   fi
-  if [[ "${word}" == */git ]]; then
-    words[idx]=git
-    raw_words[idx]=git
+  # A literal path to git, or to the first word of a gated prefix, reaches
+  # the same tool, and is rewritten so every rule the bare name opens applies:
+  # `/usr/bin/gh pr view 1 --json number --jq env` printed GH_TOKEN and
+  # `/usr/bin/skopeo inspect docker://x >cosign.pub` truncated the trust
+  # anchor, while each bare spelling was refused (#479). No allow rule
+  # matches the path spelling, but bypass and auto modes prompt for nothing.
+  if [[ "${word}" == */* ]]; then
+    case "${word##*/}" in
+    git | gh | cosign | skopeo | python3)
+      raw_words[idx]="${word##*/}"
+      words[idx]="${word##*/}"
+      ;;
+    *) ;;
+    esac
   fi
   command_names[idx]=1
   if ((xargs_cmd)); then

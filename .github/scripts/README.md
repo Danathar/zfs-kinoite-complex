@@ -32,6 +32,7 @@ If a term is unfamiliar, check the shared glossary first:
 | Build OpenZFS/kernel badge payload                                         | `write-akmods-badge`          | `ci_tools.write_akmods_badge`          |
 | Build last-good-build badge payload                                        | `write-last-good-build-badge` | `ci_tools.write_last_good_build_badge` |
 | Boot the published image in a VM and check ZFS over SSH                    | `boot-test`                   | `ci_tools.boot_test`                   |
+| Compare the committed ruleset with the rules GitHub enforces on `main`     | `check-ruleset-drift`         | `ci_tools.check_ruleset_drift`         |
 
 ### Akmods Failure Classification
 

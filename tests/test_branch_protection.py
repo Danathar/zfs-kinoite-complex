@@ -19,7 +19,9 @@ Goal: Make a loosened ruleset, a renamed or filtered required job, or a page tha
 matches the file fail here, on the pull request that causes it.
 
 What this cannot check: the live ruleset is repository configuration, and reading it needs the
-GitHub API. The page carries the two commands that show it.
+GitHub API. The page carries the two commands that show it, and the `ruleset-drift` job in
+nightly-compliance.yml compares the live rules with the file every night
+(ci_tools/check_ruleset_drift.py, tested in tests/test_check_ruleset_drift.py).
 
 PyYAML is imported the way the other workflow tests here import it: used when present, skipped
 when not. test.yml installs it by name, so in CI the workflow joins always run; the skip is for a

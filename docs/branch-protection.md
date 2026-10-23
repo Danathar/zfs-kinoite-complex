@@ -3,7 +3,8 @@
 Merging to `main` publishes: `build.yml` builds, signs and promotes whatever
 `main` holds to `:latest`. This file says what keeps changes to `main` behind a
 pull request, why each rule is there, and how to check that GitHub is really
-enforcing it.
+enforcing it. A nightly job now makes that check too; see
+[Checking the live rules every night](#checking-the-live-rules-every-night).
 
 ## Status
 
@@ -117,6 +118,39 @@ gh api --method PUT repos/Danathar/zfs-kinoite-complex/rulesets/23959550 \
 Renaming the `Python Unit Tests` job, adding a path filter or an `if:` to it, or
 putting it in a matrix fails `tests/test_branch_protection.py`. Change the
 ruleset in the same pull request, and `PUT` it straight after the merge.
+
+## Checking the live rules every night
+
+The `PUT` is a separate step after the merge, and it has been forgotten: the
+file asked for code owner review while the live ruleset did not (#454, #488).
+So the `ruleset-drift` job in
+[`.github/workflows/nightly-compliance.yml`](../.github/workflows/nightly-compliance.yml)
+compares the two every night. It runs
+[`ci_tools/check_ruleset_drift.py`](../ci_tools/check_ruleset_drift.py), which
+reads the rules GitHub enforces on the default branch from
+`GET /repos/{owner}/{repo}/rules/branches/{branch}`. That endpoint needs only
+`contents: read`, so the job uses the run's own token and no admin secret.
+
+It fails only when GitHub is weaker than the file:
+
+- a rule type in the file (`deletion`, `non_fast_forward`, `pull_request`,
+  `required_status_checks`) that GitHub does not enforce;
+- `require_code_owner_review` true in the file and false live;
+- a lower `required_approving_review_count` live;
+- `strict_required_status_checks_policy` true in the file and false live;
+- a required check missing live, or required live from a different
+  `integration_id` than the file pins.
+
+Extra rules, or stricter ones, pass. When two rulesets apply to the branch,
+GitHub returns a rule of the same type once for each, and the strongest one
+counts. A failed run opens an issue through
+[`.github/workflows/auto-issues.yml`](../.github/workflows/auto-issues.yml).
+The fix is the `PUT` above, not an edit to the file.
+
+What it does not compare: the bypass list and the branch conditions, which the
+endpoint does not return, and the other `pull_request` settings, such as
+dismissing stale reviews. For those, a repository admin reads the ruleset
+itself with `gh api repos/Danathar/zfs-kinoite-complex/rulesets/23959550`.
 
 ## When there is a second reviewer
 

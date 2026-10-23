@@ -112,18 +112,25 @@ Every file in `.github/workflows/` has an entry here.
 
 ### `nightly-compliance.yml` — "Nightly compliance"
 
-- **Means:** a check that runs on a clock, not on a change. It has two jobs
-  so two kinds of failure are not mistaken for each other.
+- **Means:** a check that runs on a clock, not on a change. It has three jobs
+  so three kinds of failure are not mistaken for each other.
   - `published-image` red: the artifact a user would pull now no longer
     verifies against the committed `cosign.pub`. No commit is needed to cause
     that.
   - `suite` red with no recent commit: something in the runner changed, such
     as a Python release or a dependency.
+  - `ruleset-drift` red: GitHub enforces weaker merge rules on `main` than
+    `.github/rulesets/main.json` asks for. Usually the file changed and the
+    live ruleset was never updated from it.
 - **First:** for `published-image`, run the verify command from
   [`install-and-verify.md`](./install-and-verify.md) yourself. If it fails
   too, treat it as an incident and stop; do not re-tag or re-sign anything
   ([`AGENTS.md`](../AGENTS.md) section 0 rule 6). For `suite`, read the failing
-  step and compare with the last green run.
+  step and compare with the last green run. For `ruleset-drift`, read the
+  findings in the run summary. Updating the live ruleset needs a repository
+  admin; an agent does not change the file to match GitHub. The command is in
+  [`branch-protection.md`](./branch-protection.md), section Applying and
+  changing it.
 - **Detail:** [`quality.md`](./quality.md), "The nightly job answers a question
   the others cannot". It reports; it repairs nothing.
 

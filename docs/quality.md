@@ -18,7 +18,7 @@ signals mean, that one is how to get numbers.
 | --- | --- | --- |
 | **build** | Actions status for `build.yml` on `main` | Did the last production run pass? |
 | **tests** | Actions status for `test.yml` on `main` | Did lint, the unit suite and the per-module coverage floors pass on `main`? |
-| **nightly compliance** | Actions status for `nightly-compliance.yml` on `main` | Does the image a user would pull right now still verify against the committed `cosign.pub`? |
+| **nightly compliance** | Actions status for `nightly-compliance.yml` on `main` | Does the image a user would pull right now still verify against the committed `cosign.pub`, and does GitHub still enforce the committed merge rules? |
 | **last good build** | `status` branch payload written from the published `:latest` image | Is there a usable signed image, and how old is it? |
 | **OpenZFS/kernel status** | `status` branch payload written by `akmods-failure-triage.yml` | If the build is red, is it because ZFS cannot be built for the current kernel? |
 
@@ -161,6 +161,14 @@ It also re-runs the unit suite and the coverage gate. That is deliberate
 duplication: a dependency of the *runner* can break those with no commit on this
 side, and that failure is worth seeing on its own rather than landing on whoever
 opens the next pull request.
+
+Its `ruleset-drift` job asks a third question: **does GitHub still enforce, on
+`main`, at least the merge rules committed in `.github/rulesets/main.json`?**
+Applying that file is a separate step after the merge, and it has been
+skipped before (#454). The job fails when a live rule is missing or weaker, and
+passes when GitHub enforces more.
+[`branch-protection.md`](./branch-protection.md) says what it compares and what
+it does not.
 
 ## The checks that actually protect a booted machine
 

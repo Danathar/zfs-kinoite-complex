@@ -11,8 +11,9 @@ name: Nightly compliance
 # It reports rather than repairs. Nothing here rewrites a threshold or republishes
 # an image; .github/auto-qa-tuning.json says why that asymmetry is deliberate.
 #
-# Two jobs so a registry problem and a code regression cannot be mistaken for
-# each other in the run list.
+# Three jobs so a registry problem, a code regression and a repository setting
+# that has fallen behind its committed file cannot be mistaken for each other in
+# the run list.
 
 on:
   schedule:
@@ -112,3 +113,25 @@ jobs:
           echo "" >> "${GITHUB_STEP_SUMMARY}"
           echo "Signature verifies against the committed \`cosign.pub\`." \
             >> "${GITHUB_STEP_SUMMARY}"
+
+  ruleset-drift:
+    name: ruleset-drift
+    runs-on: ubuntu-26.04
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Applying .github/rulesets/main.json to GitHub is a separate owner-only
+      # PUT, and nothing noticed when it was skipped (#454, #488). This reads
+      # the rules GitHub enforces on the default branch, which needs only
+      # `contents: read`, and fails when any of them is weaker than the file.
+      # Extra or stricter live rules pass. docs/branch-protection.md says what
+      # it compares and what it does not.
+      - name: Compare live branch rules with the committed ruleset
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 -m ci_tools.cli check-ruleset-drift

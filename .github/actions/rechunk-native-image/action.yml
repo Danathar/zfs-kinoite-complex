@@ -50,6 +50,14 @@ runs:
         export CHUNKAH_CONFIG_STR
         CHUNKAH_CONFIG_STR="$(podman inspect "${source_image}")"
 
+        # Pull Chunkah explicitly so the transfer can be retried on a longer
+        # schedule than `podman run`'s implicit pull. That one retries 3 times
+        # one second apart, which is not enough to ride out a quay.io CDN
+        # connection reset (the nightly failed this way in run 39910817917;
+        # PR #472 hit a quay 502 on the same pull). If every attempt fails the
+        # step still fails here. The `podman run` below then uses the local copy.
+        podman pull --retry 5 --retry-delay 30s "${CHUNKAH_IMAGE}"
+
         # Buffer to a compressed OCI archive on / rather than piping straight
         # into `podman load`. Piping would require the source image and the
         # rechunked copy to coexist unpacked in one container storage at

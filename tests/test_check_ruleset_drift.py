@@ -21,6 +21,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from typing import ClassVar
 from unittest import mock
 
 from ci_tools import check_ruleset_drift
@@ -280,7 +281,7 @@ class FetchLiveRulesTests(unittest.TestCase):
 
     def test_get_sends_the_token_and_parses_json(self) -> None:
         class Response(io.BytesIO):
-            headers = {"Link": 'rel="next"'}
+            headers: ClassVar[dict[str, str]] = {"Link": 'rel="next"'}
 
             def __enter__(self):
                 return self
@@ -348,9 +349,11 @@ class MainTests(unittest.TestCase):
         self.assertEqual(summary, "")
 
     def test_a_missing_token_is_refused(self) -> None:
-        with mock.patch.dict(os.environ, {"GITHUB_REPOSITORY": "o/r"}, clear=True):
-            with self.assertRaisesRegex(CiToolError, "GITHUB_TOKEN"):
-                check_ruleset_drift.main()
+        with (
+            mock.patch.dict(os.environ, {"GITHUB_REPOSITORY": "o/r"}, clear=True),
+            self.assertRaisesRegex(CiToolError, "GITHUB_TOKEN"),
+        ):
+            check_ruleset_drift.main()
 
 
 if __name__ == "__main__":

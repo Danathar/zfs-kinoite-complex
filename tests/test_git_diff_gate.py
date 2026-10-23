@@ -2495,6 +2495,70 @@ CORPUS: tuple[Row, ...] = (
         "allowed",
         'the same path glob in a shell string',
     ),
+    # An unquoted glob with no / matches a file in the working directory, and
+    # the program behind which it stands then looks that name up on PATH, so
+    # after `touch git` the pattern g?t runs the real git. Each refused row
+    # below exited 0 before.
+    Row(
+        "command name",
+        'touch git; setarch x86_64 g?t diff /dev/null ./.env',
+        "refused",
+        'a bare glob behind a program that matches a file named git, which runs git',
+        "as a command of its own",
+    ),
+    Row(
+        "command name",
+        'setarch x86_64 * diff /dev/null ./.env',
+        "refused",
+        'an all-wildcard name behind a program',
+        "as a command of its own",
+    ),
+    Row(
+        "command name",
+        'setarch x86_64 ??? diff /dev/null ./.env',
+        "refused",
+        'a three-character wildcard name, which matches git',
+        "as a command of its own",
+    ),
+    Row(
+        "command name",
+        'strace -o log g?t diff /dev/null ./.env',
+        "refused",
+        'a bare glob behind strace',
+        "as a command of its own",
+    ),
+    Row(
+        "command name",
+        'touch gh; setarch x86_64 g? pr view 1 --json number --jq env',
+        "refused",
+        'a bare glob behind a program that matches gh',
+        "as a command of its own",
+    ),
+    Row(
+        "command name",
+        'setarch x86_64 g* pr view 1 --json number --jq env',
+        "refused",
+        'a glob matching both git and gh is read as each: git pr view passes, gh is held to the filter rule',
+        "as a command of its own",
+    ),
+    Row(
+        "command name",
+        "setarch x86_64 'g?t' diff /dev/null ./.env",
+        "allowed",
+        'a quoted glob is a literal to bash, so the program looks up the name g?t and runs nothing',
+    ),
+    Row(
+        "command name",
+        'ls *',
+        "allowed",
+        'a bare glob read as git alone passes',
+    ),
+    Row(
+        "command name",
+        'wc -l ci_tools/*.py',
+        "allowed",
+        'a glob that matches no gated name is not read as one',
+    ),
     # --- 5. an option that loads or writes ---------------------------------
     Row(
         "options",
@@ -2967,14 +3031,26 @@ MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
     ),
     (
         "reading a word the shell expands into a gated name behind a program",
-        '|| expands_to_gated_name "${raw_words[idx]}"; then',
+        '|| expands_to_gated_name "${raw_words[idx]}" "${globs[idx]:-0}"; then',
         "; then",
         "setarch x86_64 {git,diff} /dev/null ./.env",
     ),
     (
+        "reading an unquoted glob with no / as the name it matches",
+        '|| expands_to_gated_name "${raw_words[idx]}" "${globs[idx]:-0}"; then',
+        '|| expands_to_gated_name "${raw_words[idx]}" 0; then',
+        "touch git; setarch x86_64 g?t diff /dev/null ./.env",
+    ),
+    (
+        "reading a glob as every gated name it matches",
+        'piece_names "${spelled##*/}" "${first}" && expansions+=("${first}")',
+        'piece_names "${spelled##*/}" "${first}" && expansions+=("${first}") && break',
+        "setarch x86_64 g* pr view 1 --json number --jq env",
+    ),
+    (
         "reading the expanded word as the name it becomes",
-        '[[ -n "${expanded}" ]] && command_text=',
-        "false && command_text=",
+        "if ((${#expansions[@]})); then",
+        "if false; then",
         "ls /usr/bin/g*",
     ),
     (

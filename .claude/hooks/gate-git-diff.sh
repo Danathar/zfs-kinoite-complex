@@ -1673,29 +1673,34 @@ text_names_gated() {
 }
 
 # Whether a word, as typed, is one the shell turns into git or a gated
-# prefix only by expanding it: a brace group (`{git,diff}` is `git diff`) or a
-# glob that holds a `/` (`/usr/bin/g?t` is `/usr/bin/git`). Sets `expanded`
-# to the words the shell makes of it, so the command can be read from there
-# as the shell will run it: `ls /usr/bin/g*` reads `git` alone, which passes,
-# rather than a glob in command position, which is refused. A glob with no
-# `/` matches files in the working directory, not a program, so
+# prefix only by expanding it: a brace group (`{git,diff}` is `git diff`), a
+# glob that holds a `/` (`/usr/bin/g?t` is `/usr/bin/git`), or an unquoted
+# glob with no `/` ($2 is 1): `g?t` matches a file named git in the working
+# directory, and the program then looks that name up on PATH and runs the
+# real git, so `touch git; setarch x86_64 g?t diff ...` runs git diff. Sets
+# `expansions` to each set of words the shell may make of it -- one per gated
+# name the glob matches, since `*` matches git and gh alike -- so the command
+# can be read from there as the shell will run it: `ls /usr/bin/g*` reads
+# `git` alone, which passes, rather than a glob in command position, which is
+# refused. A quoted pattern is a literal to bash, so
 # `find . -name '*.sh'` is not read as the `*.sh` command.
 expands_to_gated_name() {
-  local spelled="${1//[\"\'\\\$]/}" first
-  expanded=''
+  local spelled="${1//[\"\'\\\$]/}" first expanded
+  expansions=()
   if [[ "$1" == *"{"* ]]; then
     for expanded in "${spelled//[\{\},]/}" "${spelled//[\{\},]/ }"; do
-      text_names_gated "${expanded}" && return 0
+      if text_names_gated "${expanded}"; then
+        expansions=("${expanded}")
+        return 0
+      fi
     done
   fi
-  if [[ "$1" == */* && "$1" == *[*?[]* ]]; then
+  if [[ "$1" == */* && "$1" == *[*?[]* ]] || ((${2:-0})); then
     for first in "${gated_first_words[@]}"; do
-      expanded="${first}"
-      piece_names "${spelled##*/}" "${first}" && return 0
+      piece_names "${spelled##*/}" "${first}" && expansions+=("${first}")
     done
   fi
-  expanded=''
-  return 1
+  ((${#expansions[@]}))
 }
 
 # The word a program receives for a word as typed, in `unquoted`: quotes
@@ -1918,16 +1923,24 @@ for ((idx = 0; idx < ${#words[@]}; idx++)); do
     continue
   fi
   ((seg_reading)) || continue
-  expanded=''
-  if gated_name_at "${idx}" || expands_to_gated_name "${raw_words[idx]}"; then
+  expansions=()
+  if gated_name_at "${idx}" || expands_to_gated_name "${raw_words[idx]}" "${globs[idx]:-0}"; then
     seg_hit=1
     ((seg_hit_idx < 0)) && seg_hit_idx=${idx}
-    [[ "${word##*/}" == git || "${expanded%% *}" == git ]] && seg_git=1
+    [[ "${word##*/}" == git ]] && seg_git=1
+    for expanded in "${expansions[@]+"${expansions[@]}"}"; do
+      [[ "${expanded%% *}" == git ]] && seg_git=1
+    done
     in_tick=0
     ((${#seg_stack[@]})) && [[ "${seg_stack[-1]}" == 'b '* ]] && in_tick=1
     command_text_from "${idx}" "${in_tick}"
-    [[ -n "${expanded}" ]] && command_text="${expanded}${command_text#"${raw_words[idx]}"}"
-    read_alone "${command_text}"
+    if ((${#expansions[@]})); then
+      for expanded in "${expansions[@]}"; do
+        read_alone "${expanded}${command_text#"${raw_words[idx]}"}"
+      done
+    else
+      read_alone "${command_text}"
+    fi
   fi
   # A command string, looked for only in a word that names a gated command
   # somewhere in it, or that carries an ANSI-C quote that could spell one.

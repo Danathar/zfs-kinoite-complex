@@ -135,3 +135,14 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: python3 -m ci_tools.cli check-ruleset-drift
+
+      # The same comparison for every other repository in the fleet. They are
+      # public, so this job's token can read their committed rulesets and
+      # effective rules, and one job covers all of them instead of a copy of
+      # the script in each.
+      - name: Compare live branch rules with the committed ruleset in every fleet repository
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 -m ci_tools.cli check-ruleset-drift --fleet

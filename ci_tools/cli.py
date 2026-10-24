@@ -1,7 +1,8 @@
 """
 Script: ci_tools/cli.py
 What: Command entrypoint used by workflow steps.
-Doing: Maps command text to module `main()` functions and runs the selected command.
+Doing: Maps command text to module `main()` functions and runs the selected command, passing
+any options after the command name to the commands in `TAKES_ARGUMENTS`.
 Why: Workflows can call one simple command pattern.
 Goal: Keep step-to-code mapping clear and easy to maintain.
 """
@@ -10,12 +11,16 @@ from __future__ import annotations
 
 import argparse
 import sys
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 
 from ci_tools.common import CiToolError
 
+# Commands whose `main()` takes the options written after the command name, such as
+# `check-ruleset-drift --fleet`. Every other command takes none, and the parser refuses them.
+TAKES_ARGUMENTS = frozenset({"check-ruleset-drift"})
 
-def command_map() -> dict[str, Callable[[], None]]:
+
+def command_map() -> dict[str, Callable[..., None]]:
     """
     Map CLI command names to Python entry functions.
 
@@ -67,7 +72,7 @@ def command_map() -> dict[str, Callable[[], None]]:
     }
 
 
-def build_parser(commands: Mapping[str, Callable[[], None]]) -> argparse.ArgumentParser:
+def build_parser(commands: Mapping[str, Callable[..., None]]) -> argparse.ArgumentParser:
     """Build argument parser with one positional command choice."""
 
     parser = argparse.ArgumentParser(
@@ -78,23 +83,30 @@ def build_parser(commands: Mapping[str, Callable[[], None]]) -> argparse.Argumen
     return parser
 
 
-def run_command(command: str, commands: Mapping[str, Callable[[], None]]) -> None:
+def run_command(
+    command: str, commands: Mapping[str, Callable[..., None]], arguments: Sequence[str] = ()
+) -> None:
     """
-    Run one registered command.
+    Run one registered command, handing it `arguments` when there are any.
 
     `commands` is passed in to keep this function easy to test.
     """
 
-    commands[command]()
+    if arguments:
+        commands[command](list(arguments))
+    else:
+        commands[command]()
 
 
 def main(argv: list[str] | None = None) -> None:
     commands = command_map()
     parser = build_parser(commands)
-    args = parser.parse_args(argv)
+    args, arguments = parser.parse_known_args(argv)
+    if arguments and args.command not in TAKES_ARGUMENTS:
+        parser.error(f"{args.command} takes no options: {' '.join(arguments)}")
 
     try:
-        run_command(args.command, commands)
+        run_command(args.command, commands, arguments)
     except CiToolError as exc:
         print(str(exc), file=sys.stderr)
         raise SystemExit(1) from exc

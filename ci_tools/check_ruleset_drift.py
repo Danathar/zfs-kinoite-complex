@@ -24,12 +24,21 @@ strongest live entry of that type, which is what GitHub enforces.
 What it does not compare: the bypass list, the target conditions and the
 `pull_request` settings other than code owner review and the approval count.
 The effective-rules endpoint does not return the first two.
+
+`--fleet` runs the same comparison for every repository in `FLEET` instead of
+this one, with one report section each (#490). They are public, so the same
+token reads each one's committed `.github/rulesets/{branch}.json` through the
+contents API and its effective rules through the endpoint above. One job here
+covers all of them, instead of a copy of this script in each. The run fails when
+any repository has a finding, or when its file or its rules cannot be read.
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
+import sys
 import urllib.parse
 import urllib.request
 from collections.abc import Mapping, Sequence
@@ -38,6 +47,30 @@ from ci_tools.common import REPO_ROOT, CiToolError, require_env
 
 API = "https://api.github.com"
 RULESET_FILE = REPO_ROOT / ".github" / "rulesets" / "main.json"
+JSON_MEDIA_TYPE = "application/vnd.github+json"
+# The contents API returns the file itself under this media type, rather than base64 in JSON.
+RAW_MEDIA_TYPE = "application/vnd.github.raw+json"
+
+# Every other repository that commits a ruleset file. This one is checked by the plain run.
+FLEET = (
+    "Danathar/akmods",
+    "Danathar/arch-bootc",
+    "Danathar/atomic-image-builder",
+    "Danathar/aurora-zfs-simple",
+    "Danathar/dns-failover",
+    "Danathar/exult",
+    "Danathar/goodreads-mcp",
+    "Danathar/openaudible-autoupdate",
+    "Danathar/sensi",
+    "Danathar/tududi",
+    "Danathar/zfs-aurora-complex",
+)
+
+
+def ruleset_path(branch: str) -> str:
+    """The committed ruleset for `branch`, named after it: `master.json` on a `master` repo."""
+
+    return f".github/rulesets/{branch}.json"
 
 
 def _live_parameters(live_rules: Sequence[Mapping], rule_type: str) -> list[Mapping]:
@@ -118,7 +151,11 @@ def find_weaker_rules(committed: Mapping, live_rules: Sequence[Mapping]) -> list
 
 
 def render_report(
-    branch: str, committed: Mapping, live_rules: Sequence[Mapping], findings: Sequence[str]
+    branch: str,
+    committed: Mapping,
+    live_rules: Sequence[Mapping],
+    findings: Sequence[str],
+    ruleset_file: str = ".github/rulesets/main.json",
 ) -> str:
     """The Markdown the job prints and writes to the step summary."""
 
@@ -128,7 +165,7 @@ def render_report(
         "### Ruleset drift",
         "",
         f"Branch: `{branch}`",
-        f"Committed rules (`.github/rulesets/main.json`): {committed_types}",
+        f"Committed rules (`{ruleset_file}`): {committed_types}",
         f"Live rule types: {live_types}",
         "",
     ]
@@ -147,12 +184,12 @@ def render_report(
     return "\n".join(lines) + "\n"
 
 
-def _get(path: str, token: str) -> tuple[object, str]:
+def _get(path: str, token: str, accept: str = JSON_MEDIA_TYPE) -> tuple[object, str]:
     request = urllib.request.Request(
         API + path,
         headers={
             "Authorization": f"Bearer {token}",
-            "Accept": "application/vnd.github+json",
+            "Accept": accept,
             "X-GitHub-Api-Version": "2022-11-28",
         },
     )
@@ -179,20 +216,112 @@ def fetch_live_rules(repository: str, token: str) -> tuple[str, list[dict]]:
         page += 1
 
 
-def main() -> None:
+def fetch_committed(repository: str, branch: str, token: str) -> dict:
+    """
+    Return the ruleset `repository` commits for `branch`, read through the contents API.
+
+    Raises `CiToolError` when the file parses but holds no rules, so an emptied file is reported
+    as unreadable rather than passing with nothing to compare.
+    """
+
+    path = urllib.parse.quote(ruleset_path(branch))
+    data, _ = _get(
+        f"/repos/{repository}/contents/{path}?ref={urllib.parse.quote(branch)}",
+        token,
+        accept=RAW_MEDIA_TYPE,
+    )
+    if not isinstance(data, dict) or not isinstance(data.get("rules"), list) or not data["rules"]:
+        raise CiToolError(f"{ruleset_path(branch)} holds no `rules` list")
+    return data
+
+
+def _put_command(repository: str, branch: str, live_rules: Sequence[Mapping]) -> str:
+    """The `PUT` an admin of `repository` runs, with the ruleset id when the live rules name one."""
+
+    ids = sorted(
+        {
+            str(rule["ruleset_id"])
+            for rule in live_rules
+            if rule.get("ruleset_source") == repository and "ruleset_id" in rule
+        }
+    )
+    ruleset = ids[0] if len(ids) == 1 else "<id>"
+    return (
+        f"gh api --method PUT repos/{repository}/rulesets/{ruleset} "
+        f"--input {ruleset_path(branch)}"
+    )
+
+
+def fleet_section(repository: str, token: str) -> tuple[str, bool]:
+    """
+    Return one repository's report section, and whether it fails the run.
+
+    A file or rules that cannot be read fail it too: a repository the check cannot see is not one
+    it has checked.
+    """
+
+    heading = f"## `{repository}`\n\n"
+    try:
+        branch, live_rules = fetch_live_rules(repository, token)
+        committed = fetch_committed(repository, branch, token)
+    except (OSError, ValueError, CiToolError) as exc:
+        return heading + f"Could not read the committed ruleset or the live rules: {exc}\n", True
+
+    findings = find_weaker_rules(committed, live_rules)
+    section = heading + render_report(
+        branch, committed, live_rules, findings, ruleset_file=ruleset_path(branch)
+    )
+    if findings:
+        put = _put_command(repository, branch, live_rules)
+        section += f"\nIn `{repository}`, from a checkout of `{branch}`: `{put}`\n"
+    return section, bool(findings)
+
+
+def _publish(report: str) -> None:
+    print(report)
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        with open(summary, "a", encoding="utf-8") as handle:
+            handle.write(report)
+
+
+def main(argv: Sequence[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(
+        prog="python3 -m ci_tools.cli check-ruleset-drift",
+        description="Fail when GitHub's live branch rules are weaker than the committed ruleset.",
+    )
+    parser.add_argument(
+        "--fleet",
+        action="store_true",
+        help="check every repository in FLEET instead of this one",
+    )
+    # Never sys.argv: through ci_tools.cli that still holds the command name.
+    args = parser.parse_args(list(argv or []))
     token = require_env("GITHUB_TOKEN")
+
+    if args.fleet:
+        failed = []
+        sections = []
+        for repository in FLEET:
+            section, fails = fleet_section(repository, token)
+            sections.append(section)
+            if fails:
+                failed.append(repository)
+        _publish("\n".join(sections))
+        if failed:
+            raise CiToolError(
+                "Live rules are weaker than the committed ruleset, or could not be read, in "
+                f"{len(failed)} of {len(FLEET)} repositories: {', '.join(failed)}"
+            )
+        return
+
     repository = require_env("GITHUB_REPOSITORY")
     committed = json.loads(RULESET_FILE.read_text(encoding="utf-8"))
 
     branch, live_rules = fetch_live_rules(repository, token)
     findings = find_weaker_rules(committed, live_rules)
     report = render_report(branch, committed, live_rules, findings)
-
-    print(report)
-    summary = os.environ.get("GITHUB_STEP_SUMMARY")
-    if summary:
-        with open(summary, "a", encoding="utf-8") as handle:
-            handle.write(report)
+    _publish(report)
 
     if findings:
         raise CiToolError(
@@ -202,4 +331,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    main(sys.argv[1:])

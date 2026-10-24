@@ -152,6 +152,17 @@ endpoint does not return, and the other `pull_request` settings, such as
 dismissing stale reviews. For those, a repository admin reads the ruleset
 itself with `gh api repos/Danathar/zfs-kinoite-complex/rulesets/23959550`.
 
+The same job also covers the rest of the fleet. A second step runs the script
+with `--fleet`, which makes the same comparison for each repository in its
+`FLEET` list: it reads that repository's committed
+`.github/rulesets/{branch}.json` (`master.json` in exult and sensi, `main.json`
+elsewhere) through the contents API, and its effective rules from the endpoint
+above. They are public, so the run's own token reads them too. The report has
+one section per repository, each with the `PUT` an admin of that repository
+runs, and the step fails when any of them is weaker than its file or when its
+file or rules cannot be read. One job here replaces a copy of the script in
+each repository (#490).
+
 ## When there is a second reviewer
 
 Set `required_approving_review_count` to 1. Consider

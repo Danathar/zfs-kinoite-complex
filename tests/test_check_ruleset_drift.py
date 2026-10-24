@@ -3,12 +3,14 @@ Script: tests/test_check_ruleset_drift.py
 What: Tests for `ci_tools/check_ruleset_drift.py`, the nightly comparison of the committed
 ruleset with the rules GitHub enforces on the default branch.
 Doing: Feeds `find_weaker_rules` a committed ruleset and a list shaped like the effective-rules
-endpoint's response, and runs `main()` with the API calls replaced by a recording fake.
+endpoint's response, and runs `main()` with the API calls replaced by a recording fake, both for
+this repository and with `--fleet` across several fake ones.
 Why: The check is asymmetric. It must fail when GitHub enforces less than the file and must pass
 when GitHub enforces as much or more. Either direction going wrong is silent: a check that never
 fails looks the same as a check that is green for a good reason (#488).
-Goal: Each weaker shape fails here, each equal or stricter shape passes, and the real committed
-file is the one the job reads.
+Goal: Each weaker shape fails here, each equal or stricter shape passes, the real committed
+file is the one the job reads, and in `--fleet` mode a repository whose file cannot be read fails
+the run rather than counting as checked (#490).
 """
 
 from __future__ import annotations
@@ -19,17 +21,23 @@ import json
 import os
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+import urllib.error
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import ClassVar
 from unittest import mock
 
 from ci_tools import check_ruleset_drift
 from ci_tools.check_ruleset_drift import (
+    FLEET,
+    RAW_MEDIA_TYPE,
     RULESET_FILE,
+    fetch_committed,
     fetch_live_rules,
     find_weaker_rules,
+    fleet_section,
     render_report,
+    ruleset_path,
 )
 from ci_tools.common import CiToolError
 
@@ -235,6 +243,11 @@ class RenderReportTests(unittest.TestCase):
         self.assertIn("Live rule types: none", report)
         self.assertIn("docs/branch-protection.md", report)
 
+    def test_the_header_names_the_file_it_compared(self) -> None:
+        self.assertIn("(`.github/rulesets/main.json`)", render_report("main", COMMITTED, [], []))
+        report = render_report("master", COMMITTED, [], [], ruleset_file=ruleset_path("master"))
+        self.assertIn("Committed rules (`.github/rulesets/master.json`):", report)
+
     def test_the_fix_the_report_points_at_is_on_the_page(self) -> None:
         page = (REPO_ROOT / "docs" / "branch-protection.md").read_text(encoding="utf-8")
         self.assertIn("## Applying and changing it", page)
@@ -354,6 +367,210 @@ class MainTests(unittest.TestCase):
             self.assertRaisesRegex(CiToolError, "GITHUB_TOKEN"),
         ):
             check_ruleset_drift.main()
+
+
+class FleetApi:
+    """
+    Stands in for `_get` across several repositories.
+
+    `repos` maps a repository to its default branch, its committed ruleset (`None` answers the
+    contents call with a 404, as GitHub does for a missing file) and its live rules.
+    """
+
+    def __init__(self, repos: dict[str, tuple[str, dict | None, list[dict]]]) -> None:
+        self.repos = repos
+        self.calls: list[tuple[str, str]] = []
+
+    def __call__(
+        self, path: str, token: str, accept: str = "application/vnd.github+json"
+    ) -> tuple[object, str]:
+        self.calls.append((path, accept))
+        repository = "/".join(path.split("/")[2:4])
+        branch, committed, live = self.repos[repository]
+        if "/contents/" in path:
+            if committed is None:
+                raise urllib.error.HTTPError(path, 404, "Not Found", None, None)
+            return copy.deepcopy(committed), ""
+        if "/rules/branches/" in path:
+            return copy.deepcopy(live), ""
+        return {"default_branch": branch}, ""
+
+
+def weaker(committed: dict) -> list[dict]:
+    """`committed` applied as-is, except code owner review, which is off: the #454 state."""
+
+    live = live_from(committed, source="Danathar/weaker")
+    live_rule(live, "pull_request")["parameters"]["require_code_owner_review"] = False
+    return live
+
+
+class FleetListTests(unittest.TestCase):
+    def test_the_fleet_is_every_other_repository_once(self) -> None:
+        self.assertEqual(len(FLEET), 11)
+        self.assertEqual(len(set(FLEET)), len(FLEET))
+        self.assertNotIn("Danathar/zfs-kinoite-complex", FLEET)
+        self.assertTrue(all(repository.startswith("Danathar/") for repository in FLEET))
+        self.assertIn("Danathar/exult", FLEET)
+        self.assertIn("Danathar/sensi", FLEET)
+
+    def test_the_nightly_job_runs_the_fleet_check(self) -> None:
+        workflow = REPO_ROOT / ".github" / "workflows" / "nightly-compliance.yml"
+        self.assertIn(
+            "python3 -m ci_tools.cli check-ruleset-drift --fleet",
+            workflow.read_text(encoding="utf-8"),
+        )
+
+
+class FetchCommittedTests(unittest.TestCase):
+    def test_a_master_repository_reads_master_json_from_master(self) -> None:
+        api = FleetApi({"Danathar/sensi": ("master", COMMITTED, [])})
+        with mock.patch.object(check_ruleset_drift, "_get", api):
+            committed = fetch_committed("Danathar/sensi", "master", "t")
+        self.assertEqual(committed, COMMITTED)
+        self.assertEqual(
+            api.calls,
+            [
+                (
+                    "/repos/Danathar/sensi/contents/.github/rulesets/master.json?ref=master",
+                    RAW_MEDIA_TYPE,
+                )
+            ],
+        )
+
+    def test_a_main_repository_reads_main_json(self) -> None:
+        self.assertEqual(ruleset_path("main"), ".github/rulesets/main.json")
+        self.assertEqual(ruleset_path("master"), ".github/rulesets/master.json")
+
+    def test_a_file_with_no_rules_is_refused(self) -> None:
+        for body in ({"name": "x"}, {"rules": []}, {"rules": "deletion"}, []):
+            with self.subTest(body=body):
+                api = FleetApi({"o/r": ("main", body, [])})
+                with (
+                    mock.patch.object(check_ruleset_drift, "_get", api),
+                    self.assertRaisesRegex(CiToolError, "no `rules` list"),
+                ):
+                    fetch_committed("o/r", "main", "t")
+
+    def test_get_sends_the_raw_media_type_when_asked(self) -> None:
+        class Response(io.BytesIO):
+            headers: ClassVar[dict[str, str]] = {}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        with mock.patch.object(
+            check_ruleset_drift.urllib.request, "urlopen", return_value=Response(b'{"rules": []}')
+        ) as urlopen:
+            check_ruleset_drift._get("/repos/o/r/contents/x", "t", accept=RAW_MEDIA_TYPE)
+        self.assertEqual(urlopen.call_args.args[0].get_header("Accept"), RAW_MEDIA_TYPE)
+
+
+class FleetSectionTests(unittest.TestCase):
+    def _section(self, repository: str, spec: tuple) -> tuple[str, bool]:
+        with mock.patch.object(check_ruleset_drift, "_get", FleetApi({repository: spec})):
+            return fleet_section(repository, "t")
+
+    def test_a_clean_repository_passes_and_names_its_file(self) -> None:
+        section, fails = self._section(
+            "Danathar/exult", ("master", COMMITTED, live_from(COMMITTED, "Danathar/exult"))
+        )
+        self.assertFalse(fails)
+        self.assertTrue(section.startswith("## `Danathar/exult`\n"), section)
+        self.assertIn("Branch: `master`", section)
+        self.assertIn("(`.github/rulesets/master.json`)", section)
+        self.assertIn("at least as strictly", section)
+        self.assertNotIn("PUT", section)
+
+    def test_a_weaker_repository_fails_with_its_own_put(self) -> None:
+        section, fails = self._section("Danathar/weaker", ("main", COMMITTED, weaker(COMMITTED)))
+        self.assertTrue(fails)
+        self.assertIn("require_code_owner_review", section)
+        self.assertIn(
+            "`gh api --method PUT repos/Danathar/weaker/rulesets/23959550 "
+            "--input .github/rulesets/main.json`",
+            section,
+        )
+
+    def test_a_put_without_one_ruleset_id_leaves_a_placeholder(self) -> None:
+        # Rules from another source carry someone else's id; that is not the one to PUT.
+        live = live_from(COMMITTED, source="Danathar")
+        live_rule(live, "pull_request")["parameters"]["require_code_owner_review"] = False
+        section, fails = self._section("Danathar/weaker", ("main", COMMITTED, live))
+        self.assertTrue(fails)
+        self.assertIn("repos/Danathar/weaker/rulesets/<id> ", section)
+
+    def test_an_unreadable_file_fails(self) -> None:
+        section, fails = self._section("Danathar/unread", ("main", None, []))
+        self.assertTrue(fails)
+        self.assertIn("## `Danathar/unread`", section)
+        self.assertIn("Could not read", section)
+        self.assertIn("404", section)
+
+
+class FleetMainTests(unittest.TestCase):
+    REPOS: ClassVar[dict[str, tuple]] = {
+        "Danathar/clean": ("main", COMMITTED, live_from(COMMITTED, "Danathar/clean")),
+        "Danathar/weaker": ("master", COMMITTED, weaker(COMMITTED)),
+        "Danathar/unread": ("main", None, []),
+    }
+
+    def _run(self, repos: dict[str, tuple]) -> tuple[str, str, Exception | None]:
+        api = FleetApi(repos)
+        with tempfile.TemporaryDirectory() as tmp:
+            summary_path = Path(tmp) / "summary.md"
+            # No GITHUB_REPOSITORY: the fleet run does not read this repository.
+            env = {"GITHUB_TOKEN": "t0ken", "GITHUB_STEP_SUMMARY": str(summary_path)}
+            out = io.StringIO()
+            error = None
+            with (
+                mock.patch.dict(os.environ, env, clear=True),
+                mock.patch.object(check_ruleset_drift, "_get", api),
+                mock.patch.object(check_ruleset_drift, "FLEET", tuple(repos)),
+                redirect_stdout(out),
+            ):
+                try:
+                    check_ruleset_drift.main(["--fleet"])
+                except CiToolError as exc:
+                    error = exc
+            written = summary_path.read_text(encoding="utf-8")
+        return out.getvalue(), written, error
+
+    def test_one_section_per_repository_and_the_failures_named(self) -> None:
+        stdout, summary, error = self._run(self.REPOS)
+        self.assertEqual(summary, stdout.rstrip("\n") + "\n")
+        for repository in self.REPOS:
+            self.assertEqual(stdout.count(f"## `{repository}`"), 1, repository)
+        self.assertIsInstance(error, CiToolError)
+        self.assertIn("in 2 of 3 repositories: Danathar/weaker, Danathar/unread", str(error))
+        self.assertNotIn("Danathar/clean", str(error))
+        self.assertIn("(`.github/rulesets/master.json`)", stdout)
+        self.assertIn("--input .github/rulesets/master.json", stdout)
+
+    def test_a_fleet_with_no_findings_passes(self) -> None:
+        stdout, _, error = self._run({"Danathar/clean": self.REPOS["Danathar/clean"]})
+        self.assertIsNone(error)
+        self.assertIn("at least as strictly", stdout)
+
+    def test_an_unreadable_repository_alone_fails_the_run(self) -> None:
+        stdout, _, error = self._run(
+            {
+                "Danathar/clean": self.REPOS["Danathar/clean"],
+                "Danathar/unread": self.REPOS["Danathar/unread"],
+            }
+        )
+        self.assertIsInstance(error, CiToolError)
+        self.assertIn("Danathar/unread", str(error))
+        self.assertIn("Could not read", stdout)
+
+    def test_an_unknown_option_is_refused(self) -> None:
+        with (
+            redirect_stderr(io.StringIO()),
+            self.assertRaises(SystemExit),
+        ):
+            check_ruleset_drift.main(["--fleat"])
 
 
 if __name__ == "__main__":

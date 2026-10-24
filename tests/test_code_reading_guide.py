@@ -72,11 +72,18 @@ CI_TOOLS = REPO_ROOT / "ci_tools"
 TESTS_DIR = REPO_ROOT / "tests"
 
 # Modules that live in this repository rather than on PyPI. `check_coverage` is
-# tests/check_coverage.py, imported by tests/test_check_coverage.py, and
-# `run_tests` is tests/run_tests.py, imported by tests/test_run_tests.py: both
-# are scripts in tests/, which pytest puts on sys.path, so they are imported by
-# bare name and would otherwise read as PyPI packages here.
-FIRST_PARTY = {"ci_tools", "shared", "tests", "check_coverage", "run_tests"}
+# tests/check_coverage.py, imported by tests/test_check_coverage.py,
+# `mutation_check` is tests/mutation_check.py, imported by
+# tests/test_mutation_check.py, and `run_tests` is tests/run_tests.py, imported
+# by tests/test_run_tests.py: all are scripts in tests/, which pytest puts on
+# sys.path, so they are imported by bare name and would otherwise read as PyPI
+# packages here.
+FIRST_PARTY = {"ci_tools", "shared", "tests", "check_coverage", "mutation_check", "run_tests"}
+
+# tests/mutation_check.py imports cosmic-ray inside the one function that only
+# the advisory mutation job in test.yml calls, and that job installs it. Nothing
+# the suite collects reaches that import: tests/test_mutation_check.py stubs it.
+MUTATION_JOB_ONLY = ("tests/mutation_check.py", "cosmic_ray")
 
 
 def guide_lines() -> list[str]:
@@ -666,6 +673,8 @@ class RunningTestsRecipeTests(unittest.TestCase):
                     continue
                 root = name.split(".")[0]
                 if not root or root in FIRST_PARTY or root in sys.stdlib_module_names:
+                    continue
+                if (str(path.relative_to(REPO_ROOT)), root) == MUTATION_JOB_ONLY:
                     continue
                 foreign.append(f"{path.relative_to(REPO_ROOT)} imports {name}")
         self.assertEqual(sorted(foreign), [], "third-party imports the guide does not account for")

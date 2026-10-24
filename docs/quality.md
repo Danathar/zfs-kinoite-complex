@@ -77,6 +77,7 @@ Two properties of the badge pipeline are deliberate:
 | `Python Unit Tests` (`test.yml`) | every PR and push to `main` | **merging the pull request**, through the ruleset on `main` — not publishing. See below |
 | `ruff check` | same job | same |
 | Per-module coverage floors (`tests/check_coverage.py`) | same job | same |
+| `Mutation check (advisory)` (`test.yml`, `tests/mutation_check.py`) | every PR | nothing — it reports the changed lines no test notices breaking, on the step summary |
 | `Evaluate Stable Signal Gate` (`build.yml`) | scheduled and `main` pushes | *skips* the build on a scheduled run when upstream has not moved (`build.yml:124`) — a skip, not a failure |
 | `check-akmods-cache` strict mode | before the candidate build | the build, if the cache does not carry a matching `kmod-zfs` |
 | `ci_tools/sign_image.py` under `python3 -I` | in `sign-akmods-cache` and `sign-candidate-image`, before the candidate tag moves | publishing — an unsigned production image is refused outright, and the candidate tag is pointed only at a digest this signed and verified |

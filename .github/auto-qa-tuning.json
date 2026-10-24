@@ -61,6 +61,8 @@
 
   "jobs": [
     { "workflow": "test.yml", "job": "test", "timeout_minutes": 15 },
+    { "workflow": "test.yml", "job": "mutation", "timeout_minutes": 60,
+      "note": "Advisory. Scales with the lines a pull request changes in measured modules; a one-module change runs in seconds." },
 
     { "workflow": "build.yml", "job": "preflight", "timeout_minutes": 20 },
     { "workflow": "build.yml", "job": "build-zfs-akmods", "timeout_minutes": 90,

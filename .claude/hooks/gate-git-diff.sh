@@ -240,8 +240,11 @@ BLAME_MSG='blocked: git blame (and annotate) reads a file named by a blame optio
 # shellcheck disable=SC2016 # the literal $HOME is what the reader has to see
 TILDE_MSG='blocked: an unquoted leading ~ is $HOME to bash and a literal directory inside this checkout to this gate, so the path checked here is not the path git would open: `git diff -- ~/.aws/credentials ~/.bashrc` resolved both operands inside the working tree and printed both files out of the home directory as a plain-file diff, past the Read(...) deny rules in .claude/settings.json. A word of a git invocation that begins with an unquoted ~ (~/..., ~user/..., or ~ alone) is refused rather than expanded. Spell the path out in full, relative to the checkout. A tilde inside a word (HEAD~1) and a quoted or escaped one are literals to bash and are not refused by this rule.'
 
+# shellcheck disable=SC2016 # the literal $(...) and backticks are what the reader has to see
+EXTGLOB_SUBST_MSG='blocked: a command substitution (`$(...)`, a backtick) or a process substitution (`<(...)`, `>(...)`) is written inside an extended glob (`@(...)`, `?(...)`, `*(...)`, `+(...)`, `!(...)`). Bash runs that command before it matches the pattern -- with `shopt -s extglob`, `echo x@(a|$(cat cosign.key))` prints the file -- and this gate reads the whole pattern as one word, so it never checks the command inside. Run the command on its own line, outside the pattern, or quote the pattern in single quotes if it is meant literally.'
+
 # shellcheck disable=SC2016 # the literal $G and $(...) are what the reader has to see
-CMD_MSG='blocked: the name of a command in this string is not spelled literally -- it is built by an expansion (`$G diff ...`, `$(printf git) diff ...`, a backtick in command position), by a brace (`{,git} diff ...`), or by a glob (`g?t`, `/usr/bin/g[i]t`) -- so neither this gate nor the allow rule that matched the string'"'"'s literal prefix can tell which command bash will run, and `G=git; $G diff /dev/null ./cosign.key` runs the plain-file read this gate exists to refuse. Spell every command name literally, and drop a variable assignment that only exists to build one. After a wrapper such as command, env, exec or timeout the same holds for every word of that command, since the wrapper'"'"'s own options are not modelled here; xargs'"'"'s own options are read, and held to the same test. A literal name after an assignment is not what this rule refuses -- the assignment has a refusal of its own -- and a literal path to git (`/usr/bin/git diff`) is read as git. env -S (--split-string) splits a quoted string into a command this gate never sees and is refused outright.'
+CMD_MSG='blocked: the name of a command in this string is not spelled literally -- it is built by an expansion (`$G diff ...`, `$(printf git) diff ...`, a backtick in command position), by a brace (`{,git} diff ...`), or by a glob (`g?t`, `/usr/bin/g[i]t`, and `/usr/bin/g@(i)t` once `shopt -s extglob` is on) -- so neither this gate nor the allow rule that matched the string'"'"'s literal prefix can tell which command bash will run, and `G=git; $G diff /dev/null ./cosign.key` runs the plain-file read this gate exists to refuse. Spell every command name literally, and drop a variable assignment that only exists to build one. After a wrapper such as command, env, exec or timeout the same holds for every word of that command, since the wrapper'"'"'s own options are not modelled here; xargs'"'"'s own options are read, and held to the same test. A literal name after an assignment is not what this rule refuses -- the assignment has a refusal of its own -- and a literal path to git (`/usr/bin/git diff`) is read as git. env -S (--split-string) splits a quoted string into a command this gate never sees and is refused outright.'
 
 # shellcheck disable=SC2016 # the backticks quote command spellings for the reader
 WRAPPER_PATH_MSG='blocked: a wrapper written as a path (`./shim/nohup git diff HEAD`, `/tmp/timeout 5 python3 tests/run_tests.py`) runs the file at that path, while Claude Code'"'"'s permission matcher cuts a wrapper'"'"'s path at its last / or \ and matches the allow rule against the words after it -- so a file an agent wrote and named nohup or timeout runs with the approval meant for `git diff HEAD`. An unquoted backslash needs no file: bash reads `/usr/bin\timeout 5 python3 tests/run_tests.py >out` as the missing command /usr/bintimeout, but truncates out before it says so, while the matcher saw timeout. Only the bare name and /usr/bin/NAME or /bin/NAME, typed without a backslash, are stepped over. Write the bare name (`nohup git diff HEAD`).'
@@ -353,6 +356,58 @@ redirect_pending=0 # the next word is the target of a redirection
 redirect_op=''     # the operator of that redirection, as typed
 after_redirect=0   # the previous unquoted character was `<` or `>`
 subst_depth=0      # open `$(` substitutions, whose `)` is not a subshell's
+extglob_depth=0    # open parentheses of an extended glob in the word being read
+
+# Whether the word ends in an extglob operator (`@`, `+`, `!`, `?`, `*`) that
+# bash leaves unquoted, so a `(` right after it opens an extglob pattern. The
+# quote state is walked rather than read off the character before the
+# operator: an empty quoted prefix (`''@(...)`, `""@(...)`) quotes nothing,
+# and the `@` after it is live. Only content characters count; the quote
+# marks themselves are not the operator.
+word_ends_in_unquoted_extglob_op() {
+  local raw="$1" quote='' escaped=0 i ch last='' last_unquoted=0
+  for ((i = 0; i < ${#raw}; i++)); do
+    ch="${raw:i:1}"
+    if ((escaped)); then
+      escaped=0
+      last="${ch}"
+      last_unquoted=0
+      continue
+    fi
+    if [[ -n "${quote}" ]]; then
+      if [[ "${ch}" == "${quote}" ]]; then
+        quote=''
+      elif [[ "${quote}" == '"' && "${ch}" == $'\\' ]]; then
+        escaped=1
+      else
+        last="${ch}"
+        last_unquoted=0
+      fi
+      continue
+    fi
+    case "${ch}" in
+    $'\\') escaped=1 ;;
+    "'" | '"') quote="${ch}" ;;
+    *)
+      last="${ch}"
+      last_unquoted=1
+      ;;
+    esac
+  done
+  ((last_unquoted)) && [[ "${last}" == [@+!?*] ]]
+}
+
+# Whether a word, as typed, opens an extglob pattern: an unquoted `(` right
+# after an unquoted `@`, `+`, `!`, `?` or `*`.
+word_has_extglob() {
+  local raw="$1" k
+  [[ "${raw}" == *[@+!?*]'('* ]] || return 1
+  for ((k = 1; k < ${#raw}; k++)); do
+    [[ "${raw:k:1}" == '(' ]] || continue
+    word_ends_in_unquoted_extglob_op "${raw:0:k}" && return 0
+  done
+  return 1
+}
 
 push_word() {
   raw_words+=("${raw_word}")
@@ -398,6 +453,20 @@ for ((i = 0; i < ${#command_string}; i++)); do
     fi
     continue
   fi
+  # A command inside an extended glob. Bash expands the pattern before it
+  # matches it, so `x@(a|$(cat cosign.key))` runs `cat cosign.key`. A `$(` or
+  # a backtick there runs unquoted or in double quotes, and a `<(` or `>(`
+  # runs unquoted. The reader below keeps the pattern as the letters of one
+  # word, so none of these reaches the separators that split its body as a
+  # command of its own. They are refused rather than split: a command inside
+  # a glob has no use worth a second reader.
+  if ((extglob_depth)) && [[ "${raw_quote}" != "'" ]]; then
+    # shellcheck disable=SC2016 # the literal `$(` is the text matched
+    if [[ "${ch}" == '`' || "${ch}${next}" == '$(' ]] ||
+      [[ -z "${raw_quote}" && "${ch}" == [\<\>] && "${next}" == '(' ]]; then
+      refuse "${EXTGLOB_SUBST_MSG}"
+    fi
+  fi
   if [[ -n "${raw_quote}" ]]; then
     raw_word+="${ch}"
     if [[ "${ch}" == "${raw_quote}" ]]; then
@@ -405,6 +474,35 @@ for ((i = 0; i < ${#command_string}; i++)); do
     elif [[ "${raw_quote}" == '"' && "${ch}" == $'\\' ]]; then
       raw_escaped=1
     fi
+    continue
+  fi
+  # An extended glob. With `shopt -s extglob` -- one line of the command can
+  # set it for the next -- bash reads `@(`, `?(`, `*(`, `+(` and `!(` as the
+  # start of a pattern inside the word, up to the matching `)`, spaces and
+  # all, so `/usr/bin/g@(i)t` is one word that runs git. Split at the `(`,
+  # it was a word ending in `@`, a subshell and a command `t`, and none of
+  # them was a name this gate checks. It is kept as one word here and marked
+  # as a glob, which every test of a word bash rewrites then reads as the
+  # pattern it is. Without extglob the same text is a syntax error and
+  # nothing runs, except `!(cmd)` in command position, which is then a
+  # negated subshell; that one is refused as a name (write `! (cmd)`).
+  if ((extglob_depth)); then
+    case "${ch}" in
+    $'\\' | "'" | '"') ;;
+    *)
+      raw_word+="${ch}"
+      if [[ "${ch}" == '(' ]]; then
+        ((extglob_depth++))
+      elif [[ "${ch}" == ')' ]]; then
+        ((extglob_depth--))
+      fi
+      continue
+      ;;
+    esac
+  elif [[ "${ch}" == '(' ]] && word_ends_in_unquoted_extglob_op "${raw_word}"; then
+    extglob_depth=1
+    raw_glob=1
+    raw_word+="${ch}"
     continue
   fi
   case "${ch}" in
@@ -565,11 +663,13 @@ in_backtick=0
 name_stack=() # the outer command's state, while a `$(...)` is being read
 
 # Whether a word in the name position is spelled literally: no `$`, no
-# backtick, no glob and no brace bash would expand. `[` and `[[` are
+# backtick, no glob or extglob pattern (`/usr/bin/g@(i)t` is git once `shopt
+# -s extglob` is on) and no brace bash would expand. `[` and `[[` are
 # commands, not globs.
 word_is_literal() {
   local raw="$1" plain="$2"
   [[ "${raw}" == *'$'* || "${raw}" == *'`'* || "${raw}" == *'*'* || "${raw}" == *'?'* ]] && return 1
+  word_has_extglob "${raw}" && return 1
   brace_would_expand "${raw}" && return 1
   [[ "${raw}" == *'['* && "${plain}" != '[' && "${plain}" != '[[' ]] && return 1
   return 0
@@ -1039,17 +1139,14 @@ word_substitutes() {
 # `=` value, and after `-q` alone, attached (`-qenv`, `-q=env`) or last in a
 # cluster of one-letter flags (`-wq env`). It is refused when it names the
 # environment, when bash would rewrite it before gh reads it, and when it
-# opens an extglob -- `@(env)` is a word ending in `@` followed by a `(`, which
-# the split above reads as a separator.
+# opens an extglob -- `@(env)`, which the split above keeps as one word.
 check_gh_filter() {
   local at="$1" filter="$2"
   jq_filter_reads_env "${filter}" && refuse "${GH_JQ_ENV_MSG}"
   word_substitutes "${raw_words[at]}" && refuse "${GH_JQ_ENV_MSG}"
   brace_would_expand "${raw_words[at]}" && refuse "${GH_JQ_ENV_MSG}"
   ((${globs[at]:-0})) && refuse "${GH_JQ_ENV_MSG}"
-  if [[ "${raw_words[at]}" == *[@?*+!] && "${kinds[at + 1]:-}" == sep && "${words[at + 1]:-}" == '(' ]]; then
-    refuse "${GH_JQ_ENV_MSG}"
-  fi
+  word_has_extglob "${raw_words[at]}" && refuse "${GH_JQ_ENV_MSG}"
   return 0
 }
 
@@ -1642,17 +1739,65 @@ text_gated_name() {
 }
 
 # Whether a word cut from a command string is the name $2: as itself, or as
-# a glob that matches it.
+# a glob that matches it, an extglob pattern (`g@(i)t`) included, which
+# `[[ == ]]` matches as extglob whatever the shell option says.
 piece_names() {
   [[ "$1" == "$2" ]] && return 0
   # shellcheck disable=SC2053 # the word is matched as a pattern on purpose
-  [[ "$1" == *[*?[]* && "$2" == $1 ]]
+  [[ "$1" == *[*?[]* || "$1" == *[@+!?*]'('* ]] && [[ "$2" == $1 ]]
+}
+
+# The words of a string that hold an extglob pattern, into `extglob_found`,
+# each cut where bash would end it: at whitespace or an operator outside the
+# pattern's parentheses, not inside them. The cut at
+# COMMAND_STRING_SEPARATORS below splits `/usr/bin/g@(i)t` into `/usr/bin/g@`,
+# `i` and `t`, none of which is git.
+extglob_words() {
+  local text="$1" k ch depth=0 word=''
+  extglob_found=()
+  for ((k = 0; k < ${#text}; k++)); do
+    ch="${text:k:1}"
+    if ((depth)); then
+      word+="${ch}"
+      if [[ "${ch}" == '(' ]]; then
+        depth=$((depth + 1))
+      elif [[ "${ch}" == ')' ]]; then
+        depth=$((depth - 1))
+      fi
+      continue
+    fi
+    case "${ch}" in
+    [$' \t\n;&<>`|'])
+      [[ "${word}" == *[@+!?*]'('* ]] && extglob_found+=("${word}")
+      word=''
+      ;;
+    '(')
+      [[ "${word}" == *[@+!?*] ]] && depth=1
+      word+="${ch}"
+      ;;
+    *) word+="${ch}" ;;
+    esac
+  done
+  [[ "${word}" == *[@+!?*]'('* ]] && extglob_found+=("${word}")
+  return 0
 }
 
 text_names_gated() {
-  local at base prefix k first
+  local at base prefix k first word
   local -a pieces parts
   text_git=0
+  if [[ "$1" == *[@+!?*]'('* ]]; then
+    extglob_words "$1"
+    for word in "${extglob_found[@]+"${extglob_found[@]}"}"; do
+      if piece_names "${word##*/}" git; then
+        text_git=1
+        return 0
+      fi
+      for first in "${gated_first_words[@]}"; do
+        piece_names "${word##*/}" "${first}" && return 0
+      done
+    done
+  fi
   IFS=$' \t\n' read -r -d '' -a pieces <<<"${1//["${COMMAND_STRING_SEPARATORS}"]/ }" || true
   for ((at = 0; at < ${#pieces[@]}; at++)); do
     base="${pieces[at]##*/}"
@@ -1953,6 +2098,7 @@ for ((idx = 0; idx < ${#words[@]}; idx++)); do
     [[ "${word}" == *"${first}"* || "${spelled}" == *"${first}"* ]] && candidate=1
   done
   [[ "${raw_words[idx]}" == *"\$'"* || "${raw_words[idx]}" == *[*?[]* ]] && candidate=1
+  [[ "${raw_words[idx]}" == *[@+!?*]'('* ]] && candidate=1
   ((candidate)) || continue
   unquote_word "${raw_words[idx]}"
   command_string_texts "${unquoted}"

@@ -2559,6 +2559,72 @@ CORPUS: tuple[Row, ...] = (
         "allowed",
         'a glob that matches no gated name is not read as one',
     ),
+    # An extended glob keeps its pattern inside the word once `shopt -s
+    # extglob` is on, and one line of a command string can turn it on for the
+    # next: `/usr/bin/g@(i)t` is one word that runs git. The gate split it at
+    # its `(` into `/usr/bin/g@`, a subshell and a command `t`, none of them a
+    # name it checks. Each refused row below exited 0 before.
+    Row(
+        "command name",
+        'shopt -s extglob\n/usr/bin/g@(i)t diff /dev/null ./.env',
+        "refused",
+        'an extglob pattern the shell matches to /usr/bin/git',
+        "Spell every command name literally",
+    ),
+    Row(
+        "command name",
+        'shopt -s extglob\ntouch git; g@(i)t diff /dev/null ./.env',
+        "refused",
+        'a bare extglob pattern that matches a file named git, which runs git',
+        "Spell every command name literally",
+    ),
+    Row(
+        "command name",
+        'shopt -s extglob\n/usr/bin/g@(h) pr view 1 --json number --jq env',
+        "refused",
+        'an extglob pattern the shell matches to /usr/bin/gh, whose filter reads the environment',
+        "Spell every command name literally",
+    ),
+    Row(
+        "command name",
+        'shopt -s extglob\nsetarch x86_64 /usr/bin/g@(i)t diff /dev/null ./.env',
+        "refused",
+        'an extglob pattern behind a program that the shell matches to /usr/bin/git',
+        "as a command of its own",
+    ),
+    Row(
+        "command name",
+        'shopt -s extglob\nsetarch x86_64 g+(h) pr view 1 --json number --jq env',
+        "refused",
+        'a bare extglob pattern behind a program that matches gh',
+        "as a command of its own",
+    ),
+    Row(
+        "command name",
+        "bash -c 'shopt -s extglob\n/usr/bin/g@(i)t diff /dev/null ./.env'",
+        "refused",
+        'a string whose shell turns extglob on and then runs /usr/bin/g@(i)t',
+        "as a command of its own",
+    ),
+    Row(
+        "command name",
+        'echo x@(a|$(cat .env))',
+        "refused",
+        'bash runs a substitution inside an extglob pattern before it matches the pattern',
+        "inside an extended glob",
+    ),
+    Row(
+        "command name",
+        "find . -name '*.@(sh|py)'",
+        "allowed",
+        'a quoted extglob pattern handed to a program is read, and one that matches no gated name passes',
+    ),
+    Row(
+        "command name",
+        'echo @(a|b)',
+        "allowed",
+        'an extglob pattern that matches no gated name is not read as one',
+    ),
     # --- 5. an option that loads or writes ---------------------------------
     Row(
         "options",
@@ -2848,6 +2914,36 @@ UNREACHABLE_SHAPES: tuple[tuple[str, str, str], ...] = (
 # notices is a rule the suite does not hold.
 MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
     (
+        "keeping an extglob pattern inside its word",
+        'elif [[ "${ch}" == \'(\' ]] && word_ends_in_unquoted_extglob_op "${raw_word}"; then',
+        "elif false; then",
+        'shopt -s extglob\n/usr/bin/g@(i)t diff /dev/null ./.env',
+    ),
+    (
+        "refusing an extglob pattern as a command name",
+        '  word_has_extglob "${raw}" && return 1\n  brace_would_expand',
+        "  brace_would_expand",
+        'shopt -s extglob\ntouch git; g@(i)t diff /dev/null ./.env',
+    ),
+    (
+        "refusing a substitution inside an extglob pattern",
+        '      refuse "${EXTGLOB_SUBST_MSG}"',
+        "      :",
+        'echo x@(a|$(cat .env))',
+    ),
+    (
+        "matching an extglob pattern as a pattern",
+        '[[ "$1" == *[*?[]* || "$1" == *[@+!?*]\'(\'* ]] && [[ "$2" == $1 ]]',
+        '[[ "$1" == *[*?[]* ]] && [[ "$2" == $1 ]]',
+        'shopt -s extglob\nsetarch x86_64 g+(h) pr view 1 --json number --jq env',
+    ),
+    (
+        "reading an extglob word of a command string whole",
+        '    extglob_words "$1"',
+        "    extglob_found=()",
+        "bash -c 'shopt -s extglob\n/usr/bin/g@(i)t diff /dev/null ./.env'",
+    ),
+    (
         "the leading-assignment refusal",
         '((cmd_git && cmd_assign)) && refuse "${GATED_ENV_MSG}"',
         "((cmd_git && cmd_assign)) && true",
@@ -3025,7 +3121,7 @@ MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
     ),
     (
         "matching a word with a glob character as a pattern",
-        '[[ "$1" == *[*?[]* && "$2" == $1 ]]',
+        '[[ "$1" == *[*?[]* || "$1" == *[@+!?*]\'(\'* ]] && [[ "$2" == $1 ]]',
         "false",
         "sh -c '/usr/bin/g?t diff /dev/null ./.env'",
     ),

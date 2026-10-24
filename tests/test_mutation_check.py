@@ -264,6 +264,21 @@ class ImportsTargetTests(unittest.TestCase):
             with self.subTest(source=source):
                 self.assertFalse(self.imports(source, "ci_tools/common.py"))
 
+    def test_a_package_init_is_imported_by_the_package_name(self) -> None:
+        for source in (
+            "import ci_tools\n",
+            "import ci_tools as tools\n",
+            "from ci_tools import cli\n",
+        ):
+            with self.subTest(source=source):
+                self.assertTrue(self.imports(source, "ci_tools/__init__.py"))
+        for source in (
+            "import shared\n",
+            "from shared import oci_layout\n",
+        ):
+            with self.subTest(source=source):
+                self.assertFalse(self.imports(source, "ci_tools/__init__.py"))
+
     def test_a_script_loaded_by_its_file_name_counts(self) -> None:
         source = (
             "import importlib.util\n"

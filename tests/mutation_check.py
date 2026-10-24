@@ -146,10 +146,11 @@ def skip_unwanted(session: Path, lines: set[int], spans) -> None:
 def imports_target(tree: ast.Module, target: str) -> bool:
     """Whether a parsed test file imports `target`, by module name or by file name.
 
-    A module in a package is imported by its dotted name. A script outside one
-    is loaded with spec_from_file_location from a path that names its file.
+    A module in a package is imported by its dotted name, and a package's
+    __init__.py by the package's own name. A script outside one is loaded with
+    spec_from_file_location from a path that names its file.
     """
-    dotted = target.removesuffix(".py").replace("/", ".")
+    dotted = target.removesuffix(".py").replace("/", ".").removesuffix(".__init__")
     package, _, module = dotted.rpartition(".")
     calls, constants = set(), set()
     for node in ast.walk(tree):

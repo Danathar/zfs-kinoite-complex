@@ -481,8 +481,11 @@ class CheckTests(unittest.TestCase):
             calls.append(("skip", session.name, lines, bool(spans)))
 
         tests = ("tests/test_oci_layout.py",)
+        def baseline(tests):
+            calls.append(("baseline", tests))
+
         with tempfile.TemporaryDirectory() as tmp, mock.patch.multiple(
-            mutation_check, cosmic_ray=cosmic_ray, git=git, skip_unwanted=skip
+            mutation_check, cosmic_ray=cosmic_ray, git=git, skip_unwanted=skip, baseline=baseline
         ):
             counts, found = mutation_check.check(
                 "shared/oci_layout.py", tests, "origin/main", Path(tmp)
@@ -492,6 +495,7 @@ class CheckTests(unittest.TestCase):
         self.assertEqual(
             calls,
             [
+                ("baseline", tests),
                 ("cosmic-ray", "init"),
                 ("git", ("diff", "-U0", "origin/main", "--", "shared/oci_layout.py")),
                 ("skip", "shared_oci_layout.py.sqlite", {1, 2}, True),
@@ -501,6 +505,36 @@ class CheckTests(unittest.TestCase):
         )
         self.assertEqual(counts, {"survived": 1})
         self.assertEqual(found[0]["line"], '"""')
+
+    def test_a_failing_baseline_stops_before_any_mutant_runs(self) -> None:
+        error = subprocess.CalledProcessError(1, ["pytest"], output="1 failed\n")
+        cosmic_ray = mock.Mock()
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.multiple(
+            mutation_check, cosmic_ray=cosmic_ray, baseline=mock.Mock(side_effect=error)
+        ), self.assertRaises(subprocess.CalledProcessError):
+            mutation_check.check("shared/oci_layout.py", ("tests/t.py",), "b", Path(tmp))
+        cosmic_ray.assert_not_called()
+
+    def test_the_baseline_runs_the_mutants_test_command_unmutated(self) -> None:
+        tests = ("tests/test_a.py",)
+        with mock.patch.object(subprocess, "run") as run:
+            mutation_check.baseline(tests)
+        run.assert_called_once_with(
+            mutation_check.test_command(tests), check=True, capture_output=True, text=True
+        )
+        command = json.dumps(" ".join(mutation_check.test_command(tests)))
+        self.assertIn(command, config_text("m.py", tests))
+
+    def test_the_baseline_raises_only_when_the_tests_fail(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            passing = Path(tmp) / "test_passes.py"
+            passing.write_text("def test_passes():\n    assert True\n")
+            failing = Path(tmp) / "test_fails.py"
+            failing.write_text("def test_fails():\n    assert False\n")
+            mutation_check.baseline((str(passing),))
+            with self.assertRaises(subprocess.CalledProcessError) as raised:
+                mutation_check.baseline((str(failing),))
+        self.assertIn("1 failed", raised.exception.stdout)
 
     def test_the_process_helpers_run_git_and_cosmic_ray_from_this_interpreter(self) -> None:
         with mock.patch.object(
@@ -604,6 +638,15 @@ class MainTests(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertEqual(out, "")
         self.assertEqual(err, "mutation check failed: python -m cosmic_ray.cli exec\nboom\n\n")
+
+    def test_a_failing_baseline_exits_2_with_the_pytest_output(self) -> None:
+        error = subprocess.CalledProcessError(1, ["python", "-m", "pytest"], output="1 failed\n")
+        code, out, err, _, _, _ = self.run_main(
+            ["--base", "b"], changed="ci_tools/a.py\n", check=mock.Mock(side_effect=error)
+        )
+        self.assertEqual(code, 2)
+        self.assertEqual(out, "")
+        self.assertEqual(err, "mutation check failed: python -m pytest\n1 failed\n\n")
 
     def test_a_module_the_change_deleted_is_not_checked(self) -> None:
         with tempfile.TemporaryDirectory() as repo:

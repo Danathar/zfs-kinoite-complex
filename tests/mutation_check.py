@@ -21,11 +21,16 @@ Two things differ:
     reaches a module through another one, or through a subprocess (tests/e2e/),
     is not run, so a mutant only such a test kills is reported as a survivor.
 
+Before mutating a module it runs that module's test files once against the
+unmodified code. A test that already fails there would kill every mutant, and
+the report would read as clean, so a failing baseline stops the run instead.
+
 It mutates the files in place, one mutant at a time, and cosmic-ray restores
 each file afterwards. Run it in a checkout you are not editing.
 
 Exit status: 0 when no unaccepted mutant survives, 1 when one does or when a
-changed module has no test file that imports it, 2 when cosmic-ray itself fails.
+changed module has no test file that imports it, 2 when the unmodified tests
+fail or cosmic-ray itself fails.
 """
 
 from __future__ import annotations
@@ -173,11 +178,16 @@ def importing_tests(target: str) -> tuple[str, ...]:
     )
 
 
-def config_text(target: str, tests: tuple[str, ...]) -> str:
-    """A cosmic-ray config that mutates `target` and runs `tests` against it."""
+def test_command(tests: tuple[str, ...]) -> list[str]:
+    """The pytest command that runs `tests`, against a mutant or the unmodified code."""
     # -x stops at the first failure: one is enough to kill the mutant. The
     # cache plugin is off so a run leaves no .pytest_cache behind.
-    command = [sys.executable, "-m", "pytest", "-x", "-q", "-p", "no:cacheprovider", *tests]
+    return [sys.executable, "-m", "pytest", "-x", "-q", "-p", "no:cacheprovider", *tests]
+
+
+def config_text(target: str, tests: tuple[str, ...]) -> str:
+    """A cosmic-ray config that mutates `target` and runs `tests` against it."""
+    command = test_command(tests)
     return "\n".join(
         [
             "[cosmic-ray]",
@@ -301,10 +311,20 @@ def cosmic_ray(*args: str) -> str:
     ).stdout
 
 
+def baseline(tests: tuple[str, ...]) -> None:
+    """Run `tests` against the unmodified code; raise CalledProcessError when they fail.
+
+    A test that fails without any mutant, at collection or because of the
+    environment, fails against every mutant too, so each would count as killed.
+    """
+    subprocess.run(test_command(tests), check=True, capture_output=True, text=True)
+
+
 def check(
     target: str, tests: tuple[str, ...], base: str, workdir: Path
 ) -> tuple[dict[str, int], list[dict]]:
     """Mutate the lines of `target` that differ from `base`; return the outcome."""
+    baseline(tests)
     config = workdir / (target.replace("/", "_") + ".toml")
     session = config.with_suffix(".sqlite")
     config.write_text(config_text(target, tests), encoding="utf-8")
@@ -343,7 +363,9 @@ def main(argv=None) -> int:
                 tests = importing_tests(target)
                 results[target] = check(target, tests, args.base, Path(workdir)) if tests else None
     except subprocess.CalledProcessError as error:
-        print(f"mutation check failed: {' '.join(error.cmd)}\n{error.stderr}", file=sys.stderr)
+        # pytest writes its failures to stdout, cosmic-ray to stderr.
+        output = "".join(part for part in (error.stdout, error.stderr) if part)
+        print(f"mutation check failed: {' '.join(error.cmd)}\n{output}", file=sys.stderr)
         return 2
     text, new = report(results, accepted)
     print(text, end="")

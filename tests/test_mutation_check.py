@@ -264,17 +264,22 @@ class ImportsTargetTests(unittest.TestCase):
             with self.subTest(source=source):
                 self.assertFalse(self.imports(source, "ci_tools/common.py"))
 
-    def test_a_package_init_is_imported_by_the_package_name(self) -> None:
+    def test_any_import_of_a_package_runs_its_init(self) -> None:
         for source in (
             "import ci_tools\n",
             "import ci_tools as tools\n",
             "from ci_tools import cli\n",
+            "import ci_tools.common\n",
+            "from ci_tools.common import CiToolError\n",
         ):
             with self.subTest(source=source):
                 self.assertTrue(self.imports(source, "ci_tools/__init__.py"))
         for source in (
             "import shared\n",
             "from shared import oci_layout\n",
+            "from shared.oci_layout import unpack_layer_tarballs\n",
+            "import ci_tools_extra\n",
+            "from ci_tools_extra.common import x\n",
         ):
             with self.subTest(source=source):
                 self.assertFalse(self.imports(source, "ci_tools/__init__.py"))

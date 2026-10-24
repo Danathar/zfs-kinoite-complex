@@ -146,19 +146,27 @@ def skip_unwanted(session: Path, lines: set[int], spans) -> None:
 def imports_target(tree: ast.Module, target: str) -> bool:
     """Whether a parsed test file imports `target`, by module name or by file name.
 
-    A module in a package is imported by its dotted name, and a package's
-    __init__.py by the package's own name. A script outside one is loaded with
+    A module in a package is imported by its dotted name. A package's
+    __init__.py runs on any import of the package or of a module in it, so
+    each of those counts. A script outside one is loaded with
     spec_from_file_location from a path that names its file.
     """
-    dotted = target.removesuffix(".py").replace("/", ".").removesuffix(".__init__")
+    dotted = target.removesuffix(".py").replace("/", ".")
+    is_init = dotted.endswith(".__init__")
+    if is_init:
+        dotted = dotted.removesuffix(".__init__")
     package, _, module = dotted.rpartition(".")
+
+    def names_target(name: str) -> bool:
+        return name == dotted or (is_init and name.startswith(dotted + "."))
+
     calls, constants = set(), set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
-            if any(alias.name == dotted for alias in node.names):
+            if any(names_target(alias.name) for alias in node.names):
                 return True
         elif isinstance(node, ast.ImportFrom) and node.level == 0:
-            if node.module == dotted:
+            if names_target(node.module):
                 return True
             if node.module == package and any(alias.name == module for alias in node.names):
                 return True

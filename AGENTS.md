@@ -178,6 +178,42 @@ A person who was not in your head will read what you write. Write for them.
 - Keep the body under about 300 words. Long evidence (mutation lists, full test output, logs) goes in a collapsed `<details>` block.
 - Issues: state the problem as a user would see it, then the evidence, then the proposed fix. The title says what is wrong, not what kind of finding it is; keep any prefix the tooling requires.
 
+## 9. Findings about the Bash guard hook: what is in scope
+
+The Bash guard, `.claude/hooks/gate-git-diff.sh`, re-gates the commands
+`.claude/settings.json` allows without a prompt. It refuses the ways `git diff`,
+`git log`, `git show` and `git blame` can print a file the Read deny rules
+protect or write over one, and the same writes through the other allow-listed
+commands. It does not guard every command. It catches **mistakes by an agent
+that is following these rules**. It is not a sandbox against an agent that is
+trying to get around it. A shell can spell a command in endless ways, and a
+reader in a hook cannot keep up with all of them. Do not file, and do not fix
+unprompted, findings of this kind:
+
+- **Disguised spellings.** A blocked command gets through only when its name
+  or arguments are written in a form nobody types in ordinary work: quote
+  marks inside a word (`g"i"t`), brace, wildcard or extended-glob names
+  (`{git,}`, `g?t`, `g@(i)t`), backslash-newline splits, `$'...'` escapes,
+  variables or command substitution that build the name, or the same tricks
+  inside a command string handed to another shell or wrapper program.
+
+These are still in scope. File them as usual:
+
+- **The hook fails open.** It crashes, times out, or is missing a tool, and
+  the command runs unchecked.
+- **An ordinary spelling gets through.** The command is written the way an
+  agent would type it doing normal work: the plain name, its full path
+  (`/usr/bin/git`), a documented short option or alias (`git blame -S`, `git
+  annotate`), or the plain command behind a wrapper program (`timeout`,
+  `xargs`, `flock`, `watch`). Wrapped commands stay in scope under the
+  ruling on Danathar/atomic-image-builder#772.
+- **A regression.** A case the hook's tests already cover stops being
+  refused.
+- **The hook blocks normal work it should allow.**
+
+This is a standing ruling, not a gap to report: an agent that has to disguise
+a command to run it is already breaking the rules in this file.
+
 ---
 
 **These guidelines are working if:** diffs stay small, no invented APIs appear, verification commands are run before "done", and clarifying questions come before implementation rather than after mistakes.

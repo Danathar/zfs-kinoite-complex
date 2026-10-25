@@ -73,7 +73,9 @@ applies as-is. What each rule does:
   and no `if:`. `Build PR Image (No Push)` in `build-pr.yml` is not required,
   because `build-pr.yml` ignores Markdown and `docs/**`, so a docs-only pull
   request never gets it and would wait forever. `Apply area labels`
-  classifies a change rather than checking it. `integration_id` 15368 is
+  classifies a change rather than checking it. `Mutation check (advisory)` in
+  `test.yml` reports on the step summary and never fails the run, so it has
+  nothing to require. `integration_id` 15368 is
   GitHub Actions, so a status with the same name posted by anything else does
   not count.
 

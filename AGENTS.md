@@ -147,7 +147,7 @@ After each step, run the verification before moving on. If verification fails, s
 
 ## 6. Tooling discipline (this repo)
 
-- Python CI logic lives in [ci_tools/](ci_tools/) and is invoked through [ci_tools/cli.py](ci_tools/cli.py). Add new commands by registering them there and writing a paired test under [tests/](tests/).
+- Python CI logic lives in [ci_tools/](ci_tools/) and is invoked through [ci_tools/cli.py](ci_tools/cli.py). Add new commands by registering them there and writing a paired test under [tests/](tests/). The exception is tooling that checks the tests themselves, such as `tests/check_coverage.py` and `tests/mutation_check.py`: it lives in [tests/](tests/) and `test.yml` runs it directly, because `ci_tools/` is standard library only and that tooling is not part of the build.
 - Most of `ci_tools/` is also in the sister project [zfs-aurora-complex](https://github.com/Danathar/zfs-aurora-complex), which is the one used in production. Its [`docs/sibling-delta.md`](https://github.com/Danathar/zfs-aurora-complex/blob/main/docs/sibling-delta.md) lists each module and whether the two copies are the same. When you change a module that also exists there, check its row and, unless the change is specific to this repository, open an issue in the sister to port it. Nothing on this side reminds anyone, so a fix made only here stays here.
 - Workflow YAML lives in [.github/workflows/](.github/workflows/); reusable pieces go in [.github/actions/](.github/actions/) as composite actions.
 - Do not edit `cosign.key` (gitignored anyway) or alter signing logic without explicit instruction.

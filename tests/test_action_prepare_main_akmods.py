@@ -16,8 +16,8 @@ untested is not the helpers -- those are covered -- but the wiring between them,
 decisions live that are invisible once a job is green: the build's `set -o pipefail` (without it
 `tee` succeeds, the step exits 0 and reports a rebuild that never happened), the `2>&1` that puts
 the compiler's stderr into the log the classification step later reads, the `rebuilt=true` marker
-written only on the success path, the log path that two steps must agree on, and the deliberate
-mapping of `ZFS_MINOR_VERSION` to the resolved *patch* version rather than the minor line.
+written only on the success path, the log path that two steps must agree on, and the hand-off
+of the resolved *patch* version to the akmods build as `ZFS_VERSION`, the name the fork reads.
 Goal: Make a broken hand-off between these steps fail here rather than as a shared cache that was
 republished wrong, a green run that signed nothing, or a sticky issue that never opened.
 
@@ -518,18 +518,21 @@ class BuildAndPublishStepTests(unittest.TestCase):
 
     def test_the_build_is_handed_the_exact_resolved_patch_version_not_the_minor_line(self) -> None:
         """
-        `ZFS_MINOR_VERSION` is deliberately given the patch version despite its name.
+        The akmods build gets the patch version this run resolved, as `ZFS_VERSION`.
 
-        The akmods fork treats the value as a prefix and picks the newest release starting with
-        it, so passing the line ("2.4") lets the fork resolve a different patch than this repo
-        did -- and the image would then carry a zfs-version label that does not match the module
-        it ships. The two values differ by three characters and the step reads a nearby output
-        that holds the wrong one, so this is a single-word edit away at all times.
+        The akmods fork's Justfile reads `ZFS_VERSION` as an override of its own pinned OpenZFS
+        version, and its ZFS build script accepts only a full X.Y.Z. Under any other name the
+        value is ignored and the fork builds its own pin, which lags a new OpenZFS patch, so the
+        image would carry a zfs-version label that does not match the module it ships. The fork
+        no longer reads `ZFS_MINOR_VERSION` at all, so passing the value only under that name
+        is the failure this pins against. The line ("2.4") sits in a nearby output and would be
+        refused by the fork, so it must not be the value either.
         """
 
         env = _run_step(BUILD_STEP).only_call.env
-        self.assertEqual(env["ZFS_MINOR_VERSION"], ZFS_PATCH_VERSION)
-        self.assertNotEqual(env["ZFS_MINOR_VERSION"], ZFS_MINOR_LINE)
+        self.assertEqual(env["ZFS_VERSION"], ZFS_PATCH_VERSION)
+        self.assertNotEqual(env["ZFS_VERSION"], ZFS_MINOR_LINE)
+        self.assertNotIn("ZFS_MINOR_VERSION", env)
 
     def test_the_build_is_given_the_credentials_and_target_the_shared_cache_push_needs(
         self,

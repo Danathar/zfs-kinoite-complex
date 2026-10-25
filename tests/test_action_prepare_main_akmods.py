@@ -371,6 +371,7 @@ else
 fi
 """
 
+
 def _run_step(
     name: str,
     *,
@@ -378,7 +379,6 @@ def _run_step(
     curl_body: Path | None = None,
     env_overrides: dict[str, str] | None = None,
 ) -> Result:
-    """
     """Execute one step's `run:` body under bash with its resolved `env:` and a stubbed python3."""
 
     with tempfile.TemporaryDirectory() as tmp:

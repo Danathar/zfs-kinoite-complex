@@ -1912,8 +1912,16 @@ unquote_word() {
 # word itself when it holds more than one word of its own, the value after a
 # long option's `=`, and every tail of a short-option cluster, since which
 # letter takes a value is not modelled and trying each can only over-refuse.
+#
+# Each string is read a second time with its backslash-newline pairs
+# removed, when it has any. The shell the string is handed to drops a
+# `\<newline>` outside single quotes before it reads a word, so
+# `bash -c 'gi\<newline>t diff ...'` runs git while neither `gi` nor `t` is a
+# gated name; the single quotes around the string kept the pair from the
+# join this hook makes of the command it was given. The second reading can
+# only add a refusal.
 command_string_texts() {
-  local word="$1" cut
+  local word="$1" cut k count
   texts=()
   [[ "${word}" == *["${COMMAND_STRING_SEPARATORS}"$' \t\n']* ]] && texts+=("${word}")
   if [[ "${word}" == --* ]]; then
@@ -1923,6 +1931,11 @@ command_string_texts() {
       texts+=("${word:cut}")
     done
   fi
+  count=${#texts[@]}
+  for ((k = 0; k < count; k++)); do
+    [[ "${texts[k]}" == *$'\\\n'* ]] && texts+=("${texts[k]//$'\\\n'/}")
+  done
+  return 0
 }
 
 # The command that starts at word $1, as typed, up to the end of its own
@@ -2093,12 +2106,15 @@ for ((idx = 0; idx < ${#words[@]}; idx++)); do
   # The word as typed with the quote characters the shell removes taken out
   # (`g$""it` is `git`), and any glob, which may match a gated name it does
   # not spell (`/usr/bin/g?t`).
-  spelled="${raw_words[idx]//[\"\'\\\$\{\},]/}"
+  # A backslash-newline pair is dropped first, as the shell a command string
+  # is handed to drops it (`'gi\<newline>t'` is `git` there).
+  joined="${raw_words[idx]//$'\\\n'/}"
+  spelled="${joined//[\"\'\\\$\{\},]/}"
   for first in "${gated_first_words[@]}"; do
     [[ "${word}" == *"${first}"* || "${spelled}" == *"${first}"* ]] && candidate=1
   done
   [[ "${raw_words[idx]}" == *"\$'"* || "${raw_words[idx]}" == *[*?[]* ]] && candidate=1
-  [[ "${raw_words[idx]}" == *[@+!?*]'('* ]] && candidate=1
+  [[ "${joined}" == *[@+!?*]'('* ]] && candidate=1
   ((candidate)) || continue
   unquote_word "${raw_words[idx]}"
   command_string_texts "${unquoted}"

@@ -2606,6 +2606,78 @@ CORPUS: tuple[Row, ...] = (
         'a string whose shell turns extglob on and then runs /usr/bin/g@(i)t',
         "as a command of its own",
     ),
+    # A backslash-newline inside a single-quoted command string: the quotes
+    # keep it from the join this hook makes of the command it is given, and
+    # the shell the string is handed to drops it before it reads a word, so
+    # `gi\<newline>t` is git there. Every refused row below exited 0 before.
+    Row(
+        "command name",
+        "bash -c 'gi\\\nt diff /dev/null ./cosign.key'",
+        "refused",
+        "the shell bash -c starts joins gi and t into git and prints the signing key beside /dev/null",
+        "as a command of its own",
+    ),
+    Row(
+        "command name",
+        "sh -c 'g\\\nit log -p --output=cosign.pub -1'",
+        "refused",
+        "the joined name with git's write primitive overwrites the trust anchor",
+        "as a command of its own",
+    ),
+    Row(
+        "command name",
+        "script -qc 'gi\\\nt diff /dev/null ./.env' /dev/null",
+        "refused",
+        "the shell script -c starts joins the pair the same way",
+        "as a command of its own",
+    ),
+    Row(
+        "command name",
+        "watch 'gi\\\nt diff /dev/null ./.env'",
+        "refused",
+        "watch hands its words to sh -c, which joins the pair",
+        "as a command of its own",
+    ),
+    Row(
+        "command name",
+        "bash -O extglob -c '/usr/bin/g@\\\n(i)t diff /dev/null ./.env'",
+        "refused",
+        "joined, the string is the extended glob /usr/bin/g@(i)t, which matches /usr/bin/git",
+        "as a command of its own",
+    ),
+    Row(
+        "command name",
+        "bash -c 'g\\\nh pr view 1 --json number --jq env'",
+        "refused",
+        "joined, the name is gh and the filter prints GH_TOKEN",
+        "as a command of its own",
+    ),
+    Row(
+        "command name",
+        "bash -c 'sko\\\npeo inspect docker://quay.io/x/y >cosign.pub'",
+        "refused",
+        "joined, the name is skopeo and its output overwrites the trust anchor",
+        "as a command of its own",
+    ),
+    Row(
+        "command name",
+        "setarch x86_64 bash -c 'gi\\\nt diff /dev/null ./.env'",
+        "refused",
+        "the string is read the same way behind a further program",
+        "as a command of its own",
+    ),
+    Row(
+        "command name",
+        "bash -c 'gi\\\nt status'",
+        "allowed",
+        "the joined command is git status, which passes on its own",
+    ),
+    Row(
+        "command name",
+        "bash -c 'ls \\\ndocs'",
+        "allowed",
+        "a continuation that joins no gated name is left alone",
+    ),
     Row(
         "command name",
         'echo x@(a|$(cat .env))',
@@ -2942,6 +3014,24 @@ MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
         '    extglob_words "$1"',
         "    extglob_found=()",
         "bash -c 'shopt -s extglob\n/usr/bin/g@(i)t diff /dev/null ./.env'",
+    ),
+    (
+        "a command string read with its backslash-newline pairs joined",
+        """    [[ "${texts[k]}" == *$'\\\\\\n'* ]] && texts+=("${texts[k]//$'\\\\\\n'/}")""",
+        "    :",
+        "bash -c 'gi\\\nt diff /dev/null ./cosign.key'",
+    ),
+    (
+        "a word read as a candidate when its joined text names a gated command",
+        """  joined="${raw_words[idx]//$'\\\\\\n'/}"\n  spelled="${joined//""",
+        """  joined="${raw_words[idx]}"\n  spelled="${joined//""",
+        "script -qc 'gi\\\nt diff /dev/null ./.env' /dev/null",
+    ),
+    (
+        "an extglob candidate read from its joined text",
+        """  [[ "${joined}" == *[@+!?*]'('* ]] && candidate=1""",
+        """  [[ "${raw_words[idx]}" == *[@+!?*]'('* ]] && candidate=1""",
+        "bash -O extglob -c '/usr/bin/g@\\\n(i)t diff /dev/null ./.env'",
     ),
     (
         "the leading-assignment refusal",

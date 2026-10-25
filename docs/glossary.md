@@ -81,7 +81,7 @@ This page defines terms used across this repository's docs and workflow comments
 - `DEFAULT_AKMODS_REF`: process-level environment override that can force one akmods source ref for a run; it is not wired as a formal workflow-dispatch input.
 - `AKMODS_BUILDDIR`: build directory handed to upstream akmods tooling; defaults to `build` under the `temporary checkout`.
 - `KCPATH`: override for the directory where upstream akmods tooling expects its kernel RPMs and `cache.json`; by default it is derived from `AKMODS_BUILDDIR`.
-- `ZFS_MINOR_VERSION`: OpenZFS minor line (for example `2.4`) passed into the akmods build.
+- `ZFS_MINOR_VERSION`: OpenZFS minor line (for example `2.4`) that `zfs_version` is resolved on. It is not passed to the akmods build: the fork stopped reading it, and gets the exact patch as `ZFS_VERSION` instead.
 - `zfs_version`: the exact OpenZFS patch version (for example `2.4.3`) resolved on that line for one run, via [`ci_tools/zfs_release.py`](../ci_tools/zfs_release.py). The scheduled-build gate and the akmods cache-reuse check both compare on this exact value, not the minor line, so a new patch release forces a rebuild instead of being masked by a cache that only matches the line. The CI helpers read this value from the environment as `ZFS_VERSION`.
 - `GITHUB_TOKEN` / `GH_TOKEN`: optional token `ci_tools/zfs_release.py` sends to the GitHub API when resolving `zfs_version`; without one the call uses the low unauthenticated rate limit shared by every hosted runner on the same IP.
 - `PACKAGE_OWNER`: account that owns the container packages `ci_tools/prune_registry.py` prunes; `prune-registry.yml` sets it to the repository owner.

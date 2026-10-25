@@ -158,6 +158,10 @@ TESTS_DIR = REPO_ROOT / "tests"
 # (`-W ignore::mod.W` runs `mod`), and `--pdbcls=mod:Cls` imports `mod` for the
 # debugger. `--cov-config` names a coverage rc file, whose `plugins =` imports
 # modules by name and whose `data_file =` writes wherever it says.
+# `--typeguard-typecheck-fail-callback=mod:func` belongs to typeguard's pytest
+# plugin, which test.yml does not install but the CI runner image does, and
+# loads automatically: it imports `mod` while pytest configures, the same
+# route as `--pdbcls`.
 REFUSED_IMPORT_OPTIONS = (
     "-p",
     "--pyargs",
@@ -172,6 +176,7 @@ REFUSED_IMPORT_OPTIONS = (
     "--pythonwarnings",
     "--pdbcls",
     "--cov-config",
+    "--typeguard-typecheck-fail-callback",
 )
 
 # Options whose job is to write a file at a path the caller names. These have
@@ -245,7 +250,8 @@ REFUSED_OPTIONS = (
 )
 
 # Every other option pytest 9.1.1 and pytest-cov 7.1.0 accept -- what test.yml
-# installs -- each reviewed and judged safe to forward. `main` does not consult
+# installs -- and typeguard 4's plugin, which the CI runner image brings, each
+# reviewed and judged safe to forward. `main` does not consult
 # this set: anything not refused above is forwarded whether or not it is here.
 # The suite does. `test_every_pytest_option_is_forwarded_or_refused` reads the
 # live parser and fails on an option in neither this set nor a refused one, so
@@ -305,6 +311,15 @@ FORWARDED = frozenset(
         *("--cov", "--cov-reset", "--cov-append", "--cov-branch"),
         *("--cov-fail-under", "--cov-precision", "--cov-context"),
         *("--no-cov", "--no-cov-on-fail"),
+        # typeguard: which already-selected modules get type checks added as
+        # they are imported, and how strict those checks are. None imports a
+        # module by name -- the packages list only matches names as other code
+        # imports them -- and the debug switch prints the instrumented source
+        # to stderr. Its one option that imports, the fail callback, is
+        # refused.
+        *("--typeguard-packages", "--typeguard-packages-ignore"),
+        *("--typeguard-debug-instrumentation", "--typeguard-forward-ref-policy"),
+        "--typeguard-collection-check-strategy",
     }
 )
 

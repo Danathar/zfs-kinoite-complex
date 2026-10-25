@@ -314,7 +314,8 @@ class RunnerRefusalTests(unittest.TestCase):
         # names, `-p` loads a plugin, `-o` can set `addopts` to either, and
         # the other three move what pytest treats as the project, and with
         # it conftest collection. `-W` and `--pdbcls` import the module they
-        # name, and a `--cov-config` rc file can name plugins to import.
+        # name, and a `--cov-config` rc file can name plugins to import, as
+        # typeguard's fail callback names the module it imports.
         self.assertEqual(
             set(run_tests.REFUSED_IMPORT_OPTIONS),
             {
@@ -331,6 +332,7 @@ class RunnerRefusalTests(unittest.TestCase):
                 "--pythonwarnings",
                 "--pdbcls",
                 "--cov-config",
+                "--typeguard-typecheck-fail-callback",
             },
         )
 

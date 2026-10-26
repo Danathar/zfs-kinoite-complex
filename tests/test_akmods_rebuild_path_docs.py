@@ -67,6 +67,7 @@ STEP_ITEMS: dict[str, tuple[int, str]] = {
         4, "only when required"),
     "Clone resolved upstream akmods tooling": (4, "rebuild and republish"),
     "Configure shared ZFS target in self-hosted namespace": (4, "rebuild and republish"),
+    "Install pinned just for the akmods Justfile": (4, "rebuild and republish"),
     "Build and publish shared self-hosted ZFS akmods image": (4, "rebuild and republish"),
     PIN_STEP: (5, "digest-pinned ref"),
     VERIFY_STEP: (6, "pinned digest carries the resolved ZFS version"),

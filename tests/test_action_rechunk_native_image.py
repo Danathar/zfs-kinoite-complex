@@ -68,9 +68,10 @@ IMAGE_TAG = "candidate-34266369977"
 SOURCE_IMAGE = f"localhost/{IMAGE_NAME}:{IMAGE_TAG}"
 CHUNKED_IMAGE = f"localhost/{IMAGE_NAME}:chunkah"
 
-# What `podman inspect` hands back on a runner: the source image's own config, which Chunkah
-# reads so the rechunked output keeps the labels and environment of the image being re-layered.
-INSPECT_OUTPUT = '[{"Labels":{"org.zfs-kinoite-complex.zfs-version":"2.3.4"}}]'
+# What `podman inspect --format '{{json .Config}}'` hands back on a runner: the source image's
+# own config object, which Chunkah reads so the rechunked output keeps the labels and environment
+# of the image being re-layered.
+INSPECT_OUTPUT = '{"Labels":{"org.zfs-kinoite-complex.zfs-version":"2.3.4"}}'
 
 # Stand-in for the compressed OCI archive Chunkah writes to stdout. Its only job is to be
 # recognisable when `podman load` reads it back.
@@ -391,10 +392,19 @@ class RechunkActionStepTests(unittest.TestCase):
         step exports the variable and passes it by name with `-e`, two places that can drift
         apart; this pins both ends to the same `podman inspect` and pins which image was
         inspected.
+
+        The inspect is narrowed to `.Config` with `--format '{{json .Config}}'`. The action's
+        comment records why: a full `podman inspect` carries per-layer data that grows with the
+        base image, and once the sister Aurora project's base reached 256 layers the exported
+        value passed Linux's 128 KiB cap on a single environment string and `podman run` failed
+        with E2BIG. Dropping the `--format` brings that failure back on the next large base.
         """
 
         result = self._run()
-        self.assertEqual(result.only("podman inspect").argv, ["inspect", SOURCE_IMAGE])
+        self.assertEqual(
+            result.only("podman inspect").argv,
+            ["inspect", "--format", "{{json .Config}}", SOURCE_IMAGE],
+        )
         self.assertEqual(result.only("podman run").chunkah_config_str, INSPECT_OUTPUT)
 
     def test_the_chunkah_image_default_is_digest_pinned(self) -> None:
@@ -577,7 +587,7 @@ class RechunkActionStepTests(unittest.TestCase):
         result = self._run(inputs={"image_tag": hostile})
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
-            result.only("podman inspect").argv[1], f"localhost/{IMAGE_NAME}:{hostile}"
+            result.only("podman inspect").argv[-1], f"localhost/{IMAGE_NAME}:{hostile}"
         )
         self.assertEqual(
             result.only("podman tag").argv[2], f"{IMAGE_NAME}:{hostile}"

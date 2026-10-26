@@ -17,7 +17,8 @@ decisions live that are invisible once a job is green: the build's `set -o pipef
 `tee` succeeds, the step exits 0 and reports a rebuild that never happened), the `2>&1` that puts
 the compiler's stderr into the log the classification step later reads, the `rebuilt=true` marker
 written only on the success path, the log path that two steps must agree on, and the hand-off
-of the resolved *patch* version to the akmods build as `ZFS_VERSION`, the name the fork reads.
+of the resolved *patch* version to the akmods build as `ZFS_VERSION`, the name the fork reads,
+and the checksum that stands between a downloaded `just` and the PATH every later step runs with.
 Goal: Make a broken hand-off between these steps fail here rather than as a shared cache that was
 republished wrong, a green run that signed nothing, or a sticky issue that never opened.
 
@@ -27,7 +28,8 @@ nothing.
 
 Nothing here builds a kernel module or touches a registry. `python3` is a stub and PATH omits the
 directories where a real interpreter lives, so a step that stopped being stubbed would fail with
-"command not found" rather than start a build.
+"command not found" rather than start a build. `curl` is a stub too, so the step that installs a
+pinned `just` is run against a download this file supplies rather than one from GitHub.
 
 PyYAML is not a pytest dependency; CI installs it by name (see .github/workflows/test.yml). The
 import is guarded so the suite still runs under `python3 -m unittest discover -s tests` with
@@ -37,11 +39,13 @@ nothing installed, matching tests/test_action_rechunk_native_image.py.
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import io
 import json
 import os
 import re
 import subprocess
+import tarfile
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -65,11 +69,12 @@ CLASSIFY_STEP = "Classify akmods build failure"
 CACHE_STEP = "Check for existing shared akmods cache"
 VERIFY_STEP = "Verify the rebuilt cache matches the resolved ZFS version"
 REFUSE_STEP = "Refuse to refresh the shared akmods cache from a restricted run"
+JUST_STEP = "Install pinned just for the akmods Justfile"
 
 # Every step of this action that carries shell, and the one `ci_tools.cli` command it must spawn.
-# `None` marks the refusal gate, which is the only step that is shell of its own rather than a
-# call into a helper. Keeping the whole set here means a step added to the action without a
-# decision about what it runs turns this file red.
+# `None` marks the two steps that are shell of their own rather than a call into a helper: the
+# refusal gate and the pinned `just` install. Keeping the whole set here means a step added to
+# the action without a decision about what it runs turns this file red.
 STEP_COMMANDS = {
     "Resolve build inputs for this run": "resolve-build-inputs",
     "Write build inputs manifest": "write-build-inputs-manifest",
@@ -77,6 +82,7 @@ STEP_COMMANDS = {
     REFUSE_STEP: None,
     "Clone resolved upstream akmods tooling": "akmods-clone-pinned",
     "Configure shared ZFS target in self-hosted namespace": "akmods-configure-zfs-target",
+    JUST_STEP: None,
     BUILD_STEP: "akmods-build-and-publish",
     CLASSIFY_STEP: "classify-akmods-failure",
     "Resolve shared akmods cache digest": "pin-akmods-cache",
@@ -345,7 +351,34 @@ def _parse_log(log: str) -> list[Invocation]:
     return calls
 
 
-def _run_step(name: str, *, exit_code: int = 0) -> Result:
+# Stands in for curl: records its argv one element per line, then writes the file named by
+# CURL_BODY (or a few bytes that match no checksum) to the path given after `-o`.
+CURL_STUB = r"""#!/bin/sh
+printf '%s\n' "$@" > "${CURL_LOG}"
+out=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-o" ]; then
+    out="$2"
+    shift
+  fi
+  shift
+done
+[ -n "${out}" ] || exit 22
+if [ -n "${CURL_BODY}" ]; then
+  cat "${CURL_BODY}" > "${out}"
+else
+  printf 'not the release this action pinned\n' > "${out}"
+fi
+"""
+
+
+def _run_step(
+    name: str,
+    *,
+    exit_code: int = 0,
+    curl_body: Path | None = None,
+    env_overrides: dict[str, str] | None = None,
+) -> Result:
     """Execute one step's `run:` body under bash with its resolved `env:` and a stubbed python3."""
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -355,6 +388,11 @@ def _run_step(name: str, *, exit_code: int = 0) -> Result:
         stub = bindir / "python3"
         stub.write_text(PYTHON_STUB, encoding="utf-8")
         stub.chmod(0o755)
+        curl = bindir / "curl"
+        curl.write_text(CURL_STUB, encoding="utf-8")
+        curl.chmod(0o755)
+        runner_temp = root / "runner-temp"
+        runner_temp.mkdir()
 
         log = root / "log"
         log.touch()
@@ -369,8 +407,13 @@ def _run_step(name: str, *, exit_code: int = 0) -> Result:
             "STUB_STDERR": BUILD_STDERR,
             "STUB_EXIT": str(exit_code),
             "GITHUB_OUTPUT": str(github_output),
+            "GITHUB_PATH": str(root / "github-path"),
+            "RUNNER_TEMP": str(runner_temp),
+            "CURL_LOG": str(root / "curl-log"),
+            "CURL_BODY": str(curl_body) if curl_body else "",
         }
         env.update(_step_env(name))
+        env.update(env_overrides or {})
 
         script = root / "step.sh"
         script.write_text(_step_body(name), encoding="utf-8")
@@ -386,7 +429,8 @@ def _run_step(name: str, *, exit_code: int = 0) -> Result:
             check=False,
         )
         # Everything the step wrote is read out before the directory disappears. `bin/` and the
-        # two harness files are ours, not the step's.
+        # harness files are ours, not the step's; GITHUB_PATH and the curl argv record stay in
+        # `written` because the `just` tests read them.
         ours = {"log", "github-output", "step.sh"}
         written = {
             str(path.relative_to(root)): path.read_text(encoding="utf-8", errors="replace")
@@ -557,6 +601,107 @@ class BuildAndPublishStepTests(unittest.TestCase):
         self.assertEqual(call.env["REGISTRY_TOKEN"], INPUTS["registry_token"])
         self.assertEqual(call.env["GITHUB_TOKEN"], INPUTS["registry_token"])
         self.assertEqual(call.env["CI"], "1")
+
+
+@unittest.skipIf(yaml is None, "PyYAML is not installed")
+class PinnedJustInstallTests(unittest.TestCase):
+    """
+    The step that puts a pinned, checksum-verified `just` first on PATH for the akmods build.
+
+    The akmods Justfile needs a newer `just` than the runner image ships, so this step downloads
+    one. Its checksum line is the only thing between a download from the network and a binary that
+    every later step in the job runs, and its condition is the only thing that makes the newer
+    `just` present when the build step needs it.
+    """
+
+    def _release_tarball(self, directory: Path) -> Path:
+        """A tarball shaped like the upstream release: a `just` at its root that prints a version."""
+
+        program = directory / "just"
+        program.write_text("#!/bin/sh\necho 'just from the test tarball'\n", encoding="utf-8")
+        program.chmod(0o755)
+        tarball = directory / "just.tar.gz"
+        with tarfile.open(tarball, "w:gz") as archive:
+            archive.add(program, arcname="just")
+        return tarball
+
+    def test_a_download_that_does_not_match_the_pin_never_reaches_path(self) -> None:
+        """
+        A tampered or truncated download fails the step before anything is extracted.
+
+        Without the `sha256sum --check` line, or with the step carrying on past it, whatever the
+        network returned would be unpacked and put first on PATH for the build that holds the
+        registry token. The download here is a well-formed release tarball, so only the
+        checksum stands between it and PATH.
+        """
+
+        with tempfile.TemporaryDirectory() as tmp:
+            result = _run_step(JUST_STEP, curl_body=self._release_tarball(Path(tmp)))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("github-path", result.written)
+        self.assertFalse(
+            [path for path in result.written if path.startswith("runner-temp/just-bin/")],
+            sorted(result.written),
+        )
+
+    def test_a_download_that_matches_the_pin_goes_first_on_path_for_the_later_steps(self) -> None:
+        """
+        The verified binary is unpacked into its own directory and that directory is handed to
+        GITHUB_PATH, which is how a composite step changes PATH for the steps after it.
+
+        Writing the directory anywhere else leaves the build step running the runner image's old
+        `just`, which fails on the Justfile's first line.
+        """
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tarball = self._release_tarball(Path(tmp))
+            digest = hashlib.sha256(tarball.read_bytes()).hexdigest()
+            result = _run_step(
+                JUST_STEP, curl_body=tarball, env_overrides={"JUST_SHA256": digest}
+            )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("runner-temp/just-bin/just", result.written)
+        path_lines = result.written["github-path"].splitlines()
+        self.assertEqual(len(path_lines), 1, path_lines)
+        self.assertTrue(path_lines[0].endswith("/runner-temp/just-bin"), path_lines)
+        # The step runs the binary it installed, so a broken unpack fails here, not in the build.
+        self.assertIn("just from the test tarball", result.stdout)
+
+    def test_the_download_is_the_pinned_release_for_this_runner(self) -> None:
+        env = _step_env(JUST_STEP)
+        version = env["JUST_VERSION"]
+        result = _run_step(JUST_STEP)
+        argv = result.written["curl-log"].splitlines()
+        self.assertIn(
+            f"https://github.com/casey/just/releases/download/{version}/"
+            f"just-{version}-x86_64-unknown-linux-musl.tar.gz",
+            argv,
+        )
+
+    def test_the_pin_is_a_full_digest_of_a_version_new_enough_for_the_justfile(self) -> None:
+        """
+        The Justfile starts with `set lists`, which `just` before 1.57 rejects.
+
+        A Renovate bump that lowered the version, or a digest pasted short, would only show up on
+        the next cache rebuild, which may be weeks away.
+        """
+
+        env = _step_env(JUST_STEP)
+        self.assertRegex(env["JUST_SHA256"], r"^[0-9a-f]{64}$")
+        version = tuple(int(part) for part in env["JUST_VERSION"].split("."))
+        self.assertGreaterEqual(version, (1, 57))
+
+    def test_just_is_installed_on_exactly_the_condition_the_build_runs(self) -> None:
+        """
+        A narrower condition lets the build run with the runner's old `just`; a different one
+        downloads a binary on runs that never use it.
+        """
+
+        def condition(name: str) -> str:
+            return " ".join(str(_step(name)["if"]).split())
+
+        self.assertEqual(condition(JUST_STEP), condition(BUILD_STEP))
 
 
 @unittest.skipIf(yaml is None, "PyYAML is not installed")

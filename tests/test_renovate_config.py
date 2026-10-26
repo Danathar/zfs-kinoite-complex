@@ -210,6 +210,109 @@ DEVCONTAINER_DEPENDENCIES = (
     },
 )
 
+# The one group every minor, patch and digest update goes into, so the owner
+# approves one Renovate PR a week. The dependencies below are the shapes
+# Renovate offered in the week of 2026-10-26, as packageRules see them, plus
+# the updates the group must leave alone. The devcontainer copies above belong
+# to the group too.
+WEEKLY_GROUP = "weekly dependency updates"
+
+WEEKLY_DEPENDENCIES = (
+    {
+        "manager": "custom.regex",
+        "fileName": "ci/defaults.json",
+        "packageName": "ghcr.io/ublue-os/brew",
+        "depName": "ghcr.io/ublue-os/brew",
+        "datasource": "docker",
+        "depType": None,
+        "currentValue": "latest",
+        "updateType": "digest",
+    },
+    {
+        "manager": "custom.regex",
+        "fileName": ".github/actions/install-signing-tools/action.yml",
+        "packageName": "sigstore/cosign",
+        "depName": "sigstore/cosign",
+        "datasource": "github-releases",
+        "depType": None,
+        "currentValue": "v3.1.3",
+        "updateType": "patch",
+    },
+    {
+        "manager": "custom.regex",
+        "fileName": "docs/architecture-overview.md",
+        "packageName": "sigstore/cosign",
+        "depName": "sigstore/cosign",
+        "datasource": "github-releases",
+        "depType": None,
+        "currentValue": "v3.1.3",
+        "updateType": "patch",
+    },
+    {
+        "manager": "github-actions",
+        "fileName": ".github/workflows/ai-fix.yml",
+        "packageName": "anthropics/claude-code-action",
+        "depName": "anthropics/claude-code-action",
+        "datasource": "github-tags",
+        "depType": "action",
+        "currentValue": "v1.0.253",
+        "updateType": "patch",
+    },
+    {
+        "manager": "custom.regex",
+        "fileName": ".github/workflows/test.yml",
+        "packageName": "ruff",
+        "depName": "ruff",
+        "datasource": "pypi",
+        "depType": None,
+        "currentValue": "0.16.4",
+        "updateType": "minor",
+    },
+    {
+        "manager": "custom.regex",
+        "fileName": "CONTRIBUTING.md",
+        "packageName": "ruff",
+        "depName": "ruff",
+        "datasource": "pypi",
+        "depType": None,
+        "currentValue": "0.16.4",
+        "updateType": "minor",
+    },
+)
+
+UNGROUPED_DEPENDENCIES = (
+    {
+        "manager": "custom.regex",
+        "fileName": "ci/defaults.json",
+        "packageName": "openzfs/zfs",
+        "depName": "openzfs/zfs",
+        "datasource": "github-releases",
+        "depType": None,
+        "currentValue": "2.4",
+        "updateType": "minor",
+    },
+    {
+        "manager": "custom.regex",
+        "fileName": ".github/actions/rechunk-native-image/action.yml",
+        "packageName": "quay.io/coreos/chunkah",
+        "depName": "quay.io/coreos/chunkah",
+        "datasource": "docker",
+        "depType": None,
+        "currentValue": "v0.7.0",
+        "updateType": "patch",
+    },
+    {
+        "manager": "github-actions",
+        "fileName": ".github/workflows/ai-fix.yml",
+        "packageName": "anthropics/claude-code-action",
+        "depName": "anthropics/claude-code-action",
+        "datasource": "github-tags",
+        "depType": "action",
+        "currentValue": "v1.0.253",
+        "updateType": "major",
+    },
+)
+
 # packageRules match keys this file knows how to evaluate, mapped to the
 # dependency field each one reads.
 RULE_MATCH_FIELDS = {
@@ -457,7 +560,11 @@ class PackageRuleTests(unittest.TestCase):
 
     def test_every_matchpackagenames_rule_names_a_dependency_a_manager_actually_produces(self) -> None:
         """`matchPackageNames` is matched exactly; a near-miss name silences the rule."""
-        matching = [rule for rule in self.rules if "matchPackageNames" in rule]
+        matching = [
+            rule
+            for rule in self.rules
+            if "matchPackageNames" in rule and rule.get("groupName") != WEEKLY_GROUP
+        ]
         expected = {"openzfs/zfs", "sigstore/cosign", "ghcr.io/ublue-os/devcontainer"}
         seen = {tuple(rule["matchPackageNames"]) for rule in matching}
         self.assertEqual(seen, {(name,) for name in expected})
@@ -502,6 +609,33 @@ class PackageRuleTests(unittest.TestCase):
                 self.assertIsNot(settings.get("enabled"), False, "this copy is never updated")
                 self.assertTrue((settings.get("groupName") or "").strip(), "no group")
         self.assertEqual(resolved[0].get("groupName"), resolved[1].get("groupName"))
+
+    def test_the_weekly_group_gathers_every_minor_patch_and_digest_update(self) -> None:
+        """One Renovate PR a week for the owner to approve, instead of one per dependency."""
+        for dependency in (*WEEKLY_DEPENDENCIES, *DEVCONTAINER_DEPENDENCIES):
+            with self.subTest(dependency=f"{dependency['packageName']} in {dependency['fileName']}"):
+                settings = resolve_package_rules(self.rules, dependency)
+                self.assertEqual(settings.get("groupName"), WEEKLY_GROUP)
+                self.assertIsNot(settings.get("enabled"), False)
+                self.assertIsNot(settings.get("automerge"), True)
+
+    def test_the_weekly_group_leaves_out_the_updates_that_stay_on_their_own(self) -> None:
+        """An OpenZFS line is a decision, Chunkah needs no owner, and a major stays apart."""
+        for dependency in UNGROUPED_DEPENDENCIES:
+            with self.subTest(dependency=f"{dependency['packageName']} {dependency['updateType']}"):
+                settings = resolve_package_rules(self.rules, dependency)
+                self.assertNotEqual(settings.get("groupName"), WEEKLY_GROUP)
+
+    def test_the_weekly_group_leaves_out_only_dependencies_a_manager_produces(self) -> None:
+        """A near-miss name after `!` would quietly pull that dependency into the group."""
+        matching = [rule for rule in self.rules if rule.get("groupName") == WEEKLY_GROUP]
+        self.assertEqual(len(matching), 1)
+        names = matching[0]["matchPackageNames"]
+        self.assertTrue(all(name.startswith("!") for name in names), names)
+        self.assertEqual({name[1:] for name in names}, {"openzfs/zfs", "quay.io/coreos/chunkah"})
+        for name in names:
+            with self.subTest(name=name):
+                self.assertIn(name[1:], self.managers)
 
     def test_the_rule_resolver_refuses_a_match_key_it_does_not_model(self) -> None:
         """A rule keyed on something new must be modelled, not read as matching."""

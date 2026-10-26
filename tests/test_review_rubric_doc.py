@@ -693,7 +693,10 @@ class TreeClaimTests(unittest.TestCase):
         rules = [
             rule
             for rule in config.get("packageRules", [])
-            if any("openzfs" in name.lower() for name in rule.get("matchPackageNames", []))
+            if any(
+                "openzfs" in name.lower() and not name.startswith("!")
+                for name in rule.get("matchPackageNames", [])
+            )
         ]
         self.assertTrue(rules, "renovate.json has no packageRule matching OpenZFS any more")
         for rule in rules:

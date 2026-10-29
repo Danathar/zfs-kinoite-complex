@@ -140,7 +140,7 @@
 ### Secret inventory
   joined: tests/test_security_ai_doc.py
 ## Labels carry authority — automation must not apply them
-  joined: tests/test_agent_permission_boundary.py
+  joined: tests/test_multi_agent_doc.py
 ## Inputs to treat as untrusted
   joined: tests/test_review_rubric_doc.py
 ## What an agent may do unattended

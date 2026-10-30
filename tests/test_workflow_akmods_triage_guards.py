@@ -40,11 +40,19 @@ WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "akmods-failure-triage.yml
 # output is the empty string at runtime, which is the default here too.
 CONTEXTS = {
     "github.event.workflow_run.event": "event",
+    "github.event.workflow_run.head_repository.full_name": "head_repo",
+    "github.repository": "repository",
     "github.event.workflow_run.conclusion": "conclusion",
     "steps.download.outputs.has_payload": "has_payload",
     "steps.download.outputs.build_ran": "build_ran",
     "steps.badge.outputs.updated": "badge_updated",
     "steps.last_good_build.outputs.updated": "last_good_build_updated",
+}
+
+# The repository a run of this repository's own workflows reports as its head.
+SAME_REPO = {
+    "head_repo": "Danathar/zfs-kinoite-complex",
+    "repository": "Danathar/zfs-kinoite-complex",
 }
 
 TOKEN = re.compile(r"\s*(?:(\()|(\))|(&&)|(\|\|)|(==|!=)|'([^']*)'|([A-Za-z_][A-Za-z0-9_.]*))")
@@ -164,10 +172,24 @@ class TriageGuardTests(unittest.TestCase):
         self.check(
             self.job["if"],
             [
-                ({"event": "pull_request"}, False),
-                ({"event": "schedule"}, True),
-                ({"event": "push"}, True),
-                ({"event": "workflow_dispatch"}, True),
+                ({"event": "pull_request", **SAME_REPO}, False),
+                ({"event": "schedule", **SAME_REPO}, True),
+                ({"event": "push", **SAME_REPO}, True),
+                ({"event": "workflow_dispatch", **SAME_REPO}, True),
+            ],
+        )
+
+    def test_the_job_never_runs_for_a_build_from_a_fork(self) -> None:
+        # A fork's pull request can run its own copy of a workflow with the build's name
+        # through the review events, and that run's artifacts are the fork's to write.
+        fork = {"head_repo": "someone/zfs-kinoite-complex", "repository": SAME_REPO["repository"]}
+        self.check(
+            self.job["if"],
+            [
+                ({"event": "pull_request_review", **fork}, False),
+                ({"event": "pull_request_review_comment", **fork}, False),
+                ({"event": "pull_request_review", **fork, "head_repo": ""}, False),
+                ({"event": "pull_request_review", **SAME_REPO}, True),
             ],
         )
 

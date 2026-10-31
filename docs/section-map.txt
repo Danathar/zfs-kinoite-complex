@@ -182,7 +182,7 @@
 ### `nightly-compliance.yml` — "Nightly compliance"
   joined: tests/test_ai_ops_runbook_doc.py
 ### `boot-test.yml` — "Boot test"
-  prose: unchecked: states what boot-test.yml runs and when
+  joined: tests/test_ai_ops_runbook_doc.py
 ### `prune-registry.yml` — "Prune registry"
   joined: tests/test_ai_ops_runbook_doc.py
 ### `akmods-failure-triage.yml` — "Akmods Failure Triage"

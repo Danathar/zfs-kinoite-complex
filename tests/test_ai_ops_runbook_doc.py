@@ -18,7 +18,8 @@ What is pinned, and what is not:
   * The behaviours the page asserts, one test each: the triggers and defaults it states for
     build.yml, build-pr.yml, test.yml, prune-registry.yml, ai-fix.yml and
     labeler.yml; the log lines it tells the reader to search for; the sticky issue titles, label and
-    closing rule; and the hook's refusal and exit code.
+    closing rule; the hook's refusal and exit code; and, for boot-test.yml, its job, the checks the
+    guest runs, what the summary names and where the logs it points at are kept.
 
 What is not pinned: the live GitHub facts (who authored a pull request, what the Hive labels say).
 The page gives the `gh` command for each rather than stating them as settled, and a test cannot
@@ -38,7 +39,10 @@ from __future__ import annotations
 import json
 import re
 import unittest
+from dataclasses import asdict
+from pathlib import Path
 
+from ci_tools.boot_test import GUEST_CHECKS, GuestReport, boot_command, judge, render_summary
 from tests.test_docs_consistency import (
     LINK_RE,
     REPO_ROOT,
@@ -58,6 +62,7 @@ LABELER_CONFIG = REPO_ROOT / ".github" / "labeler.yml"
 CLASSIFIER = REPO_ROOT / "ci_tools" / "classify_akmods_failure.py"
 STABLE_SIGNAL = REPO_ROOT / "ci_tools" / "check_stable_signal.py"
 PRUNE = REPO_ROOT / "ci_tools" / "prune_registry.py"
+BOOT_TEST = REPO_ROOT / "ci_tools" / "boot_test.py"
 
 # Quoted phrases on the page that are neither a workflow name nor a heading. Each is something the
 # page quotes from outside this repository's files, or a word in quotation marks rather than a name.
@@ -564,6 +569,97 @@ class TriageEntry(RunbookTest):
         text = workflow_text("akmods-failure-triage.yml")
         self.assertIn('workflows: ["Build And Promote Main Image"]', text)
         self.assertIn("name: Manage sticky akmods failure issue", text)
+
+
+class BootTestEntry(RunbookTest):
+    @classmethod
+    def setUpClass(cls) -> None:
+        super().setUpClass()
+        cls.entry = collapse(cls.sections["boot-test.yml"])
+        cls.workflow = workflow_text("boot-test.yml")
+
+    def test_it_runs_after_every_main_build_and_its_job_is_boot(self) -> None:
+        self.assertIn('workflows: ["Build And Promote Main Image"]', self.workflow)
+        self.assertIn("after every `build.yml` run on `main`", self.entry)
+        self.assertIn(
+            "github.event.workflow_run.head_branch == github.event.repository.default_branch",
+            self.workflow,
+        )
+        # "even when its gate skipped the build": a skipped build is a green run, and the only
+        # conclusion the job refuses is a cancelled one.
+        self.assertIn("even when its gate skipped the build", self.entry)
+        conclusions = re.findall(r"workflow_run\.conclusion\s*(==|!=)\s*'(\w+)'", self.workflow)
+        self.assertEqual(conclusions, [("!=", "cancelled")])
+        jobs = indented_block(self.workflow.splitlines(), "jobs", strip=False)
+        self.assertEqual([line.strip() for line in jobs if re.match(r"^  \S", line)], ["boot:"])
+        self.assertEqual(jobs[1].strip(), "name: boot")
+        self.assertIn("Its job is `boot`.", self.entry)
+
+    def test_it_boots_latest_by_default(self) -> None:
+        self.assertIn(
+            "inputs.image || 'ghcr.io/danathar/zfs-kinoite-complex:latest'", self.workflow
+        )
+        self.assertIn("it boots the published `:latest`, by digest,", self.entry)
+
+    def test_the_checks_the_page_lists_are_the_ones_the_guest_runs(self) -> None:
+        # A check added, dropped or renamed in boot_test.py has to change this sentence too.
+        kinds = [name.split(":", 1) for name, _ in GUEST_CHECKS]
+        self.assertEqual(sorted({kind for kind, _ in kinds}), ["module", "package", "zpool"])
+        packages = " and ".join(f"`{value}`" for kind, value in kinds if kind == "package")
+        modules = [value for kind, value in kinds if kind == "module"]
+        self.assertEqual(modules, ["zfs"])
+        self.assertEqual([value for kind, value in kinds if kind == "zpool"], ["list"])
+        self.assertIn(
+            f"checks that the {packages} packages are installed, that the `zfs` module loaded at"
+            " boot, and that `zpool list` reaches it.",
+            self.entry,
+        )
+
+    def test_the_summary_names_the_digest_and_each_checks_result(self) -> None:
+        report = GuestReport(
+            done=True,
+            checks=[{"name": n, "status": "pass", "detail": "ok"} for n, _ in GUEST_CHECKS],
+        )
+        booted = "ghcr.io/example/image@sha256:" + "a" * 64
+        result = {
+            "image": "ghcr.io/example/image:latest",
+            "booted": booted,
+            "passed": True,
+            "summary": "s",
+            "attempts": 1,
+            "report": asdict(report),
+        }
+        summary = render_summary(result, "")
+        self.assertIn(f"| Booted | `{booted}` |", summary)
+        for name, _ in GUEST_CHECKS:
+            self.assertIn(f"| `{name}` | pass |", summary)
+        self.assertIn("It names the digest booted and each check's result.", self.entry)
+
+    def test_a_vm_that_never_reached_the_checks_says_so(self) -> None:
+        passed, line = judge(GuestReport())
+        self.assertFalse(passed)
+        self.assertIn("never reached the point where the checks finish", line)
+        self.assertIn("A summary saying the VM never reached the checks", self.entry)
+
+    def test_the_logs_the_page_points_at_are_in_the_uploaded_artifact(self) -> None:
+        upload = step_block(self.workflow, "Upload logs")
+        self.assertIn("name: boot-test-${{ github.run_id }}", upload)
+        self.assertIn("${{ env.WORK }}/boot-*/", upload)
+        self.assertIn("read the `boot-test-*` artifact's `bcvk.log` and `console.txt`", self.entry)
+        # bcvk.log is what boot_test.py writes and console.txt is bcvk's own console log; both
+        # land in the boot-<n>/ directory the upload step keeps.
+        self.assertIn('(log_dir / "bcvk.log").write_text', BOOT_TEST.read_text(encoding="utf-8"))
+        log_dir = Path("/w/boot-1")
+        command = boot_command(
+            "i", units=Path("/w/u"), script_dir=Path("/w/c"), log_dir=log_dir, name="n"
+        )
+        self.assertEqual(command[command.index("--log-dir") + 1], f"journal,console={log_dir}/")
+
+    def test_failed_units_are_listed_but_not_judged(self) -> None:
+        checks = [{"name": n, "status": "pass", "detail": ""} for n, _ in GUEST_CHECKS]
+        report = GuestReport(done=True, checks=checks, failed_units=["bootloader-update.service"])
+        self.assertTrue(judge(report)[0])
+        self.assertIn("Failed systemd units are listed but not judged", self.entry)
 
 
 class AiFixEntry(RunbookTest):

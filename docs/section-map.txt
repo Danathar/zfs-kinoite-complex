@@ -136,7 +136,7 @@
 ## The blast radius that makes this different
   prose: unchecked: states what build.yml publishes and signs
 ## Signing keys and secrets
-  prose: unchecked: names the jobs and steps that receive the signing key
+  joined: tests/test_security_ai_doc.py
 ### Secret inventory
   joined: tests/test_security_ai_doc.py
 ## Labels carry authority — automation must not apply them

@@ -13,6 +13,14 @@ secret passed the whole suite while the page went on saying the token is not a s
 credential.
 Goal: A secret added to, renamed in or dropped from a workflow fails here until the inventory
 says the same.
+
+The "Signing keys and secrets" section is joined to build.yml the same way: the jobs it names
+are the jobs the `production-signing` environment gates, and the key it says "exists only in
+the signing steps" of those jobs is read as a value nowhere else -- not in a job-level `env:`,
+not in another step, not in a `with:` input -- and only by a step that ends in the isolated
+signer. tests/test_workflow_build_container.py holds sign-candidate-image's step env exactly;
+nothing held sign-akmods-cache's, so moving the key up to that job's `env:`, where the
+third-party login action and every other step would see it, passed the suite.
 """
 
 from __future__ import annotations
@@ -20,6 +28,11 @@ from __future__ import annotations
 import re
 import unittest
 from pathlib import Path
+
+try:
+    import yaml
+except ImportError:  # pragma: no cover - CI installs PyYAML; see test.yml
+    yaml = None
 
 from tests.test_docs_consistency import workflow_paths
 
@@ -32,6 +45,13 @@ CODE_SPAN_RE = re.compile(r"`([^`]+)`")
 REGISTRY_TOKEN_RE = re.compile(r"^\s*REGISTRY_TOKEN:\s*(.+?)\s*$")
 # Always present, minted per job; its row describes scope, not a stored credential.
 MINTED = {"GITHUB_TOKEN"}
+
+BUILD = REPO_ROOT / ".github" / "workflows" / "build.yml"
+SIGNING_ENV = "production-signing"
+SIGNER = "python3 -I ci_tools/sign_image.py"
+KEY_VALUE = "${{ secrets.SIGNING_SECRET }}"
+# A job may test that the secret is set; that yields a boolean, not the key.
+PRESENCE_CHECK = "${{ secrets.SIGNING_SECRET != '' }}"
 
 
 def inventory(text: str) -> dict[str, str]:
@@ -117,6 +137,71 @@ class SecretInventoryTests(unittest.TestCase):
                     values[f"{path.name}:{number}"] = match.group(1)
         self.assertTrue(values, "no workflow sets REGISTRY_TOKEN; the GITHUB_TOKEN row describes one that does")
         self.assertEqual({where: v for where, v in values.items() if v != "${{ github.token }}"}, {})
+
+
+
+def signing_section(text: str) -> str:
+    """The "Signing keys and secrets" prose, up to its "Secret inventory" subsection."""
+
+    return text.split("## Signing keys and secrets\n", 1)[1].split("### Secret inventory", 1)[0]
+
+
+def key_readers(where: object) -> bool:
+    """Whether a parsed workflow value mentions the signing secret anywhere inside it."""
+
+    return "secrets.SIGNING_SECRET" in repr(where)
+
+
+@unittest.skipIf(yaml is None, "PyYAML not installed")
+class SigningKeySectionTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.text = SECURITY_AI.read_text(encoding="utf-8")
+        cls.section = signing_section(cls.text)
+        cls.jobs = yaml.safe_load(BUILD.read_text(encoding="utf-8"))["jobs"]
+        cls.gated = {name for name, job in cls.jobs.items() if job.get("environment") == SIGNING_ENV}
+
+    def test_the_section_names_exactly_the_jobs_the_signing_environment_gates(self) -> None:
+        self.assertTrue(self.gated, f"no build.yml job uses the {SIGNING_ENV} environment")
+        named = {name for name in self.jobs if f"`{name}`" in self.section}
+        self.assertEqual(named, self.gated)
+        self.assertIn("`SIGNING_SECRET` environment secret", self.section)
+        self.assertIn(f"`{SIGNER}`", self.section)
+
+    def test_the_inventory_row_names_the_same_jobs(self) -> None:
+        used_by = inventory(self.text)["SIGNING_SECRET"]
+        self.assertEqual({name for name in self.jobs if f"`{name}`" in used_by}, self.gated)
+
+    def test_no_job_level_env_holds_the_key(self) -> None:
+        for name, job in self.jobs.items():
+            with self.subTest(job=name):
+                env = {key: value for key, value in (job.get("env") or {}).items() if key_readers(value)}
+                if name in self.gated:
+                    self.assertEqual(env, {"HAS_SIGNING_SECRET": PRESENCE_CHECK})
+                else:
+                    self.assertEqual(env, {})
+
+    def test_the_key_reaches_one_step_per_signing_job_and_that_step_runs_the_signer(self) -> None:
+        for name, job in self.jobs.items():
+            steps = job.get("steps") or []
+            readers = [step for step in steps if key_readers(step)]
+            with self.subTest(job=name):
+                if name not in self.gated:
+                    self.assertEqual(readers, [])
+                    continue
+                self.assertEqual(len(readers), 1, f"{name}: {[step.get('name') for step in readers]}")
+                step = readers[0]
+                self.assertNotIn("uses", step)
+                self.assertNotIn("with", step)
+                self.assertEqual(
+                    {key for key, value in step["env"].items() if key_readers(value)}, {"COSIGN_PRIVATE_KEY"}
+                )
+                self.assertEqual(step["env"]["COSIGN_PRIVATE_KEY"], KEY_VALUE)
+                self.assertNotIn("SIGNING_SECRET", step["run"])
+                self.assertTrue(
+                    step["run"].rstrip().endswith(SIGNER),
+                    f"{name}: the step holding the key does not end in the isolated signer",
+                )
 
 
 if __name__ == "__main__":

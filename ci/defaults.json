@@ -6,7 +6,7 @@
   "AKMODS_REPO": "zfs-kinoite-complex-akmods",
   "DEFAULT_BASE_IMAGE": "quay.io/fedora-ostree-desktops/kinoite:44",
   "STABLE_SIGNAL_IMAGE": "quay.io/fedora-ostree-desktops/kinoite:44",
-  "DEFAULT_BUILD_CONTAINER_IMAGE": "ghcr.io/ublue-os/devcontainer@sha256:40e0c0c09e678909300e42eb3abeb4044fdccac35981c5aa534f9e855f8bdde6",
-  "DEFAULT_BREW_IMAGE": "ghcr.io/ublue-os/brew@sha256:c201bc801e4828849e8e36c4adcb5c0f38d35ac3ff9546a0ecab0fd2beabf51f",
+  "DEFAULT_BUILD_CONTAINER_IMAGE": "ghcr.io/ublue-os/devcontainer@sha256:1c42755a3ab617139cc68e65248609eb2033de0e9ab5219746082ea192a182d8",
+  "DEFAULT_BREW_IMAGE": "ghcr.io/ublue-os/brew@sha256:974ce5e4d6d5fceb6151910957515a42c0eefced4ea386fdfadb0fbad84499a5",
   "DEFAULT_ZFS_MINOR_VERSION": "2.4"
 }

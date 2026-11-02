@@ -341,6 +341,18 @@ class AuditStepTests(unittest.TestCase):
     def test_a_signed_hive_pull_request_passes(self) -> None:
         self.assertPasses(self._run([_pr(22, [_branch_commit()])]))
 
+    def test_a_hidden_marker_below_the_signature_does_not_unsign_it(self) -> None:
+        # The Hive appends `<!-- hive:... -->` markers after the pull request opens.
+        body = f"Closes #1\n\n{SIGNATURE}\n\n<!-- hive:issue-link-fixed -->\n"
+        self.assertPasses(self._run([_pr(25, [_branch_commit()], body=body)]))
+
+    def test_a_hidden_marker_does_not_stand_in_for_a_signature(self) -> None:
+        marker = "<!-- hive:issue-link-fixed -->"
+        body = f"The line looks like\n\n{SIGNATURE}\n\nand this closes #1.\n\n{marker}\n"
+        result = self._run([_pr(26, [_branch_commit()], body=body)])
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertTrue(self._findings()[0].startswith("#26: opened by the Hive app with no"))
+
     def test_agent_pull_requests_are_selected_by_app_signature_or_ai_fix_branch(self) -> None:
         unsigned = [_commit("u1", signed=False, parents=[MAIN_0])]
         prs = [

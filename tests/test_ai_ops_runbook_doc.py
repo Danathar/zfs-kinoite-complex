@@ -18,8 +18,11 @@ What is pinned, and what is not:
   * The behaviours the page asserts, one test each: the triggers and defaults it states for
     build.yml, build-pr.yml, test.yml, prune-registry.yml, ai-fix.yml and
     labeler.yml; the log lines it tells the reader to search for; the sticky issue titles, label and
-    closing rule; the hook's refusal and exit code; and, for boot-test.yml, its job, the checks the
-    guest runs, what the summary names and where the logs it points at are kept.
+    closing rule; the hook's refusal and exit code; for boot-test.yml, its job, the checks the
+    guest runs, what the summary names and where the logs it points at are kept; and, for
+    agent-audit.yml, its schedule and window, the columns its summary writes, its read-only token,
+    the two findings that turn it red, its merge exemption and enforcement date, and the issue a
+    red scheduled run opens.
 
 What is not pinned: the live GitHub facts (who authored a pull request, what the Hive labels say).
 The page gives the `gh` command for each rather than stating them as settled, and a test cannot
@@ -103,6 +106,7 @@ EXPECTED_QUOTED = {
         "Manage sticky akmods failure issue",
     ],
     "auto-issues.yml": ["Auto issues", "Open, update or close the tracking issue"],
+    "agent-audit.yml": ["Agent audit trail", "Read back merged agent pull requests"],
     "ai-fix.yml": ["AI fix", "Check credentials and target", "Run the agent"],
 }
 
@@ -699,6 +703,95 @@ class AiFixEntry(RunbookTest):
         self.assertIn("contents: write", fix)
         self.assertNotIn("packages:", fix)
         self.assertNotIn("SIGNING_SECRET", text.split("steps:", 2)[2])
+
+
+class AgentAuditEntry(RunbookTest):
+    @classmethod
+    def setUpClass(cls) -> None:
+        super().setUpClass()
+        cls.entry = collapse(cls.sections["agent-audit.yml"])
+        cls.workflow = workflow_text("agent-audit.yml")
+
+    def test_it_runs_monthly_over_the_last_31_days(self) -> None:
+        crons = re.findall(r"^\s*- cron: '([^']+)'", self.workflow, re.MULTILINE)
+        self.assertEqual(len(crons), 1)
+        # Day of month 1, every month, any weekday: once a month.
+        self.assertEqual(crons[0].split()[2:], ["1", "*", "*"])
+        self.assertIn("SINCE=\"$(date -u -d '31 days ago' +%F)\"", self.workflow)
+        self.assertIn("a monthly read-back", self.entry)
+        self.assertIn("lists every one merged in the last 31 days in the run summary", self.entry)
+
+    def test_the_summary_has_a_column_for_each_thing_the_page_lists(self) -> None:
+        # Who opened it, who merged it, its signature line, the issue it closes, its sign-offs and
+        # the Tier 3 label, in that order.
+        self.assertIn(
+            '"| PR | Merged | Author | Merged by | Signature | Closes | Commits | Signed-off |'
+            ' Tier 3 |"',
+            self.workflow,
+        )
+        self.assertIn('tee -a "${GITHUB_STEP_SUMMARY}"', self.workflow)
+        self.assertIn(
+            "who opened and merged it, its signature line, the issue it closes, its sign-offs,"
+            " and whether the labeler marked it safety-critical (Tier 3).",
+            self.entry,
+        )
+
+    def test_the_tier_3_column_reads_the_label_the_labeler_applies(self) -> None:
+        self.assertIn('tier3: any($pr.labels[]; .name == "area/safety-critical")', self.workflow)
+        self.assertIn("'area/safety-critical':", LABELER_CONFIG.read_text(encoding="utf-8"))
+
+    def test_it_writes_nothing_else(self) -> None:
+        # A read-only token, no checkout and no action: the run summary is all it can write.
+        self.assertEqual(top_block(self.workflow, "permissions"), [])
+        jobs = self.workflow.splitlines()
+        self.assertEqual(
+            indented_block(jobs, "permissions"), ["contents: read", "pull-requests: read"]
+        )
+        self.assertNotIn("uses:", self.workflow)
+        self.assertEqual(len(re.findall(r"^      - name:", self.workflow, re.MULTILINE)), 1)
+        self.assertIn("It writes nothing else.", self.entry)
+
+    def test_red_means_one_of_the_two_findings(self) -> None:
+        self.assertIn(
+            "opened by the Hive app with no `— hive:` signature line, so the role and model that"
+            " wrote it are unrecorded",
+            self.workflow,
+        )
+        self.assertIn('carry no Signed-off-by trailer"', self.workflow)
+        self.assertEqual(self.workflow.count('then "#\\(.number): '), 2)
+        self.assertIn(
+            "a pull request the Hive app opened with no `— hive:` signature line, or a commit on"
+            " an agent pull request with no `Signed-off-by:` trailer.",
+            self.entry,
+        )
+
+    def test_only_a_merge_into_main_of_commits_outside_the_pull_request_is_exempt(self) -> None:
+        self.assertIn('$base == "main"', self.workflow)
+        self.assertIn("and all($p[1:][]; IN($own[]) | not);", self.workflow)
+        self.assertIn(
+            "A merge that brings in commits from outside the pull request (an update from `main`)"
+            " is exempt; a merge of another unmerged branch is not.",
+            self.entry,
+        )
+
+    def test_misses_before_the_enforcement_date_are_listed_not_failed(self) -> None:
+        date = re.search(r'^\s*enforce_from="(\d{4}-\d{2}-\d{2})"$', self.workflow, re.MULTILINE)
+        self.assertIsNotNone(date)
+        self.assertIn("($rows | map(select(.enforced)) | findings) as $found", self.workflow)
+        self.assertIn(
+            f"Misses merged before {date.group(1)} are listed but do not fail it.", self.entry
+        )
+
+    def test_a_red_scheduled_run_opens_the_issue_the_page_names(self) -> None:
+        auto = workflow_text("auto-issues.yml")
+        watched = re.search(r"^\s*workflows: \[(.+)\]$", auto, re.MULTILINE)
+        self.assertIsNotNone(watched)
+        self.assertIn('"Agent audit trail"', watched.group(1))
+        self.assertIn('title="Scheduled run failing: $WORKFLOW"', auto)
+        self.assertIn(
+            "A red scheduled run also opens a `Scheduled run failing: Agent audit trail` issue",
+            self.entry,
+        )
 
 
 class HookEntry(RunbookTest):

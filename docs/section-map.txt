@@ -276,7 +276,7 @@
 ## Applying and changing it
   joined: tests/test_check_ruleset_drift.py
 ## Checking the live rules every night
-  prose: unchecked: states what the ruleset-drift job in nightly-compliance.yml compares
+  joined: tests/test_branch_protection.py
 ## When there is a second reviewer
   prose: narrative: advice for a setting not in use
 

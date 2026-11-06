@@ -323,11 +323,12 @@ It does five important things:
 5. runs `bootc container lint`
 
 The buildah invocation uses Docker v2s2 manifest format (`--format docker`)
-rather than OCI image manifests because host update tooling (`bootc upgrade` on booted
-machines) works more reliably with the Docker format. The "OCI" terminology
-elsewhere in this project refers to OCI standards for registry interaction and
-layer handling, not the specific container image manifest format produced by
-buildah.
+rather than OCI image manifests. The reason recorded for that flag is that host
+update tooling (`bootc upgrade` on booted machines) works more reliably with the
+Docker format, but the flag only shapes the local image. The rechunk step below
+replaces that image with one loaded from an OCI archive, and nothing later
+converts it back, so every published image has an OCI manifest. The images
+sampled from the registry on 2026-11-06 all did.
 
 `check-brew-payload-inventory.sh` compares the brew payload's complete file list against
 [`build_files/brew-payload.manifest`](../build_files/brew-payload.manifest) and fails the
@@ -446,11 +447,13 @@ signed:
    two things a default GitHub-hosted runner does not provide:
    - a version-matched `crun`/`buildah`/`podman`/`skopeo` set, installed
      unconditionally from Ubuntu's `resolute` apt suite; podman before 5
-     silently drops Chunkah's layer annotations on push, which would defeat the
-     whole point of rechunking. The install is unconditional on purpose. It
-     and the step asserts podman `>= 5` after installing, so a regression in
-     the suite fails the build instead of quietly producing an unannotated
-     image.
+     silently drops Chunkah's layer annotations on push. The install is
+     unconditional on purpose, and the step
+     asserts podman `>= 5` after installing, so a regression in the suite
+     fails the build. That floor does not make the annotations survive here:
+     a check of the registry on 2026-11-06 found none on any layer of the
+     published images sampled, for a reason not yet known. Updates reuse chunks
+     by layer digest, and consecutive images still shared most of their layers.
    - container storage relocated onto the runner's larger `/mnt` disk, because
      rechunking briefly needs two unpacked copies of the image in storage at once
 2. [`.github/actions/rechunk-native-image`](../.github/actions/rechunk-native-image/action.yml)
@@ -463,7 +466,7 @@ signed:
    same local tag `publish-native-image` expects.
 3. `sign-candidate-image`'s last step copies the signed digest to the
    candidate tag with `skopeo copy --preserve-digests`, so that copy cannot
-   silently re-encode the manifest and drop Chunkah's layer annotations.
+   silently re-encode the manifest and move off the digest the signature covers.
    `ci_tools/promote_stable.py`'s later `latest`/audit-tag copies already used
    `--preserve-digests` for the same reason.
 

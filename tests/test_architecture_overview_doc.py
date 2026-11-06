@@ -557,6 +557,25 @@ class ContainerfileSectionTests(unittest.TestCase):
         self.assertIn(stated.group(1), action)
         self.assertIn("--format docker \\", action)
 
+    def test_the_documented_published_format_follows_from_the_build_order(self) -> None:
+        """
+        `--format docker` used to be described as what booted machines receive.
+        The overview's correction holds only while the rechunk step runs after
+        the build and the push does not pick a format of its own.
+        """
+        self.assertIn("so every published image has an OCI manifest", doc())
+        workflow = read(".github/workflows/build.yml")
+        steps = [
+            workflow.index(f"uses: ./.github/actions/{name}\n")
+            for name in ("build-native-image", "rechunk-native-image", "publish-native-image")
+        ]
+        self.assertEqual(steps, sorted(steps), "the build, rechunk and push order changed")
+        self.assertIn(
+            'podman load -i "${archive}"',
+            read(".github/actions/rechunk-native-image/action.yml"),
+        )
+        self.assertNotIn("--format", read(".github/actions/publish-native-image/action.yml"))
+
     def test_the_documented_inventory_comparison_is_paths_not_hashes(self) -> None:
         self.assertIn("It\ncompares paths and not hashes on purpose", doc())
         script = read("build_files/check-brew-payload-inventory.sh")
@@ -711,7 +730,7 @@ class RechunkBandTests(unittest.TestCase):
     def test_both_documented_digest_preserving_copies_pass_the_flag(self) -> None:
         """
         The subsection's last point is that neither copy may re-encode the
-        manifest, because that would drop Chunkah's layer annotations.
+        manifest, because that would move it off the digest the signature covers.
         """
         self.assertIn("`skopeo copy --preserve-digests`", doc())
         self.assertIn(

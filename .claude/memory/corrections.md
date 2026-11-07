@@ -62,6 +62,11 @@ choice when it does — so one deliberately invalid command yields the whole set
 More generally: in this repository, "it will fail fast anyway" is a claim about
 a code path, and it has to be read rather than assumed.
 
+**Since #541:** that fallback is gone. `main()` now stops at
+`require_env("KERNEL_RELEASE")` before any `just` command, so this particular
+command no longer publishes from an empty environment. The *Avoid by* still
+stands: any other handler can grow a default like it.
+
 ---
 
 ## `unittest discover` silently skips a test directory with no `__init__.py`

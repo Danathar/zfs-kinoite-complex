@@ -406,12 +406,13 @@ def weaker(committed: dict) -> list[dict]:
 
 class FleetListTests(unittest.TestCase):
     def test_the_fleet_is_every_other_repository_once(self) -> None:
-        self.assertEqual(len(FLEET), 11)
+        self.assertEqual(len(FLEET), 12)
         self.assertEqual(len(set(FLEET)), len(FLEET))
         self.assertNotIn("Danathar/zfs-kinoite-complex", FLEET)
         self.assertTrue(all(repository.startswith("Danathar/") for repository in FLEET))
         self.assertIn("Danathar/exult", FLEET)
         self.assertIn("Danathar/sensi", FLEET)
+        self.assertIn("Danathar/appbox", FLEET)
 
     def test_the_nightly_job_runs_the_fleet_check(self) -> None:
         workflow = REPO_ROOT / ".github" / "workflows" / "nightly-compliance.yml"

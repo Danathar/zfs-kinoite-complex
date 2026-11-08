@@ -54,6 +54,7 @@ RAW_MEDIA_TYPE = "application/vnd.github.raw+json"
 # Every other repository that commits a ruleset file. This one is checked by the plain run.
 FLEET = (
     "Danathar/akmods",
+    "Danathar/appbox",
     "Danathar/arch-bootc",
     "Danathar/atomic-image-builder",
     "Danathar/aurora-zfs-simple",

@@ -418,6 +418,13 @@ class GotchaCitationTests(unittest.TestCase):
             with self.subTest(flag=flag):
                 self.assertIn(flag, item)
 
+    def test_the_rule_counts_the_mechanisms_it_lists(self) -> None:
+        """The sentence announcing the list and the list itself have to agree."""
+
+        item = self._item_body(self._argv_gotcha_number())
+        self.assertIn("three ways a job here satisfies the rule", re.sub(r"\s+", " ", item))
+        self.assertEqual(len(re.findall(r"^\s*- ", item, flags=re.MULTILINE)), 3)
+
     def test_the_rule_states_the_hole_it_does_not_close(self) -> None:
         """
         The page is explicit that a file-mode fix is a cross-uid fix only.
@@ -906,19 +913,47 @@ class CredentialMechanismTests(unittest.TestCase):
         self.assertNotIn("${REGISTRY_PASSWORD}\"\n", body.split("podman push", 1)[1])
         self.assertIn('encoded_credential="$(printf \'%s\' "${REGISTRY_USER}:${REGISTRY_PASSWORD}" | base64 -w0)"', body)
 
+    def _status_branch_step_lines(self) -> list[str]:
+        """
+        The publisher's shell lines, stripped, so a claim can be matched as a whole line.
+
+        A substring match is not enough here: `/usr/bin/printf '...'` contains the builtin's
+        line and puts the token straight back into argv, and a match anywhere in the file
+        would accept the line in a comment or in another step.
+        """
+
+        body = _step_run_body(TRIAGE_WORKFLOW.read_text(encoding="utf-8"), "Publish badges to status branch")
+        return [line.strip() for line in body.splitlines()]
+
     def test_the_status_branch_publisher_hands_git_a_credential_file(self) -> None:
         """
         The third mechanism, and the only one about git.
 
         All four moving parts are asserted: the printf builtin, the helper reset, the store
-        file, and a remote URL with no credential in it.
+        file, and a remote URL with no credential in it. The reset has to come first, because
+        an empty `credential.helper` clears every helper configured before it.
         """
 
-        text = TRIAGE_WORKFLOW.read_text(encoding="utf-8")
-        self.assertIn("printf 'https://x-access-token:%s@github.com\\n' \"${GH_TOKEN}\" > \"${cred_file}\"", text)
-        self.assertIn('git config --local credential.helper ""', text)
-        self.assertIn('git config --local --add credential.helper "store --file=${cred_file}"', text)
-        self.assertIn('git remote add origin "https://github.com/${REPO}.git"', text)
+        lines = self._status_branch_step_lines()
+        reset = 'git config --local credential.helper ""'
+        store = 'git config --local --add credential.helper "store --file=${cred_file}"'
+        self.assertIn("printf 'https://x-access-token:%s@github.com\\n' \"${GH_TOKEN}\" > \"${cred_file}\"", lines)
+        self.assertIn(reset, lines)
+        self.assertIn(store, lines)
+        self.assertLess(lines.index(reset), lines.index(store))
+        self.assertIn('git remote add origin "https://github.com/${REPO}.git"', lines)
+
+    def test_the_status_branch_credential_file_is_never_published(self) -> None:
+        """
+        The step runs `git add -A` in its work directory, so a credential file created in
+        there would be pushed to the public status branch. It is made outside it and removed
+        when the step exits.
+        """
+
+        lines = self._status_branch_step_lines()
+        self.assertIn("git add -A", lines)
+        self.assertIn('cred_file="$(mktemp)"', lines)
+        self.assertIn("trap 'rm -f \"${cred_file}\"' EXIT", lines)
 
     def test_the_status_branch_remote_url_carries_no_token(self) -> None:
         """

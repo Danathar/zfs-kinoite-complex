@@ -1,0 +1,22 @@
+# Issue #139: the push step of .github/actions/publish-native-image/action.yml
+# as it was before d3bbf89, handing podman the registry pair as --creds. Not an
+# action; read as text by tests/test_no_credential_in_argv.py, which must flag
+# the push.
+runs:
+  using: composite
+  steps:
+    - name: Push transient tag with podman
+      shell: bash
+      env:
+        IMAGE_REGISTRY: ${{ inputs.image_registry }}
+        IMAGE_NAME: ${{ inputs.image_name }}
+        TRANSIENT_IMAGE_TAG: ${{ inputs.image_tag }}-unsigned-${{ github.run_id }}
+        REGISTRY_USER: ${{ inputs.registry_username }}
+        REGISTRY_PASSWORD: ${{ inputs.registry_password }}
+      run: |
+        set -euo pipefail
+        podman push \
+          --tls-verify=true \
+          --creds "${REGISTRY_USER}:${REGISTRY_PASSWORD}" \
+          "${IMAGE_NAME}:${TRANSIENT_IMAGE_TAG}" \
+          "${IMAGE_REGISTRY}/${IMAGE_NAME}:${TRANSIENT_IMAGE_TAG}"

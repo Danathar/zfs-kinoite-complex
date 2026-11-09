@@ -25,6 +25,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 POLICY_PATH = REPO_ROOT / ".github" / "policies" / "tmp-paths.json"
 
+POLICY_NAME = POLICY_PATH.relative_to(REPO_ROOT).as_posix()
+
 # Not shipped: tests and local agent configuration.
 EXCLUDED_PREFIXES = ("tests/", ".claude/")
 
@@ -36,7 +38,7 @@ INSIDE_PATH = re.compile(r"/[A-Za-z0-9._-]+$")
 ADVICE = (
     "Use PrivateTmp=yes on the unit, RuntimeDirectory=/StateDirectory=, `mktemp -d` "
     "(or $RUNNER_TEMP in workflows), or a root-owned /run/<name>. If the use is safe, list the "
-    f"(file, tmp_path) pair with a reason in {POLICY_PATH.relative_to(REPO_ROOT)}."
+    f"(file, tmp_path) pair with a reason in {POLICY_NAME}."
 )
 
 
@@ -52,7 +54,7 @@ def scan(root: Path, files: list[str]) -> list[tuple[str, int, str]]:
 
     hits = []
     for name in files:
-        if name.startswith(EXCLUDED_PREFIXES):
+        if name.startswith(EXCLUDED_PREFIXES) or name == POLICY_NAME:
             continue
         path = root / name
         if not path.is_file():
@@ -149,6 +151,10 @@ class ScanTests(unittest.TestCase):
         self.plant("tests/fixtures/x.conf", "/tmp/scratch\n")
         self.plant("tests/e2e/run.sh", "/tmp/scratch\n")
         self.plant(".claude/settings.json", '"/tmp/scratch"\n')
+        self.assertEqual(self.check(), [])
+
+    def test_the_allowlist_itself_is_not_scanned(self) -> None:
+        self.plant(POLICY_NAME, '{"allowed": [{"tmp_path": "/tmp/scratch"}]}\n')
         self.assertEqual(self.check(), [])
 
     def test_var_tmp_and_url_paths_pass(self) -> None:

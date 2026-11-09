@@ -330,9 +330,13 @@ def env_reads(tree: ast.AST) -> set[str]:
             )
             if (by_helper or by_get) and node.args and isinstance(node.args[0], ast.Constant):
                 found.add(node.args[0].value)
-        elif isinstance(node, ast.Subscript) and isinstance(node.ctx, ast.Load):
-            if _is_environ(node.value) and isinstance(node.slice, ast.Constant):
-                found.add(node.slice.value)
+        elif (
+            isinstance(node, ast.Subscript)
+            and isinstance(node.ctx, ast.Load)
+            and _is_environ(node.value)
+            and isinstance(node.slice, ast.Constant)
+        ):
+            found.add(node.slice.value)
     return found
 
 

@@ -1,0 +1,35 @@
+# Issue #135: the three registry helpers in ci_tools/common.py as they were
+# before 257abfb, each handing the `actor:token` pair (or the cosign username
+# and password) to skopeo or cosign as arguments. Not imported; read as Python
+# source by tests/test_no_credential_in_argv.py, which must flag all four.
+
+
+def skopeo_inspect_json(image_ref: str, *, creds: str | None = None) -> dict:
+    command = ["skopeo", "inspect"]
+    if creds:
+        command.extend(["--creds", creds])
+    command.append(image_ref)
+    return run_json_cmd(command, timeout=REGISTRY_METADATA_TIMEOUT)
+
+
+def skopeo_copy(source: str, destination: str, *, creds: str | None = None) -> None:
+    command = ["skopeo", "copy", "--retry-times", "3"]
+    if creds:
+        command.extend(["--src-creds", creds, "--dest-creds", creds])
+    command.extend([source, destination])
+    run_cmd(command, capture_output=False, timeout=REGISTRY_TRANSFER_TIMEOUT)
+
+
+def cosign_verify(image_ref: str, key_path: str, registry_username, registry_password) -> None:
+    command = ["cosign", "verify", "--key", key_path]
+    if registry_username and registry_password:
+        command.extend(
+            [
+                "--registry-username",
+                registry_username,
+                "--registry-password",
+                registry_password,
+            ]
+        )
+    command.append(image_ref)
+    run_cmd(command, timeout=COSIGN_TIMEOUT)

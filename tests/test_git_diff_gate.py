@@ -219,6 +219,14 @@ class GateWiringTests(unittest.TestCase):
             with self.subTest(rule=rule):
                 self.assertIn(rule, allow)
 
+    def test_renamed_copies_of_the_signing_key_are_denied_too(self) -> None:
+        # `cosign.key.old-backup` is gitignored like `cosign.key`, so a Read
+        # rule for the bare name alone leaves every renamed copy readable.
+        deny = self.settings["permissions"]["deny"]
+        for rule in ("Read(./cosign.key)", "Read(./cosign.key.*)"):
+            with self.subTest(rule=rule):
+                self.assertIn(rule, deny)
+
 
 class GateRunner:
     """Run the hook against this checkout. Shared by the two test classes below."""

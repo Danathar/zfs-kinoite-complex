@@ -22,7 +22,8 @@ What is pinned, and what is not:
     guest runs, what the summary names and where the logs it points at are kept; and, for
     agent-audit.yml, its schedule and window, the columns its summary writes, its read-only token,
     the two findings that turn it red, its merge exemption and enforcement date, and the issue a
-    red scheduled run opens.
+    red scheduled run opens; for agent-signature.yml, who it checks, its empty token, and that no
+    ruleset requires it.
 
 What is not pinned: the live GitHub facts (who authored a pull request, what the Hive labels say).
 The page gives the `gh` command for each rather than stating them as settled, and a test cannot
@@ -107,6 +108,7 @@ EXPECTED_QUOTED = {
     ],
     "auto-issues.yml": ["Auto issues", "Open, update or close the tracking issue"],
     "agent-audit.yml": ["Agent audit trail", "Read back merged agent pull requests"],
+    "agent-signature.yml": ["Agent PR signature", "Check the agent signature line"],
     "ai-fix.yml": ["AI fix", "Check credentials and target", "Run the agent"],
 }
 
@@ -792,6 +794,43 @@ class AgentAuditEntry(RunbookTest):
             "A red scheduled run also opens a `Scheduled run failing: Agent audit trail` issue",
             self.entry,
         )
+
+
+class AgentSignatureEntry(RunbookTest):
+    @classmethod
+    def setUpClass(cls) -> None:
+        super().setUpClass()
+        cls.entry = collapse(cls.sections["agent-signature.yml"])
+        cls.workflow = workflow_text("agent-signature.yml")
+
+    def test_it_checks_the_pull_requests_the_page_names(self) -> None:
+        self.assertIn(
+            "if: github.event.pull_request.user.login == 'danathar-atomic-hive[bot]'"
+            " || startsWith(github.event.pull_request.head.ref, 'ai-fix/')",
+            self.workflow,
+        )
+        self.assertIn(
+            "runs on a pull request that `danathar-atomic-hive[bot]` opened or that comes from an"
+            " `ai-fix/` branch",
+            self.entry,
+        )
+
+    def test_its_token_has_no_permissions(self) -> None:
+        self.assertEqual(top_block(self.workflow, "permissions"), [])
+        self.assertIn("    permissions: {}\n", self.workflow)
+        self.assertNotIn("uses:", self.workflow)
+        self.assertIn("Its token has no permissions.", self.entry)
+
+    def test_an_edited_description_runs_it_again(self) -> None:
+        on = top_block(self.workflow, "on")
+        self.assertIn("      - edited", on)
+        self.assertIn("Saving the description runs the check again", self.entry)
+
+    def test_it_is_not_a_required_check(self) -> None:
+        job = re.search(r"^    name:\s*(.+?)\s*$", self.workflow, re.MULTILINE)
+        self.assertIsNotNone(job)
+        self.assertNotIn(job.group(1), RULESET.read_text(encoding="utf-8"))
+        self.assertIn("it is not a required check", self.entry)
 
 
 class HookEntry(RunbookTest):

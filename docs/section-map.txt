@@ -193,6 +193,8 @@
   joined: tests/test_ai_ops_runbook_doc.py
 ### `agent-audit.yml` — "Agent audit trail"
   joined: tests/test_ai_ops_runbook_doc.py
+### `agent-signature.yml` — "Agent PR signature"
+  joined: tests/test_ai_ops_runbook_doc.py
 ## Sticky akmods failure issues
   joined: tests/test_ai_ops_runbook_doc.py
 ## The gate hook refuses a command

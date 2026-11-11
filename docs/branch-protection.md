@@ -75,7 +75,9 @@ applies as-is. What each rule does:
   request never gets it and would wait forever. `Apply area labels`
   classifies a change rather than checking it. `Mutation check (advisory)` in
   `test.yml` reports on the step summary and never fails the run, so it has
-  nothing to require. `integration_id` 15368 is
+  nothing to require. `Check the agent signature line` in
+  `agent-signature.yml` runs only on agent pull requests and is advisory for
+  now; it can be added here once it has run clean for a month. `integration_id` 15368 is
   GitHub Actions, so a status with the same name posted by anything else does
   not count.
 

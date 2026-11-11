@@ -21,8 +21,8 @@ from check_coverage import (
     evaluate,
     load_ceilings,
     load_covered_counts,
-    load_missing_lines,
     load_manifest,
+    load_missing_lines,
     main,
     shipped_executables,
 )

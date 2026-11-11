@@ -66,7 +66,7 @@ jobs:
 
           found="$(printf '%s' "${PR_BODY}" | jq -Rrs "${signature_def}"'{body: .} | signature // empty')"
           if [ -z "${found}" ]; then
-            echo '::error::The last line of the description is not a "— hive:" signature line. End the description with one, such as "— hive: agent=scanner backend=claude model=<model id>"; saving the description runs this check again.'
+            echo '::error::The last line of the description is not a "— hive:" signature line. End the description with one, such as "— hive: agent=<role> backend=<backend> model=<model>"; saving the description runs this check again.'
             exit 1
           fi
           echo "Signed: ${found}"

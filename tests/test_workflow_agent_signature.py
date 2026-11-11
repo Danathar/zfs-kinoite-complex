@@ -45,7 +45,7 @@ JOB_NAME = "Check the agent signature line"
 # A step with no `shell:` key runs under `bash -e {0}`: no pipefail unless the body sets it.
 GITHUB_BASH = ["bash", "--noprofile", "--norc", "-e"]
 
-SIGNATURE = "— hive: agent=scanner backend=claude model=claude-opus-5-5"
+SIGNATURE = "— hive: agent=quality backend=claude model=claude-opus-5-5"
 DEFINITION_RE = re.compile(r"^signature_def='([^']*)'$", re.MULTILINE)
 
 
@@ -175,7 +175,7 @@ class SignatureStepTests(unittest.TestCase):
         self.assertSigned(f"Closes #1\n\n{SIGNATURE}\n\n<!-- hive:issue-link-fixed -->\n")
 
     def test_a_hidden_marker_does_not_stand_in_for_a_signature(self) -> None:
-        self.assertUnsigned("Closes #1\n\n<!-- — hive: agent=scanner -->\n")
+        self.assertUnsigned("Closes #1\n\n<!-- — hive: agent=quality -->\n")
 
     def test_a_line_without_a_key_value_field_does_not_sign(self) -> None:
         self.assertUnsigned("Closes #1\n\n— hive: scanner\n")

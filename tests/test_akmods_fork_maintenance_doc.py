@@ -823,7 +823,11 @@ class ValidationInstructionTests(unittest.TestCase):
         )
 
     def test_the_rebuild_is_placed_on_main_after_the_push(self) -> None:
-        """Where the rebuild runs and when it validates are the step's two warnings; keep both."""
+        """
+        Where the rebuild runs and when it validates are the step's two warnings; keep both.
+        While the temporary `AKMODS_UPSTREAM_REF` pin is set, the step must also say the
+        rebuild builds the pinned commit, not the pushed one.
+        """
 
         after_push = _after_push_step()
         self.assertIn("The rebuild runs on `main`", after_push)
@@ -832,7 +836,16 @@ class ValidationInstructionTests(unittest.TestCase):
             "validates the sync after it lands, not before",
             after_push,
         )
-        self.assertIn("main", load_repo_defaults().get("AKMODS_UPSTREAM_TRACK", ""))
+        defaults = load_repo_defaults()
+        self.assertIn("main", defaults.get("AKMODS_UPSTREAM_TRACK", ""))
+        if defaults.get("AKMODS_UPSTREAM_REF"):
+            # While the guard pin is set, the rebuild builds the pinned commit.
+            normalized = " ".join(after_push.split())
+            self.assertIn(
+                "a `rebuild_akmods=true` run rebuilds the pinned commit, not the pushed one",
+                normalized,
+            )
+            self.assertIn("Danathar/akmods#260", normalized)
 
     def test_the_files_a_green_branch_run_says_nothing_about_are_the_ones_checked_above(
         self,

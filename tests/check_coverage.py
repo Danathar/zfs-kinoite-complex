@@ -407,6 +407,27 @@ def evaluate(
     return failures, passes, raisable
 
 
+def lowerable_ceilings(
+    floors: dict[str, int],
+    ceilings: dict[str, int],
+    missing: dict[str, list[int]],
+) -> list[str]:
+    """
+    Report modules whose missing-statement count is below their ceiling.
+
+    Mirrors `raisable` for floors and is report-only for the same reason: it
+    never fails the gate. Without it, room left by a new test is silently
+    available to the next untested guard.
+    """
+
+    lowerable: list[str] = []
+    for module_path in sorted(set(missing) & set(floors)):
+        ceiling = ceilings.get(module_path, 0)
+        if len(missing[module_path]) < ceiling:
+            lowerable.append(f"{module_path}: ceiling {ceiling}, missing {len(missing[module_path])}")
+    return lowerable
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python3 tests/check_coverage.py",
@@ -458,6 +479,9 @@ def main(argv: list[str] | None = None) -> int:
         # Reported, never applied. See the module docstring on why raising is a
         # decision someone makes in a diff.
         print(f"coverage: could raise {line}")
+    for line in lowerable_ceilings(floors, ceilings, missing):
+        # Reported, never applied or failed: at or under the ceiling still passes.
+        print(f"coverage: could lower {line}")
 
     if failures:
         for line in failures:

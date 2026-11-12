@@ -1311,9 +1311,12 @@ class ResponseRuleTests(unittest.TestCase):
 
     def test_clearing_the_pin_returns_the_build_to_the_floating_track(self) -> None:
         # The other half of the rule, and the reason it is safe to tell someone to clear the
-        # pin: with the committed empty value the cascade floats to the tracking ref.
+        # pin: with an empty value the cascade floats to the tracking ref. The empty value is
+        # set here so a temporary committed pin (Danathar/akmods#255) cannot answer instead.
+        cleared = dict(self.defaults, AKMODS_UPSTREAM_REF="")
         with (
             patch.dict(os.environ, _wiped_env(), clear=False),
+            patch("ci_tools.resolve_build_inputs.load_repo_defaults", return_value=cleared),
             patch(
                 "ci_tools.resolve_build_inputs.git_ls_remote_resolve", return_value=TRACK_SHA
             ) as ls_remote,

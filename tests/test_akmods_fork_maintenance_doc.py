@@ -355,8 +355,12 @@ class RefCascadeTests(unittest.TestCase):
         self.assertIsNotNone(match, "the document no longer quotes a default tracking ref")
         documented_track = match.group(1)
 
+        # Mode three is the empty-pin case; set it explicitly so a temporary committed pin
+        # (Danathar/akmods#255) does not turn this into a mode-two test.
+        floating = dict(self.defaults, AKMODS_UPSTREAM_REF="")
         with (
             patch.dict(os.environ, _wiped_env(), clear=False),
+            patch("ci_tools.resolve_build_inputs.load_repo_defaults", return_value=floating),
             patch(
                 "ci_tools.resolve_build_inputs.git_ls_remote_resolve",
                 return_value=TRACK_SHA,
@@ -642,7 +646,10 @@ class ReplayClaimTests(unittest.TestCase):
         self.assertNotIn("akmods_upstream_ref", self.lock)
 
     def test_a_replay_without_an_explicit_ref_falls_back_to_the_tracking_ref(self) -> None:
-        self.assertEqual(self._replay(), TRACK_SHA)
+        # "Without an explicit ref" includes the defaults-file pin, which may be set temporarily.
+        floating = dict(load_repo_defaults(), AKMODS_UPSTREAM_REF="")
+        with patch("ci_tools.resolve_build_inputs.load_repo_defaults", return_value=floating):
+            self.assertEqual(self._replay(), TRACK_SHA)
 
     def test_a_lock_file_field_wins_over_every_other_source(self) -> None:
         self.assertIn("add an `akmods_upstream_ref` field to the lock file", self.claim)
@@ -665,8 +672,10 @@ class ReplayClaimTests(unittest.TestCase):
                 LOCK_FILE=str(lock_path),
                 BUILD_CONTAINER_REF="ghcr.io/example/devcontainer@sha256:" + "1" * 64,
             )
+            floating = dict(load_repo_defaults(), AKMODS_UPSTREAM_REF="")
             with (
                 patch.dict(os.environ, env, clear=False),
+                patch("ci_tools.resolve_build_inputs.load_repo_defaults", return_value=floating),
                 patch(
                     "ci_tools.resolve_build_inputs.git_ls_remote_resolve",
                     side_effect=CiToolError("tracking ref is gone"),

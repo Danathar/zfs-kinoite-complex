@@ -22,10 +22,10 @@ from check_coverage import (
     CoverageGateError,
     evaluate,
     load_ceilings,
-    lowerable_ceilings,
     load_covered_counts,
     load_manifest,
     load_missing_lines,
+    lowerable_ceilings,
     main,
     shipped_executables,
 )

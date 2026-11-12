@@ -616,6 +616,15 @@ class FetchCommittedTests(unittest.TestCase):
         ):
             fetch_committed_checks("o/r", "main", "t")
 
+    def test_a_checks_file_whose_rules_is_not_a_list_is_refused(self) -> None:
+        # A non-empty string is truthy, so only the list check stops it.
+        api = FleetApi({"o/r": ("main", SPLIT_MAIN, [], {"rules": "required_status_checks"})})
+        with (
+            mock.patch.object(check_ruleset_drift, "_get", api),
+            self.assertRaisesRegex(CiToolError, "main-checks.json holds no `rules` list"),
+        ):
+            fetch_committed_checks("o/r", "main", "t")
+
     def test_get_sends_the_raw_media_type_when_asked(self) -> None:
         class Response(io.BytesIO):
             headers: ClassVar[dict[str, str]] = {}

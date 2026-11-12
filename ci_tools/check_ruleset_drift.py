@@ -370,7 +370,7 @@ def fleet_section(repository: str, token: str) -> tuple[str, bool]:
                     path,
                     {rule["type"] for rule in ruleset["rules"]},
                 )
-                for path, ruleset in zip(files, (main_file, checks_file), strict=True)
+                for path, ruleset in ((files[0], main_file), (files[1], checks_file))
             ]
         commands = " and ".join(f"`{put}`" for put in puts)
         section += f"\nIn `{repository}`, from a checkout of `{branch}`: {commands}\n"

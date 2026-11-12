@@ -61,6 +61,8 @@
   joined: tests/test_quality_doc.py
 ## 9. Findings about the Bash guard hook: what is in scope
   prose: unchecked: names what the command gate in .claude/hooks/ checks; the rest is a ruling on which findings to file
+## 10. Owner's standing decisions
+  prose: narrative: a standing ruling on which owner questions agents decide themselves
 
 [CLAUDE.md]
 ## 0. This Repository Publishes A Real Image — Read This First

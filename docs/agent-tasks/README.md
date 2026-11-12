@@ -59,6 +59,8 @@ commit SHA. Do not treat the SHA as a pointer into this repository: some read
 
 The signature is **a hint, not proof**. Not every Hive pull request carries one,
 and anyone can type that line into a comment. Check the author, not the text.
+`.github/workflows/agent-signature.yml` looks for the line while a Hive pull
+request is still open, so a missing one can be added before the merge.
 
 ### The branch prefix
 

@@ -61,6 +61,7 @@ DOC_GUIDE = REPO_ROOT / "docs" / "documentation-guide.md"
 SETTINGS = REPO_ROOT / ".claude" / "settings.json"
 HOOK = REPO_ROOT / ".claude" / "hooks" / "gate-git-diff.sh"
 RULESET = REPO_ROOT / ".github" / "rulesets" / "main.json"
+CHECKS_RULESET = REPO_ROOT / ".github" / "rulesets" / "main-checks.json"
 LABELER_CONFIG = REPO_ROOT / ".github" / "labeler.yml"
 CLASSIFIER = REPO_ROOT / "ci_tools" / "classify_akmods_failure.py"
 STABLE_SIGNAL = REPO_ROOT / "ci_tools" / "check_stable_signal.py"
@@ -336,7 +337,8 @@ class QuotedNames(RunbookTest):
     def test_the_required_check_the_page_names_is_the_one_the_ruleset_requires(self) -> None:
         required = [
             rule["parameters"]["required_status_checks"]
-            for rule in json.loads(RULESET.read_text(encoding="utf-8"))["rules"]
+            for path in (RULESET, CHECKS_RULESET)
+            for rule in json.loads(path.read_text(encoding="utf-8"))["rules"]
             if rule["type"] == "required_status_checks"
         ]
         contexts = [check["context"] for group in required for check in group]

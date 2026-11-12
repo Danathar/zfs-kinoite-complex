@@ -182,29 +182,34 @@ doing the work has to keep:
 4. **Keep a pull request to one change.** A small pull request that touches
    few files has few ways to overlap with another.
 
-### A green pull request can fall behind `main`
+### A green pull request does not have to catch up with `main`
 
 The required check is `Python Unit Tests`. The ruleset in
-[`.github/rulesets/main.json`](../.github/rulesets/main.json) sets
-`strict_required_status_checks_policy` to `true`. In plain terms: GitHub makes
-a pull request catch up with `main`, and pass `Python Unit Tests` that way,
-before it merges. A pull request is judged by the code `main` will have after
-the merge, not only by the code it was first tested with.
+[`.github/rulesets/main-checks.json`](../.github/rulesets/main-checks.json)
+sets `strict_required_status_checks_policy` to `false`. In plain terms: a pull
+request whose check passed on its own head commit can merge even when `main`
+has moved on since. GitHub no longer makes it catch up with `main` first.
 
-That closes the gap where pull request A and pull request B each pass, both
-change the same function from different directions, and merging A and then B
-leaves `main` broken even though neither ever showed red. It matters here
-because a push to `main` that changes more than documentation starts
-`build.yml`, the workflow that signs and promotes an image. See
-[`branch-protection.md`](./branch-protection.md) for the ruleset itself, and
-[`safety-model.md`](./safety-model.md) for what a bad `main` can reach.
+It used to be `true`. The owner turned it off because every merge made each
+open Renovate pull request stale again, and nothing brought them up to date:
+`renovate.json` sets `rebaseWhen` to `never`, and once anyone else pushes to a
+Renovate branch, Renovate leaves that branch alone. Those bump pull requests
+piled up waiting for the owner, although
+[AGENTS.md section 10, "Owner's standing decisions"](../AGENTS.md#10-owners-standing-decisions)
+already approves routine patch and minor updates with green CI.
 
-The cost is that every merge makes the other open pull requests stale. GitHub
-blocks each one as behind `main` until its branch is updated from `main` and
-`Python Unit Tests` reruns. A pull request blocked that way needs an update,
-not a fix, unless the rerun then fails on the pair. The ruleset has no merge
-queue (a GitHub feature that tests each pull request on top of the ones ahead
-of it), so nothing does that update for you.
+The cost is the gap strict mode closed. Pull request A and pull request B can
+each pass, both change the same function from different directions, and
+merging A and then B can leave `main` broken even though neither ever showed
+red. `test.yml` runs `Python Unit Tests` again on the push to `main`, so that
+shows up there, but after the merge, and a push to `main` that changes more
+than documentation also starts `build.yml`, the workflow that signs and
+promotes an image. When two open pull requests change the same code, update
+the second from `main` and let its check run again before merging it. The
+ruleset has no merge queue (a GitHub feature that tests each pull request on
+top of the ones ahead of it). See
+[`branch-protection.md`](./branch-protection.md) for the rulesets themselves,
+and [`safety-model.md`](./safety-model.md) for what a bad `main` can reach.
 
 To check what the live ruleset says rather than trust this page:
 
@@ -235,10 +240,11 @@ gh pr list --state merged --limit 1000 --json mergedBy \
 ```
 
 A merge to `main` builds, signs and promotes the image, so the required checks
-are the gate. The ruleset requires a pull request and a passing
-`Python Unit Tests`; it requires no approving review except the code owner's on
-Tier 3 paths, and it allows no bypass actors. It applies to the Hive app as to
-anyone else.
+are the gate. The rulesets require a pull request and a passing
+`Python Unit Tests`; they require no approving review except the code owner's on
+Tier 3 paths, and the only bypass actor is the Renovate app, which may merge
+its own non-major updates without the code owner's review but cannot skip the
+required check. They apply to the Hive app as to anyone else.
 
 The App's merges have included pull requests that changed code the signing jobs
 run (#402, #434, #436), with no approval. The maintainer chose to gate that

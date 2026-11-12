@@ -124,8 +124,9 @@ jobs:
         with:
           persist-credentials: false
 
-      # Applying .github/rulesets/main.json to GitHub is a separate owner-only
-      # PUT, and nothing noticed when it was skipped (#454, #488). This reads
+      # Applying .github/rulesets/main.json (and main-checks.json) to GitHub is
+      # a separate owner-only PUT, and nothing noticed when it was skipped
+      # (#454, #488). This reads
       # the rules GitHub enforces on the default branch, which needs only
       # `contents: read`, and fails when any of them is weaker than the file.
       # Extra or stricter live rules pass. docs/branch-protection.md says what

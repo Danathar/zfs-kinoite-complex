@@ -384,7 +384,8 @@ class RefCascadeTests(unittest.TestCase):
         unfreeze = steps[-1]
         self.assertIn("AKMODS_UPSTREAM_REF", unfreeze)
         self.assertIn('`""`', unfreeze)
-        self.assertEqual(json.loads(DEFAULTS_FILE.read_text(encoding="utf-8"))["AKMODS_UPSTREAM_REF"], "")
+        # Temporary guard pin (Danathar/akmods#255, removed by Danathar/akmods#260): a 40-hex SHA.
+        self.assertRegex(json.loads(DEFAULTS_FILE.read_text(encoding="utf-8"))["AKMODS_UPSTREAM_REF"], r"^[0-9a-f]{40}$")
 
     def test_plain_language_model_names_the_configured_fork(self) -> None:
         pieces = _numbered_items(_section(DOC_TEXT, "## Plain-Language Model"))

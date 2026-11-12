@@ -180,7 +180,11 @@ Every file in `.github/workflows/` has an entry here.
   issue titled `Scheduled run failing: Build And Promote Main Image`, which
   the next scheduled run that really builds and succeeds closes. The job is
   "Manage sticky akmods failure issue". See the next section for the akmods
-  issues themselves.
+  issues themselves. When that job closes a sticky issue, a second job, "Re-run
+  pull request builds stopped by the cleared failure", re-runs the failed jobs
+  of each open pull request's newest `build-pr.yml` run, because those builds
+  failed on the same stop and nothing else starts them again. Pull requests
+  from forks are left alone.
 - **First:** if this workflow itself is red, the build it reports on is
   unaffected. Open the run and read the failing step. Until it is fixed the
   issue and badges may be stale.

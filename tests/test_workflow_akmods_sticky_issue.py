@@ -3,7 +3,8 @@ Script: tests/test_workflow_akmods_sticky_issue.py
 What: Tests the first three github-script steps in .github/workflows/akmods-failure-triage.yml:
 the step that looks for the build's artifacts and downloads the akmods failure payload, the step
 that opens or updates the sticky `akmods-failure` issue, and the step that closes those issues
-after a green build.
+after a green build and reports whether it closed any. tests/test_workflow_rerun_pr_builds.py
+tests the job that reads that report.
 Doing: Takes each step's own `script:` text from the workflow, runs it under node with stand-ins
 for `github`, `context` and `core` that record every API call and every step output, in a
 temporary working directory. The sticky issue step reads a payload made by
@@ -354,7 +355,9 @@ class AkmodsStickyIssueStepTests(unittest.TestCase):
     # --- Close stale sticky issues ----------------------------------------------------------
 
     def test_a_green_build_comments_on_and_closes_every_open_sticky_issue(self) -> None:
-        calls, _ = self.run_step(CLOSE_STEP, issues=[issue(5, "a"), issue(9, None)])
+        calls, outputs = self.run_step(CLOSE_STEP, issues=[issue(5, "a"), issue(9, None)])
+        # The rerun-pr-builds job runs only on this output.
+        self.assertEqual(outputs, {"cleared": "true"})
         self.check_listing(calls)
         writes = self.writes(calls)
         self.assertEqual(
@@ -369,7 +372,9 @@ class AkmodsStickyIssueStepTests(unittest.TestCase):
                 self.assertIn(RUN["head_sha"], params["body"])
 
     def test_nothing_is_written_when_no_sticky_issue_is_open(self) -> None:
-        calls, _ = self.run_step(CLOSE_STEP)
+        calls, outputs = self.run_step(CLOSE_STEP)
+        # No stop cleared, so no pull request build is re-run.
+        self.assertEqual(outputs, {"cleared": "false"})
         self.check_listing(calls)
         self.assertEqual(self.writes(calls), [])
 

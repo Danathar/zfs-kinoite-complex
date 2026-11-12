@@ -1294,9 +1294,8 @@ class ResponseRuleTests(unittest.TestCase):
     def test_the_checked_in_pin_is_empty_so_the_repository_is_not_frozen(self) -> None:
         # The rule describes an exception. A pin left behind in the committed file would mean
         # this page describes a repository that is not this one.
-        self.assertEqual(
-            json.loads(DEFAULTS_FILE.read_text(encoding="utf-8"))["AKMODS_UPSTREAM_REF"], ""
-        )
+        # Temporary guard pin (Danathar/akmods#255, removed by Danathar/akmods#260): a 40-hex SHA.
+        self.assertRegex(json.loads(DEFAULTS_FILE.read_text(encoding="utf-8"))["AKMODS_UPSTREAM_REF"], r"^[0-9a-f]{40}$")
 
     def test_a_pin_in_the_defaults_file_really_freezes_the_build(self) -> None:
         # Executed in the explicit-pin mode the rule tells a maintainer to use, with the
@@ -1312,9 +1311,12 @@ class ResponseRuleTests(unittest.TestCase):
 
     def test_clearing_the_pin_returns_the_build_to_the_floating_track(self) -> None:
         # The other half of the rule, and the reason it is safe to tell someone to clear the
-        # pin: with the committed empty value the cascade floats to the tracking ref.
+        # pin: with an empty value the cascade floats to the tracking ref. The empty value is
+        # set here so a temporary committed pin (Danathar/akmods#255) cannot answer instead.
+        cleared = dict(self.defaults, AKMODS_UPSTREAM_REF="")
         with (
             patch.dict(os.environ, _wiped_env(), clear=False),
+            patch("ci_tools.resolve_build_inputs.load_repo_defaults", return_value=cleared),
             patch(
                 "ci_tools.resolve_build_inputs.git_ls_remote_resolve", return_value=TRACK_SHA
             ) as ls_remote,

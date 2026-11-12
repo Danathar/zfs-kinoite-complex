@@ -61,6 +61,8 @@
   joined: tests/test_quality_doc.py
 ## 9. Findings about the Bash guard hook: what is in scope
   prose: unchecked: names what the command gate in .claude/hooks/ checks; the rest is a ruling on which findings to file
+## 10. Owner's standing decisions
+  prose: narrative: a standing ruling on which owner questions agents decide themselves
 
 [CLAUDE.md]
 ## 0. This Repository Publishes A Real Image — Read This First
@@ -273,6 +275,10 @@
   prose: narrative: argument for the ruleset; the rules themselves are in the joined sections
 ## The ruleset
   joined: tests/test_check_ruleset_drift.py
+## Pull requests do not have to be up to date
+  joined: tests/test_branch_protection.py
+## Renovate merges its own non-major updates
+  joined: tests/test_branch_protection.py
 ## A pull request that never gets the check
   joined: tests/test_check_ruleset_drift.py
 ## Applying and changing it
@@ -431,7 +437,7 @@
   joined: tests/test_multi_agent_doc.py
 ## Keeping agents from colliding
   joined: tests/test_multi_agent_doc.py
-### A green pull request can fall behind `main`
+### A green pull request does not have to catch up with `main`
   joined: tests/test_multi_agent_doc.py
 ## Who merges
   joined: tests/test_multi_agent_doc.py

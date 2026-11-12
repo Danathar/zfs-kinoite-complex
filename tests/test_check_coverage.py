@@ -8,12 +8,14 @@ Goal: Pin each way the gate is meant to fail, and the message it fails with.
 
 from __future__ import annotations
 
+import io
 import json
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 
 from check_coverage import (
@@ -23,6 +25,7 @@ from check_coverage import (
     load_covered_counts,
     load_manifest,
     load_missing_lines,
+    lowerable_ceilings,
     main,
     shipped_executables,
 )
@@ -267,6 +270,18 @@ class CeilingTests(unittest.TestCase):
         failures, _, _ = self._evaluate({"a.py": 3}, {"a.py": [12]})
         self.assertEqual(failures, [])
 
+    def test_a_module_under_its_ceiling_is_reported_as_lowerable(self) -> None:
+        self.assertEqual(
+            lowerable_ceilings({"a.py": 5}, {"a.py": 3}, {"a.py": [12]}),
+            ["a.py: ceiling 3, missing 1"],
+        )
+
+    def test_a_module_at_its_ceiling_is_not_reported_as_lowerable(self) -> None:
+        self.assertEqual(lowerable_ceilings({"a.py": 5}, {"a.py": 2}, {"a.py": [12, 40]}), [])
+
+    def test_a_module_over_its_ceiling_is_not_reported_as_lowerable(self) -> None:
+        self.assertEqual(lowerable_ceilings({"a.py": 5}, {"a.py": 1}, {"a.py": [12, 40]}), [])
+
     def test_a_module_absent_from_ceilings_has_a_ceiling_of_zero(self) -> None:
         failures, _, _ = self._evaluate({}, {"a.py": [7]})
         self.assertEqual(len(failures), 1)
@@ -348,6 +363,22 @@ class MainExitStatusTests(unittest.TestCase):
                 "--skip-completeness",
             ]
             self.assertEqual(main(argv), 1)
+
+    def test_prints_could_lower_and_exits_zero_when_under_a_ceiling(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            directory = Path(temp_dir)
+            argv = [
+                "--thresholds",
+                str(_write(directory, "t.json", {"floors": {"a.py": 5}, "ceilings": {"a.py": 3}})),
+                "--coverage-report",
+                str(_write(directory, "c.json", _report({"a.py": (5, 10)}, {"a.py": [1]}))),
+                "--skip-completeness",
+            ]
+            stream = io.StringIO()
+            with redirect_stdout(stream):
+                status = main(argv)
+            self.assertEqual(status, 0)
+            self.assertIn("coverage: could lower a.py: ceiling 3, missing 1", stream.getvalue())
 
     def test_exits_two_when_the_gate_cannot_run(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

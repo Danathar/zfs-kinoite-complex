@@ -355,8 +355,12 @@ class RefCascadeTests(unittest.TestCase):
         self.assertIsNotNone(match, "the document no longer quotes a default tracking ref")
         documented_track = match.group(1)
 
+        # Mode three is the empty-pin case; set it explicitly so a temporary committed pin
+        # (Danathar/akmods#255) does not turn this into a mode-two test.
+        floating = dict(self.defaults, AKMODS_UPSTREAM_REF="")
         with (
             patch.dict(os.environ, _wiped_env(), clear=False),
+            patch("ci_tools.resolve_build_inputs.load_repo_defaults", return_value=floating),
             patch(
                 "ci_tools.resolve_build_inputs.git_ls_remote_resolve",
                 return_value=TRACK_SHA,
@@ -384,7 +388,8 @@ class RefCascadeTests(unittest.TestCase):
         unfreeze = steps[-1]
         self.assertIn("AKMODS_UPSTREAM_REF", unfreeze)
         self.assertIn('`""`', unfreeze)
-        self.assertEqual(json.loads(DEFAULTS_FILE.read_text(encoding="utf-8"))["AKMODS_UPSTREAM_REF"], "")
+        # Temporary guard pin (Danathar/akmods#255, removed by Danathar/akmods#260): a 40-hex SHA.
+        self.assertRegex(json.loads(DEFAULTS_FILE.read_text(encoding="utf-8"))["AKMODS_UPSTREAM_REF"], r"^[0-9a-f]{40}$")
 
     def test_plain_language_model_names_the_configured_fork(self) -> None:
         pieces = _numbered_items(_section(DOC_TEXT, "## Plain-Language Model"))
@@ -641,7 +646,10 @@ class ReplayClaimTests(unittest.TestCase):
         self.assertNotIn("akmods_upstream_ref", self.lock)
 
     def test_a_replay_without_an_explicit_ref_falls_back_to_the_tracking_ref(self) -> None:
-        self.assertEqual(self._replay(), TRACK_SHA)
+        # "Without an explicit ref" includes the defaults-file pin, which may be set temporarily.
+        floating = dict(load_repo_defaults(), AKMODS_UPSTREAM_REF="")
+        with patch("ci_tools.resolve_build_inputs.load_repo_defaults", return_value=floating):
+            self.assertEqual(self._replay(), TRACK_SHA)
 
     def test_a_lock_file_field_wins_over_every_other_source(self) -> None:
         self.assertIn("add an `akmods_upstream_ref` field to the lock file", self.claim)
@@ -664,8 +672,10 @@ class ReplayClaimTests(unittest.TestCase):
                 LOCK_FILE=str(lock_path),
                 BUILD_CONTAINER_REF="ghcr.io/example/devcontainer@sha256:" + "1" * 64,
             )
+            floating = dict(load_repo_defaults(), AKMODS_UPSTREAM_REF="")
             with (
                 patch.dict(os.environ, env, clear=False),
+                patch("ci_tools.resolve_build_inputs.load_repo_defaults", return_value=floating),
                 patch(
                     "ci_tools.resolve_build_inputs.git_ls_remote_resolve",
                     side_effect=CiToolError("tracking ref is gone"),
@@ -813,7 +823,11 @@ class ValidationInstructionTests(unittest.TestCase):
         )
 
     def test_the_rebuild_is_placed_on_main_after_the_push(self) -> None:
-        """Where the rebuild runs and when it validates are the step's two warnings; keep both."""
+        """
+        Where the rebuild runs and when it validates are the step's two warnings; keep both.
+        While the temporary `AKMODS_UPSTREAM_REF` pin is set, the step must also say the
+        rebuild builds the pinned commit, not the pushed one.
+        """
 
         after_push = _after_push_step()
         self.assertIn("The rebuild runs on `main`", after_push)
@@ -822,7 +836,16 @@ class ValidationInstructionTests(unittest.TestCase):
             "validates the sync after it lands, not before",
             after_push,
         )
-        self.assertIn("main", load_repo_defaults().get("AKMODS_UPSTREAM_TRACK", ""))
+        defaults = load_repo_defaults()
+        self.assertIn("main", defaults.get("AKMODS_UPSTREAM_TRACK", ""))
+        if defaults.get("AKMODS_UPSTREAM_REF"):
+            # While the guard pin is set, the rebuild builds the pinned commit.
+            normalized = " ".join(after_push.split())
+            self.assertIn(
+                "a `rebuild_akmods=true` run rebuilds the pinned commit, not the pushed one",
+                normalized,
+            )
+            self.assertIn("Danathar/akmods#260", normalized)
 
     def test_the_files_a_green_branch_run_says_nothing_about_are_the_ones_checked_above(
         self,

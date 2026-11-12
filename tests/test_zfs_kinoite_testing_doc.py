@@ -343,7 +343,8 @@ class AkmodsSourceTests(unittest.TestCase):
         self.assertIn("`AKMODS_UPSTREAM_REF` in `ci/defaults.json` exists to freeze it", self.body)
         self.assertIn("is empty by default", self.body)
         self.assertIn("AKMODS_UPSTREAM_REF", self.values)
-        self.assertEqual(self.values["AKMODS_UPSTREAM_REF"], "")
+        # Temporary guard pin (Danathar/akmods#255, removed by Danathar/akmods#260): a 40-hex SHA.
+        self.assertRegex(self.values["AKMODS_UPSTREAM_REF"], r"^[0-9a-f]{40}$")
 
     def test_the_fork_the_page_names_is_the_configured_upstream(self) -> None:
         self.assertIn("clones the resolved `Danathar/akmods` commit", self.body)

@@ -120,8 +120,9 @@ Every file in `.github/workflows/` has an entry here.
   - `suite` red with no recent commit: something in the runner changed, such
     as a Python release or a dependency.
   - `ruleset-drift` red: GitHub enforces weaker merge rules on `main` than
-    `.github/rulesets/main.json` asks for. Usually the file changed and the
-    live ruleset was never updated from it.
+    `.github/rulesets/main.json` and `.github/rulesets/main-checks.json` ask
+    for. Usually a file changed and the live ruleset was never updated from
+    it.
 - **First:** for `published-image`, run the verify command from
   [`install-and-verify.md`](./install-and-verify.md) yourself. If it fails
   too, treat it as an incident and stop; do not re-tag or re-sign anything

@@ -1,7 +1,8 @@
 """
 Script: ci_tools/check_ruleset_drift.py
-What: Compares the committed `.github/rulesets/main.json` with the rules GitHub
-actually enforces on the default branch.
+What: Compares the committed `.github/rulesets/main.json` (plus
+`main-checks.json`, when there is one) with the rules GitHub actually enforces on
+the default branch.
 Doing: Reads the committed ruleset, reads the branch's effective rules from
 `GET /repos/{owner}/{repo}/rules/branches/{branch}`, prints a report, and fails
 when any live rule is weaker than the committed one.
@@ -25,10 +26,18 @@ What it does not compare: the bypass list, the target conditions and the
 `pull_request` settings other than code owner review and the approval count.
 The effective-rules endpoint does not return the first two.
 
+A repository may split its rules over two rulesets: `{branch}.json` and
+`{branch}-checks.json`, which holds the required status checks in a ruleset of
+their own. A bypass actor skips only the rules of the ruleset that lists it, so
+the split lets one bot merge past code owner review while the checks still
+apply to it. When the second file exists its rules are added to the first's
+before the comparison; when it does not, nothing changes. GitHub's endpoint
+already returns the rules of both rulesets in one list.
+
 `--fleet` runs the same comparison for every repository in `FLEET` instead of
 this one, with one report section each (#490). They are public, so the same
-token reads each one's committed `.github/rulesets/{branch}.json` through the
-contents API and its effective rules through the endpoint above. One job here
+token reads each one's committed `.github/rulesets/{branch}.json`, and its
+`{branch}-checks.json` when it has one, through the contents API and its effective rules through the endpoint above. One job here
 covers all of them, instead of a copy of this script in each. The run fails when
 any repository has a finding, or when its file or its rules cannot be read.
 """
@@ -39,6 +48,7 @@ import argparse
 import json
 import os
 import sys
+import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Mapping, Sequence
@@ -47,6 +57,8 @@ from ci_tools.common import REPO_ROOT, CiToolError, require_env
 
 API = "https://api.github.com"
 RULESET_FILE = REPO_ROOT / ".github" / "rulesets" / "main.json"
+# The required checks, in a ruleset of their own so that a bypass on the first one cannot skip them.
+CHECKS_RULESET_FILE = REPO_ROOT / ".github" / "rulesets" / "main-checks.json"
 JSON_MEDIA_TYPE = "application/vnd.github+json"
 # The contents API returns the file itself under this media type, rather than base64 in JSON.
 RAW_MEDIA_TYPE = "application/vnd.github.raw+json"
@@ -72,6 +84,37 @@ def ruleset_path(branch: str) -> str:
     """The committed ruleset for `branch`, named after it: `master.json` on a `master` repo."""
 
     return f".github/rulesets/{branch}.json"
+
+
+def checks_ruleset_path(branch: str) -> str:
+    """The optional second ruleset for `branch`, holding the required checks on their own."""
+
+    return f".github/rulesets/{branch}-checks.json"
+
+
+def merge_rulesets(ruleset: Mapping, checks: Mapping | None) -> dict:
+    """
+    `ruleset` with the rules of `checks` added, or `ruleset` unchanged when `checks` is `None`.
+
+    GitHub enforces every ruleset that targets the branch, so the rules the two files ask for
+    together are the rules the live branch has to meet.
+    """
+
+    merged = dict(ruleset)
+    merged["rules"] = [*ruleset.get("rules", []), *((checks or {}).get("rules", []))]
+    return merged
+
+
+def load_committed() -> tuple[dict, list[str]]:
+    """This repository's committed rules, both files merged, and the files they came from."""
+
+    committed = json.loads(RULESET_FILE.read_text(encoding="utf-8"))
+    files = [ruleset_path("main")]
+    if CHECKS_RULESET_FILE.exists():
+        checks = json.loads(CHECKS_RULESET_FILE.read_text(encoding="utf-8"))
+        committed = merge_rulesets(committed, checks)
+        files.append(checks_ruleset_path("main"))
+    return committed, files
 
 
 def _live_parameters(live_rules: Sequence[Mapping], rule_type: str) -> list[Mapping]:
@@ -156,17 +199,19 @@ def render_report(
     committed: Mapping,
     live_rules: Sequence[Mapping],
     findings: Sequence[str],
-    ruleset_file: str = ".github/rulesets/main.json",
+    ruleset_file: str | Sequence[str] = ".github/rulesets/main.json",
 ) -> str:
     """The Markdown the job prints and writes to the step summary."""
 
+    files = [ruleset_file] if isinstance(ruleset_file, str) else list(ruleset_file)
+    named = " + ".join(f"`{name}`" for name in files)
     committed_types = ", ".join(f"`{rule['type']}`" for rule in committed.get("rules", []))
     live_types = ", ".join(sorted({f"`{rule.get('type')}`" for rule in live_rules})) or "none"
     lines = [
         "### Ruleset drift",
         "",
         f"Branch: `{branch}`",
-        f"Committed rules (`{ruleset_file}`): {committed_types}",
+        f"Committed rules ({named}): {committed_types}",
         f"Live rule types: {live_types}",
         "",
     ]
@@ -236,20 +281,58 @@ def fetch_committed(repository: str, branch: str, token: str) -> dict:
     return data
 
 
-def _put_command(repository: str, branch: str, live_rules: Sequence[Mapping]) -> str:
-    """The `PUT` an admin of `repository` runs, with the ruleset id when the live rules name one."""
+def fetch_committed_checks(repository: str, branch: str, token: str) -> dict | None:
+    """
+    Return the `{branch}-checks.json` ruleset `repository` commits, or `None` when it has none.
+
+    Only a 404 means "none": a repository that keeps every rule in one file is not an error.
+    Any other failure is raised, and a file that exists but holds no rules is refused the way
+    `fetch_committed` refuses one.
+    """
+
+    path = urllib.parse.quote(checks_ruleset_path(branch))
+    try:
+        data, _ = _get(
+            f"/repos/{repository}/contents/{path}?ref={urllib.parse.quote(branch)}",
+            token,
+            accept=RAW_MEDIA_TYPE,
+        )
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            return None
+        raise
+    if not isinstance(data, dict) or not isinstance(data.get("rules"), list) or not data["rules"]:
+        raise CiToolError(f"{checks_ruleset_path(branch)} holds no `rules` list")
+    return data
+
+
+def _put_command(
+    repository: str,
+    branch: str,
+    live_rules: Sequence[Mapping],
+    path: str | None = None,
+    rule_types: set[str] | None = None,
+) -> str:
+    """
+    The `PUT` an admin of `repository` runs, with the ruleset id when the live rules name one.
+
+    `path` is the file to apply, `{branch}.json` by default. With `rule_types`, only live rules
+    of those types are read for the id, so each of two files gets the id of its own ruleset.
+    """
 
     ids = sorted(
         {
             str(rule["ruleset_id"])
             for rule in live_rules
-            if rule.get("ruleset_source") == repository and "ruleset_id" in rule
+            if rule.get("ruleset_source") == repository
+            and "ruleset_id" in rule
+            and (rule_types is None or rule.get("type") in rule_types)
         }
     )
     ruleset = ids[0] if len(ids) == 1 else "<id>"
     return (
         f"gh api --method PUT repos/{repository}/rulesets/{ruleset} "
-        f"--input {ruleset_path(branch)}"
+        f"--input {path or ruleset_path(branch)}"
     )
 
 
@@ -264,17 +347,33 @@ def fleet_section(repository: str, token: str) -> tuple[str, bool]:
     heading = f"## `{repository}`\n\n"
     try:
         branch, live_rules = fetch_live_rules(repository, token)
-        committed = fetch_committed(repository, branch, token)
+        main_file = fetch_committed(repository, branch, token)
+        checks_file = fetch_committed_checks(repository, branch, token)
     except (OSError, ValueError, CiToolError) as exc:
         return heading + f"Could not read the committed ruleset or the live rules: {exc}\n", True
 
+    committed = merge_rulesets(main_file, checks_file)
+    files = [ruleset_path(branch)]
+    if checks_file is not None:
+        files.append(checks_ruleset_path(branch))
     findings = find_weaker_rules(committed, live_rules)
-    section = heading + render_report(
-        branch, committed, live_rules, findings, ruleset_file=ruleset_path(branch)
-    )
+    section = heading + render_report(branch, committed, live_rules, findings, ruleset_file=files)
     if findings:
-        put = _put_command(repository, branch, live_rules)
-        section += f"\nIn `{repository}`, from a checkout of `{branch}`: `{put}`\n"
+        if checks_file is None:
+            puts = [_put_command(repository, branch, live_rules)]
+        else:
+            puts = [
+                _put_command(
+                    repository,
+                    branch,
+                    live_rules,
+                    path,
+                    {rule["type"] for rule in ruleset["rules"]},
+                )
+                for path, ruleset in zip(files, (main_file, checks_file), strict=True)
+            ]
+        commands = " and ".join(f"`{put}`" for put in puts)
+        section += f"\nIn `{repository}`, from a checkout of `{branch}`: {commands}\n"
     return section, bool(findings)
 
 
@@ -317,16 +416,16 @@ def main(argv: Sequence[str] | None = None) -> None:
         return
 
     repository = require_env("GITHUB_REPOSITORY")
-    committed = json.loads(RULESET_FILE.read_text(encoding="utf-8"))
+    committed, files = load_committed()
 
     branch, live_rules = fetch_live_rules(repository, token)
     findings = find_weaker_rules(committed, live_rules)
-    report = render_report(branch, committed, live_rules, findings)
+    report = render_report(branch, committed, live_rules, findings, ruleset_file=files)
     _publish(report)
 
     if findings:
         raise CiToolError(
-            f"Live rules on {branch} are weaker than .github/rulesets/main.json "
+            f"Live rules on {branch} are weaker than {' + '.join(files)} "
             f"({len(findings)} finding(s))"
         )
 

@@ -164,8 +164,8 @@ side, and that failure is worth seeing on its own rather than landing on whoever
 opens the next pull request.
 
 Its `ruleset-drift` job asks a third question: **does GitHub still enforce, on
-`main`, at least the merge rules committed in `.github/rulesets/main.json`?**
-Applying that file is a separate step after the merge, and it has been
+`main`, at least the merge rules committed in `.github/rulesets/main.json` and
+`main-checks.json`?** Applying those files is a separate step after the merge, and it has been
 skipped before (#454). The job fails when a live rule is missing or weaker, and
 passes when GitHub enforces more.
 [`branch-protection.md`](./branch-protection.md) says what it compares and what

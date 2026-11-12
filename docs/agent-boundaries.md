@@ -26,8 +26,8 @@ much review a change needs is [`risk-tiers.md`](./risk-tiers.md).
 
 | Gate | What it stops | Holds for | Explained in |
 | --- | --- | --- | --- |
-| [`.github/rulesets/main.json`](../.github/rulesets/main.json) | Any change reaching `main` except as a pull request merge. Deleting or rewriting `main`. It has no bypass actors. | every agent and every person | [branch-protection.md](./branch-protection.md#the-ruleset) |
-| [`.github/CODEOWNERS`](../.github/CODEOWNERS), with the ruleset's `require_code_owner_review` | Merging a pull request that touches a Tier 3 path before the owner has approved it on GitHub. | every agent and every person | [branch-protection.md](./branch-protection.md#the-ruleset) |
+| [`.github/rulesets/main.json`](../.github/rulesets/main.json) | Any change reaching `main` except as a pull request merge. Deleting or rewriting `main`. Its one bypass actor, the Renovate app, may only merge a pull request past code owner review; nothing may bypass the required check in [`main-checks.json`](../.github/rulesets/main-checks.json). | every agent and every person | [branch-protection.md](./branch-protection.md#the-ruleset) |
+| [`.github/CODEOWNERS`](../.github/CODEOWNERS), with the ruleset's `require_code_owner_review` | Merging a pull request that touches a Tier 3 path before the owner has approved it on GitHub. Renovate's own patch, minor, digest and pin updates are the exception: they merge on the required check alone. | every agent and every person | [branch-protection.md](./branch-protection.md#the-ruleset) |
 | The required `Python Unit Tests` check in [`test.yml`](../.github/workflows/test.yml) | Merging a pull request whose unit suite, `ruff check` or per-module coverage floors fail. Many tests read the documents, so a page that drifts from the files it describes fails here too. | every agent and every person | [quality.md](./quality.md#the-gates) |
 | [`.github/policies/workflow-permissions.json`](../.github/policies/workflow-permissions.json) | A workflow's `GITHUB_TOKEN` gaining a scope the policy file does not grant. `tests/test_workflow_permissions_policy.py` fails until the same pull request changes both files. | every agent | [SECURITY-AI.md](./SECURITY-AI.md#what-an-agent-may-do-unattended) |
 | The `preflight` job in [`ai-fix.yml`](../.github/workflows/ai-fix.yml) | An agent started by a bot, from a fork, or with no credentials. The agent job it starts has no `packages: write` and no `SIGNING_SECRET`. | the agent `ai-fix.yml` starts | [multi-agent.md](./multi-agent.md#how-work-reaches-an-agent) |
@@ -80,6 +80,13 @@ here it gates exactly one tier. The ruleset sets `require_code_owner_review` to
 touches one waits for the owner's approval and any other pull request does not.
 A catch-all `*` line would put every pull request behind that approval, and the
 owner could not merge their own.
+
+One exception, by the owner's choice: Renovate merges its own patch, minor,
+digest and pin updates without that approval, through a bypass that can only
+merge a pull request and cannot skip the required check. AGENTS.md section 10,
+"Owner's standing decisions", already approves those updates with green CI.
+[`branch-protection.md`](./branch-protection.md#renovate-merges-its-own-non-major-updates)
+explains how it is set up and what still waits for the owner.
 
 When there is a second reviewer,
 [`branch-protection.md`](./branch-protection.md#when-there-is-a-second-reviewer)

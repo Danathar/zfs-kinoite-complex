@@ -644,7 +644,7 @@ model and the cosign v3 compatibility flags.
      Gate" above. Push and manual runs always build
 2. `build-pr.yml`: read-only validation inputs plus no-push build
 3. `test.yml`: Python unit tests for repository-owned CI helpers and image-build helpers
-4. `akmods-failure-triage.yml`: `workflow_run` visibility workflow that opens, updates, and closes sticky akmods failure issues
+4. `akmods-failure-triage.yml`: `workflow_run` visibility workflow that opens, updates, and closes sticky akmods failure issues, and re-runs the pull request builds a cleared failure stopped
    - failed shared-akmods builds upload `akmods-failure.json` before the job exits
    - `upstream-compat` marks known ZFS/kernel compatibility failures; the build
      still fails and `latest` is not promoted

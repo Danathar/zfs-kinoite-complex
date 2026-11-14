@@ -3,7 +3,8 @@ Script: tests/test_workflow_akmods_sticky_issue.py
 What: Tests the first three github-script steps in .github/workflows/akmods-failure-triage.yml:
 the step that looks for the build's artifacts and downloads the akmods failure payload, the step
 that opens or updates the sticky `akmods-failure` issue, and the step that closes those issues
-after a green build and reports whether it closed any. tests/test_workflow_rerun_pr_builds.py
+after a green build and reports whether a build stop just cleared: it closed an open issue,
+or the previous build of the branch failed. tests/test_workflow_rerun_pr_builds.py
 tests the job that reads that report.
 Doing: Takes each step's own `script:` text from the workflow, runs it under node with stand-ins
 for `github`, `context` and `core` that record every API call and every step output, in a
@@ -53,7 +54,13 @@ DOWNLOAD_STEP = "Download failure payload if present"
 OPEN_STEP = "Open or update sticky issue on failed run"
 CLOSE_STEP = "Close stale sticky issues on successful run"
 LABEL = "akmods-failure"
-RUN = {"id": 4242, "head_sha": "0123abc"}
+RUN = {
+    "id": 4242,
+    "head_sha": "0123abc",
+    "workflow_id": 7,
+    "head_branch": "main",
+    "created_at": "2026-11-14T06:00:00Z",
+}
 ZIP_BYTES = b"PK\x03\x04 not really a zip, only bytes to copy\x00\xff"
 
 # Runs the step body the way actions/github-script does: as the body of an async function
@@ -81,6 +88,10 @@ const github = {
         const bytes = Buffer.from(input.zip_base64, 'base64');
         // Octokit hands back an ArrayBuffer for a binary download.
         return { data: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.length) };
+      },
+      listWorkflowRuns: async (params) => {
+        calls.push(['listWorkflowRuns', params]);
+        return { data: { workflow_runs: input.runs.slice(0, params.per_page) } };
       },
     },
     issues: {
@@ -132,6 +143,16 @@ def payload(kernel: str = "6.14.2-300.fc42.x86_64") -> dict:
     )
 
 
+def build(run_id: int, conclusion: str, created_at: str, repo: str = "o/r") -> dict:
+    """An earlier run of the main build, as listWorkflowRuns returns it."""
+    return {
+        "id": run_id,
+        "conclusion": conclusion,
+        "created_at": created_at,
+        "head_repository": {"full_name": repo},
+    }
+
+
 def marker(failure: dict) -> str:
     return f"<!-- akmods-failure-key: {failure['key']} -->"
 
@@ -154,6 +175,7 @@ class AkmodsStickyIssueStepTests(unittest.TestCase):
         artifacts: list[dict] | None = None,
         issues: list[dict] | None = None,
         label_status: int | None = None,
+        runs: list[dict] | None = None,
         expect_ok: bool = True,
     ) -> tuple[list[list], dict[str, str]]:
         self.assertIn(step_name, self.steps, f"no step named {step_name!r}; was it renamed?")
@@ -165,6 +187,7 @@ class AkmodsStickyIssueStepTests(unittest.TestCase):
             "artifacts": artifacts or [],
             "issues": issues or [],
             "label_status": label_status,
+            "runs": runs or [],
             "zip_base64": base64.b64encode(ZIP_BYTES).decode("ascii"),
         }
         result = subprocess.run(
@@ -262,7 +285,9 @@ class AkmodsStickyIssueStepTests(unittest.TestCase):
     # --- Open or update the sticky issue ----------------------------------------------------
 
     def writes(self, calls: list[list]) -> list[list]:
-        return [call for call in calls if call[0] not in ("getLabel", "paginate")]
+        return [
+            call for call in calls if call[0] not in ("getLabel", "paginate", "listWorkflowRuns")
+        ]
 
     def check_listing(self, calls: list[list]) -> None:
         listing = [params for name, params in calls if name == "paginate"]
@@ -372,11 +397,92 @@ class AkmodsStickyIssueStepTests(unittest.TestCase):
                 self.assertIn(RUN["head_sha"], params["body"])
 
     def test_nothing_is_written_when_no_sticky_issue_is_open(self) -> None:
-        calls, outputs = self.run_step(CLOSE_STEP)
-        # No stop cleared, so no pull request build is re-run.
+        calls, outputs = self.run_step(
+            CLOSE_STEP, runs=[build(4241, "success", "2026-11-14T05:00:00Z")]
+        )
+        # Green after green: no stop cleared, so no pull request build is re-run.
         self.assertEqual(outputs, {"cleared": "false"})
         self.check_listing(calls)
         self.assertEqual(self.writes(calls), [])
+
+    def listing_of_runs(self, calls: list[list]) -> list[dict]:
+        return [params for name, params in calls if name == "listWorkflowRuns"]
+
+    def test_a_green_build_after_a_failed_one_clears_with_the_issue_already_closed(self) -> None:
+        # The sticky issue was closed early (by hand, or by a merged pull request saying
+        # "closes #N"), so this build finds nothing open. The stop still just cleared.
+        calls, outputs = self.run_step(
+            CLOSE_STEP, runs=[build(4241, "failure", "2026-11-14T05:00:00Z")]
+        )
+        self.assertEqual(outputs, {"cleared": "true"})
+        self.assertEqual(self.writes(calls), [])
+        self.assertEqual(
+            self.listing_of_runs(calls),
+            [
+                {
+                    "owner": "o",
+                    "repo": "r",
+                    "workflow_id": 7,
+                    "branch": "main",
+                    "status": "completed",
+                    "per_page": 20,
+                }
+            ],
+        )
+
+    def test_a_cancelled_run_is_passed_over_for_the_build_before_it(self) -> None:
+        runs = [
+            build(4241, "cancelled", "2026-11-14T05:00:00Z"),
+            build(4240, "failure", "2026-11-14T04:00:00Z"),
+        ]
+        _, outputs = self.run_step(CLOSE_STEP, runs=runs)
+        self.assertEqual(outputs, {"cleared": "true"})
+
+    def test_a_skipped_run_is_passed_over_for_the_build_before_it(self) -> None:
+        runs = [
+            build(4241, "skipped", "2026-11-14T05:00:00Z"),
+            build(4240, "success", "2026-11-14T04:00:00Z"),
+        ]
+        _, outputs = self.run_step(CLOSE_STEP, runs=runs)
+        self.assertEqual(outputs, {"cleared": "false"})
+
+    def test_a_forks_failed_run_is_not_this_branchs_previous_build(self) -> None:
+        runs = [
+            build(4241, "failure", "2026-11-14T05:00:00Z", repo="fork/r"),
+            build(4240, "success", "2026-11-14T04:00:00Z"),
+        ]
+        _, outputs = self.run_step(CLOSE_STEP, runs=runs)
+        self.assertEqual(outputs, {"cleared": "false"})
+
+    def test_the_run_is_not_its_own_previous_build(self) -> None:
+        runs = [
+            build(RUN["id"], "failure", RUN["created_at"]),
+            build(4241, "success", "2026-11-14T05:00:00Z"),
+        ]
+        _, outputs = self.run_step(CLOSE_STEP, runs=runs)
+        self.assertEqual(outputs, {"cleared": "false"})
+
+    def test_a_run_newer_than_this_one_is_not_its_previous_build(self) -> None:
+        # Triage runs queue in completion order, so a later build can already be listed.
+        runs = [
+            build(4243, "failure", "2026-11-14T07:00:00Z"),
+            build(4241, "success", "2026-11-14T05:00:00Z"),
+        ]
+        _, outputs = self.run_step(CLOSE_STEP, runs=runs)
+        self.assertEqual(outputs, {"cleared": "false"})
+
+    def test_no_earlier_build_at_all_is_not_a_clear(self) -> None:
+        _, outputs = self.run_step(CLOSE_STEP, runs=[])
+        self.assertEqual(outputs, {"cleared": "false"})
+
+    def test_closing_an_open_issue_clears_without_reading_the_run_history(self) -> None:
+        calls, outputs = self.run_step(
+            CLOSE_STEP,
+            issues=[issue(5, "a")],
+            runs=[build(4241, "success", "2026-11-14T05:00:00Z")],
+        )
+        self.assertEqual(outputs, {"cleared": "true"})
+        self.assertEqual(self.listing_of_runs(calls), [])
 
 
 if __name__ == "__main__":

@@ -1207,13 +1207,16 @@ class GateBehaviourTests(GateRunner, unittest.TestCase):
     # --- the scan's own edges ---------------------------------------------
 
     def test_a_two_token_git_global_option_does_not_hide_the_subcommand(self) -> None:
-        # `--namespace` is stepped over rather than refused outright, so
-        # without skipping its value half, the value is read as the
-        # subcommand, git is forgotten, and the operand scan never starts.
-        # The `=` spelling needs no skip because it is one word.
+        # `--namespace`, `--super-prefix` and `--attr-source` are stepped
+        # over rather than refused outright, so without skipping their value
+        # half, the value is read as the subcommand, git is forgotten, and
+        # the operand scan never starts. The `=` spelling needs no skip
+        # because it is one word.
         for command in (
             "git --namespace=x diff /dev/null /etc/shadow",
             "git --namespace x diff /dev/null /etc/shadow",
+            "git --super-prefix x diff /dev/null /etc/shadow",
+            "git --attr-source x diff /dev/null /etc/shadow",
         ):
             with self.subTest(command=command):
                 self.assertRefused(command, "--no-index mode")
@@ -1249,6 +1252,7 @@ class GateBehaviourTests(GateRunner, unittest.TestCase):
             "git -c credential.helper=/tmp/evil diff HEAD~1 HEAD",
             "git -c alias.x=!/tmp/evil diff HEAD~1 HEAD",
             "git --config-env=diff.external=EVIL diff HEAD~1 HEAD",
+            "git --config-env diff.external=EVIL diff HEAD~1 HEAD",
             "git --exec-path=/tmp/evil diff HEAD~1 HEAD",
             "git --exec-path /tmp/evil diff HEAD~1 HEAD",
         ):

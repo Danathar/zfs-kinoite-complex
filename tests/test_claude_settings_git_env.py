@@ -12,8 +12,9 @@ wherever it sits. A branch can commit one as ordinary files (`evil/HEAD`,
 checkout's `.git/`, and its `info/attributes` (`* diff=x`) plus config
 (`diff.x.textconv`) name a program git runs to render the diff. The `env` block sets
 `safe.bareRepository=explicit` for every command an agent runs, so git refuses such a
-directory unless it is named with `--git-dir`. The checkout's own `.git/` is not bare
-and is unaffected.
+directory unless it is named with `--git-dir` or `--bare`; those two spellings are
+refused by `.claude/hooks/gate-git-diff.sh` instead. The checkout's own `.git/` is not
+bare and is unaffected.
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SETTINGS = REPO_ROOT / ".claude" / "settings.json"
+GATE = REPO_ROOT / ".claude" / "hooks" / "gate-git-diff.sh"
 
 EXPECTED_ENV = {
     "GIT_CONFIG_COUNT": "1",
@@ -132,6 +134,44 @@ class SettingsEnvTests(unittest.TestCase):
         log = _git(self.victim, agent_env, "log", "-1", "--format=%s")
         self.assertEqual(log.returncode, 0)
         self.assertEqual(log.stdout.strip(), "x")
+
+    def test_a_named_bare_repository_still_runs_the_program_so_the_hook_refuses_it(self) -> None:
+        # `explicit` allows a bare repository that is named, so `--git-dir` and
+        # `--bare` (`--git-dir=.`) still reach the planted program with the
+        # settings env applied. That is why `.claude/hooks/gate-git-diff.sh`
+        # refuses those options before the subcommand; this test keeps that
+        # refusal from being vacuous and checks the hook refuses each route.
+        agent_env = {**_base_env(self.dir), **self.settings_env}
+        for cwd, args in self._named_routes():
+            with self.subTest(cwd=cwd.name, args=args):
+                self.marker.unlink(missing_ok=True)
+                _git(cwd, agent_env, *args)
+                self.assertTrue(
+                    self.marker.exists(),
+                    f"git {' '.join(args)} no longer runs the planted program; the hook's "
+                    "--git-dir/--bare refusal may be more than is needed",
+                )
+                command = " ".join(["git", *args])
+                hook = subprocess.run(
+                    ["bash", str(GATE)],
+                    cwd=REPO_ROOT,
+                    input=json.dumps({"tool_name": "Bash", "tool_input": {"command": command}}),
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(hook.returncode, 2, f"the hook let {command!r} through")
+                self.assertIn("git global option", hook.stderr)
+
+    def _named_routes(self) -> list[tuple[Path, list[str]]]:
+        """The spellings that name the planted repository, which `explicit` allows."""
+        evil = self.victim / "evil"
+        return [
+            (self.victim, ["--git-dir=evil", "show"]),
+            (self.victim, ["--git-dir", "evil", "log", "-p", "-1"]),
+            (evil, ["--bare", "show"]),
+            (evil, ["--bare", "log", "-p", "-1"]),
+        ]
 
     def _routes(self) -> list[tuple[Path, list[str]]]:
         """The pre-approved commands that reach the planted repository, and where from."""

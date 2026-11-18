@@ -39,9 +39,12 @@ import ast
 import json
 import re
 import unittest
+from datetime import date
 from unittest.mock import patch
 
 from ci_tools.check_stable_signal import (
+    BASE_VERSION_LABEL,
+    KERNEL_HELD_FROM_LABEL,
     STABLE_SIGNAL_DIGEST_LABEL,
     STABLE_SIGNAL_IMAGE_LABEL,
     ZFS_VERSION_LABEL,
@@ -157,7 +160,22 @@ def _latest_inspect(
     return {"Digest": "sha256:repo-latest", "Labels": labels}
 
 
-def run_gate(latest, *, signal_digest: str = CURRENT_DIGEST):
+# The day the held-base scenario is evaluated on; its base is a week older.
+GATE_TODAY = date(2026, 11, 18)
+HELD_BASE_VERSION = "44.20261110.0"
+
+
+def _held_latest_inspect() -> dict:
+    """A promoted image held on an older base, whose signal digest has since moved."""
+    held = _latest_inspect(signal_digest="sha256:older")
+    held["Labels"] |= {
+        KERNEL_HELD_FROM_LABEL: "7.3.4-200.fc44.x86_64",
+        BASE_VERSION_LABEL: HELD_BASE_VERSION,
+    }
+    return held
+
+
+def run_gate(latest, *, signal_digest: str = CURRENT_DIGEST, signal_kernel: str = ""):
     """
     Run the real gate against one fake registry.
 
@@ -169,7 +187,8 @@ def run_gate(latest, *, signal_digest: str = CURRENT_DIGEST):
 
     def inspect(image_ref: str, *, creds: str | None = None) -> dict:
         if image_ref == SIGNAL_REF:
-            return {"Digest": signal_digest, "Labels": {}}
+            labels = {"ostree.linux": signal_kernel} if signal_kernel else {}
+            return {"Digest": signal_digest, "Labels": labels}
         if image_ref == LATEST_REF:
             if isinstance(latest, Exception):
                 raise latest
@@ -183,6 +202,7 @@ def run_gate(latest, *, signal_digest: str = CURRENT_DIGEST):
             "ci_tools.check_stable_signal.resolve_latest_zfs_version",
             return_value=CURRENT_ZFS,
         ),
+        patch("ci_tools.check_stable_signal.resolve_linux_maximum", return_value="7.2"),
     ):
         return evaluate_stable_signal_gate(
             image_org="danathar",
@@ -190,6 +210,7 @@ def run_gate(latest, *, signal_digest: str = CURRENT_DIGEST):
             stable_signal_image=SIGNAL_IMAGE,
             zfs_minor_version="2.4",
             creds="actor:token",
+            today=GATE_TODAY,
         )
 
 
@@ -207,6 +228,9 @@ GATE_SCENARIOS = {
     "current-latest-missing-stable-signal-labels": lambda: run_gate(_latest_inspect(labels={})),
     "current-latest-missing-zfs-version-label": lambda: run_gate(_latest_inspect(zfs_version="")),
     "not-schedule-event": lambda: _bypass_decision_offline(),
+    "kernel-held-upstream-kernel-still-unsupported": lambda: run_gate(
+        _held_latest_inspect(), signal_kernel="7.3.5-200.fc44.x86_64"
+    ),
 }
 
 
@@ -227,7 +251,7 @@ class ScheduledBuildGateTableTests(unittest.TestCase):
         # Guard the guard: every assertion below iterates these rows, and an
         # empty list passes a for-loop silently.
         rows = gate_table()
-        self.assertEqual(len(rows), 8, rows)
+        self.assertEqual(len(rows), 9, rows)
         self.assertEqual(len({reason for reason, _ in rows}), len(rows))
 
     def test_the_documented_reasons_are_exactly_the_gate_source_reasons(self) -> None:
@@ -246,11 +270,38 @@ class ScheduledBuildGateTableTests(unittest.TestCase):
                 self.assertEqual(decision.reason, reason)
                 self.assertEqual(decision.should_build, builds == "yes")
 
-    def test_exactly_one_documented_reason_skips_the_build(self) -> None:
-        # The section's whole claim is that a scheduled run skips only when
-        # nothing moved. A second `no` row would be a different gate.
+    def test_only_the_two_documented_reasons_skip_the_build(self) -> None:
+        # A scheduled run skips when nothing moved, or when `:latest` is held
+        # and a rebuild would resolve the same held base again. A third `no`
+        # row would be a different gate.
         skipping = [reason for reason, builds in gate_table() if builds == "no"]
-        self.assertEqual(skipping, ["stable-signal-unchanged"])
+        self.assertEqual(
+            skipping, ["stable-signal-unchanged", "kernel-held-upstream-kernel-still-unsupported"]
+        )
+
+    def test_a_held_latest_builds_once_the_upstream_kernel_is_supported(self) -> None:
+        decision = run_gate(_held_latest_inspect(), signal_kernel="7.2.20-200.fc44.x86_64")
+        self.assertEqual(decision.reason, "stable-signal-advanced")
+        self.assertTrue(decision.should_build)
+
+    def test_a_held_latest_builds_once_its_base_is_past_the_hold_window(self) -> None:
+        held = _held_latest_inspect()
+        held["Labels"][BASE_VERSION_LABEL] = "44.20261017.0"
+        decision = run_gate(held, signal_kernel="7.3.5-200.fc44.x86_64")
+        self.assertEqual(decision.reason, "stable-signal-advanced")
+        self.assertTrue(decision.should_build)
+
+    def test_a_held_latest_builds_when_its_base_version_cannot_be_read(self) -> None:
+        held = _held_latest_inspect()
+        held["Labels"][BASE_VERSION_LABEL] = "44"
+        decision = run_gate(held, signal_kernel="7.3.5-200.fc44.x86_64")
+        self.assertEqual(decision.reason, "stable-signal-advanced")
+        self.assertTrue(decision.should_build)
+
+    def test_a_held_latest_builds_when_the_upstream_kernel_is_unknown(self) -> None:
+        decision = run_gate(_held_latest_inspect())
+        self.assertEqual(decision.reason, "stable-signal-advanced")
+        self.assertTrue(decision.should_build)
 
     def test_the_gate_fails_closed_on_unknown_state(self) -> None:
         """The section says "we couldn't tell" must never read as "nothing changed"."""
@@ -315,17 +366,18 @@ def run_gate_with_signal_error(error: Exception):
 
 
 class ProvenanceLabelTests(unittest.TestCase):
-    """The three labels the section names have to be the three the build writes."""
+    """The four labels the section names have to be the four the build writes."""
 
     DOCUMENTED = (
         ("org.zfs-kinoite-complex.stable-signal-image", STABLE_SIGNAL_IMAGE_LABEL),
         ("org.zfs-kinoite-complex.stable-signal-digest", STABLE_SIGNAL_DIGEST_LABEL),
         ("org.zfs-kinoite-complex.zfs-version", ZFS_VERSION_LABEL),
+        ("org.zfs-kinoite-complex.kernel-held-from", KERNEL_HELD_FROM_LABEL),
     )
 
-    def test_the_document_names_all_three(self) -> None:
+    def test_the_document_names_all_four(self) -> None:
         text = doc()
-        self.assertIn("every\nbuild writes three OCI labels onto the candidate", text)
+        self.assertIn("every\nbuild writes four OCI labels onto the candidate", text)
         for name, _ in self.DOCUMENTED:
             with self.subTest(label=name):
                 self.assertIn(f"- `{name}`:", text)
@@ -434,6 +486,8 @@ class PublishedTagShapeTests(unittest.TestCase):
             patch("ci_tools.promote_stable.skopeo_inspect_digest", side_effect=fake_digest),
             patch("ci_tools.promote_stable.verify_candidate_signature"),
             patch("ci_tools.promote_stable.list_repository_tags", return_value=[]),
+            # An unheld candidate: `latest` is never read.
+            patch("ci_tools.promote_stable.skopeo_inspect_json", return_value={"Labels": {}}),
             # `<run>` is the doc's placeholder, not a number the guard can compare.
             patch("ci_tools.promote_stable.refuse_older_than_published"),
         ):
@@ -745,6 +799,7 @@ class RechunkBandTests(unittest.TestCase):
 PROMOTION_STEP_PHRASES = [
     ("verify_candidate_signature", "re-verifies that digest's cosign signature"),
     ("refuse_older_than_published", "higher run number than this run's"),
+    ("refuse_held_candidate_older_than_latest", "older base than `latest`"),
     ("_copy_and_verify_digest:audit_ref", "copies that digest to `stable-<run>-<sha>`"),
     ("_copy_and_verify_digest:stable_ref", "copies that digest to `latest`"),
 ]

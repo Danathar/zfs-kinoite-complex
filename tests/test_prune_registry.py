@@ -115,6 +115,8 @@ class ProducerTagContract(unittest.TestCase):
             mock.patch.object(promote_stable, "skopeo_copy") as skopeo_copy,
             mock.patch.object(promote_stable, "run_cmd"),
             mock.patch.object(promote_stable, "list_repository_tags", return_value=[]),
+            # An unheld candidate: `latest` is never read.
+            mock.patch.object(promote_stable, "skopeo_inspect_json", return_value={"Labels": {}}),
             redirect_stdout(io.StringIO()),
         ):
             promote_stable.main()

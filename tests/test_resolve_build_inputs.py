@@ -14,6 +14,7 @@ import os
 import tempfile
 import unittest
 from contextlib import redirect_stdout
+from datetime import UTC, date, datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -24,13 +25,20 @@ from ci_tools.common import (
     sort_kernel_releases,
 )
 from ci_tools.resolve_build_inputs import (
+    KERNEL_HOLD_LOOKBACK_DAYS,
     BuildInputResolution,
     ResolvedBuildInputs,
     _load_lock_file,
     _resolve_default_akmods_ref,
+    _utc_today,
     choose_base_image_tag,
+    dated_base_tags_newest_first,
+    dated_base_version_key,
     detect_base_image_kernel_releases,
     extract_source_tag,
+    find_held_base_tag,
+    kernel_exceeds_maximum,
+    list_base_image_tags,
     main,
     resolve_build_inputs,
     resolve_configured_inputs,
@@ -750,6 +758,8 @@ class ResolveBuildInputsRegistryGuardTests(unittest.TestCase):
                 "ci_tools.resolve_build_inputs.resolve_latest_zfs_version",
                 return_value="2.4.1",
             ),
+            # 6.16 is inside this limit, so these cases never hold the base.
+            patch("ci_tools.resolve_build_inputs.resolve_linux_maximum", return_value="6.17"),
         ):
             return resolve_build_inputs()
 
@@ -1043,6 +1053,322 @@ class ResolveBuildInputsMainTests(unittest.TestCase):
         stdout, _exported = self._run_main(self._resolution(candidate_tags=()))
 
         self.assertNotIn("Base-tag candidates checked", stdout)
+
+
+class KernelExceedsMaximumTests(unittest.TestCase):
+    def test_compares_major_minor_only(self) -> None:
+        cases = [
+            ("7.2.15-200.fc44.x86_64", "7.2", False),
+            ("7.2.0-100.fc44.x86_64", "7.2", False),
+            ("7.3.4-200.fc44.x86_64", "7.2", True),
+            ("6.19.3-200.fc44.x86_64", "7.2", False),
+            ("8.0.1-200.fc45.x86_64", "7.9", True),
+            # Numeric, not text: 7.10 is newer than 7.9.
+            ("7.10.1-200.fc44.x86_64", "7.9", True),
+        ]
+        for kernel, maximum, expected in cases:
+            with self.subTest(kernel=kernel, maximum=maximum):
+                self.assertEqual(kernel_exceeds_maximum(kernel, maximum), expected)
+
+    def test_an_unreadable_value_raises_instead_of_guessing(self) -> None:
+        for kernel, maximum in (("", "7.2"), ("x7.3", "7.2"), ("7.3.4-200.fc44.x86_64", "")):
+            with self.subTest(kernel=kernel, maximum=maximum), self.assertRaises(CiToolError):
+                kernel_exceeds_maximum(kernel, maximum)
+
+
+class DatedBaseTagTests(unittest.TestCase):
+    TODAY = date(2026, 11, 18)
+
+    def test_version_key_reads_the_dated_form_only(self) -> None:
+        self.assertEqual(dated_base_version_key("44.20261110.0"), (44, date(2026, 11, 10), 0))
+        self.assertEqual(dated_base_version_key("44.20261110.12"), (44, date(2026, 11, 10), 12))
+        for value in ("44", "latest", "44.20261110.0-x86_64", "44.20261340.0", "44.2026111.0", ""):
+            with self.subTest(value=value):
+                self.assertIsNone(dated_base_version_key(value))
+
+    def test_keeps_plain_tags_of_one_fedora_release_newest_first(self) -> None:
+        tags = [
+            "44",
+            "latest",
+            "44.20261110.0",
+            "44.20261110.0-x86_64",
+            "44.20261110.0-aarch64",
+            "44.20261118.0",
+            "44.20261110.1",
+            "43.20261117.0",
+            "45.20261117.0",
+            "44.20261340.0",
+        ]
+        self.assertEqual(
+            dated_base_tags_newest_first(
+                tags, fedora_version="44", today=self.TODAY, lookback_days=30
+            ),
+            ["44.20261118.0", "44.20261110.1", "44.20261110.0"],
+        )
+
+    def test_the_lookback_window_includes_its_first_day_only(self) -> None:
+        tags = ["44.20261019.0", "44.20261018.0"]
+        self.assertEqual(
+            dated_base_tags_newest_first(
+                tags, fedora_version="44", today=self.TODAY, lookback_days=30
+            ),
+            ["44.20261019.0"],
+        )
+
+
+# The real kernels of these Kinoite 44 tags on 2026-11-18.
+KINOITE_44_KERNELS = {
+    "44.20261118.0": "7.3.4-200.fc44.x86_64",
+    "44.20261117.0": "7.3.3-200.fc44.x86_64",
+    "44.20261111.0": "7.3.3-200.fc44.x86_64",
+    "44.20261110.0": "7.2.15-200.fc44.x86_64",
+    "44.20261109.0": "7.2.15-200.fc44.x86_64",
+}
+
+
+class UtcTodayTests(unittest.TestCase):
+    def test_is_the_utc_calendar_date(self) -> None:
+        # The dated tags are stamped in UTC; near midnight a local date would be off by one.
+        before = datetime.now(UTC).date()
+        today = _utc_today()
+        after = datetime.now(UTC).date()
+        self.assertIn(today, {before, after})
+
+
+class FindHeldBaseTagTests(unittest.TestCase):
+    TODAY = date(2026, 11, 18)
+    NAME = "quay.io/fedora-ostree-desktops/kinoite"
+
+    def _find(self, kernels: dict[str, str], linux_maximum: str = "7.2") -> tuple[str, list[str]]:
+        inspected: list[str] = []
+
+        def inspect(ref: str) -> dict:
+            inspected.append(ref)
+            tag = ref.rsplit(":", 1)[1]
+            return {"Labels": {"ostree.linux": kernels[tag]} if kernels[tag] else {}}
+
+        tag = find_held_base_tag(
+            base_image_name=self.NAME,
+            fedora_version="44",
+            linux_maximum=linux_maximum,
+            today=self.TODAY,
+            list_tags=lambda name: ["44", *kernels],
+            inspect=inspect,
+        )
+        return tag, inspected
+
+    def test_returns_the_newest_tag_whose_kernel_openzfs_supports(self) -> None:
+        tag, inspected = self._find(KINOITE_44_KERNELS)
+        self.assertEqual(tag, "44.20261110.0")
+        # Newest first, and it stops at the first supported one.
+        self.assertEqual(
+            inspected,
+            [
+                f"docker://{self.NAME}:44.20261118.0",
+                f"docker://{self.NAME}:44.20261117.0",
+                f"docker://{self.NAME}:44.20261111.0",
+                f"docker://{self.NAME}:44.20261110.0",
+            ],
+        )
+
+    def test_a_tag_without_a_readable_kernel_label_is_skipped(self) -> None:
+        kernels = dict(KINOITE_44_KERNELS) | {"44.20261110.0": ""}
+        tag, _ = self._find(kernels)
+        self.assertEqual(tag, "44.20261109.0")
+
+    def test_no_supported_base_in_the_window_raises(self) -> None:
+        with self.assertRaises(CiToolError) as caught:
+            self._find(KINOITE_44_KERNELS, linux_maximum="7.1")
+        self.assertIn(f"last {KERNEL_HOLD_LOOKBACK_DAYS} days", str(caught.exception))
+        self.assertIn("Linux-Maximum 7.1", str(caught.exception))
+
+    def test_lists_the_base_repository_tags_with_skopeo(self) -> None:
+        with patch(
+            "ci_tools.resolve_build_inputs.run_json_cmd",
+            return_value={"Repository": self.NAME, "Tags": ["44", "44.20261110.0"]},
+        ) as run_json_cmd:
+            tags = list_base_image_tags(self.NAME)
+        self.assertEqual(tags, ["44", "44.20261110.0"])
+        self.assertEqual(
+            run_json_cmd.call_args.args[0], ["skopeo", "list-tags", f"docker://{self.NAME}"]
+        )
+
+    def test_a_listing_without_tags_fails_closed(self) -> None:
+        with (
+            patch("ci_tools.resolve_build_inputs.run_json_cmd", return_value={"Repository": "x"}),
+            self.assertRaises(CiToolError),
+        ):
+            list_base_image_tags(self.NAME)
+
+
+HOLD_NEWEST_DIGEST = "sha256:" + "1" * 64
+HOLD_HELD_DIGEST = "sha256:" + "2" * 64
+# tag -> (ostree.linux, org.opencontainers.image.version, digest)
+HOLD_TAGS = {
+    "44": ("7.3.4-200.fc44.x86_64", "44.20261118.0", HOLD_NEWEST_DIGEST),
+    "44.20261118.0": ("7.3.4-200.fc44.x86_64", "44.20261118.0", HOLD_NEWEST_DIGEST),
+    "44.20261117.0": ("7.3.3-200.fc44.x86_64", "44.20261117.0", "sha256:" + "3" * 64),
+    "44.20261110.0": ("7.2.15-200.fc44.x86_64", "44.20261110.0", HOLD_HELD_DIGEST),
+}
+
+
+class ResolveBuildInputsKernelHoldTests(unittest.TestCase):
+    """
+    `resolve_build_inputs()` with the newest base on a kernel OpenZFS does not support.
+
+    The registry below is Kinoite 44 as it was on 2026-11-18: the `:44` tag and its newest
+    dated tag carry 7.3.4, the last dated tag with a 7.2 kernel is 44.20261110.0, and OpenZFS
+    2.4.4 declares `Linux-Maximum: 7.2`.
+    """
+
+    NAME = "quay.io/fedora-ostree-desktops/kinoite"
+    BASE_REF = f"{NAME}:44"
+    NEWEST_DIGEST = HOLD_NEWEST_DIGEST
+    HELD_DIGEST = HOLD_HELD_DIGEST
+
+    def _resolve(
+        self,
+        *,
+        tags: dict | None = None,
+        linux_maximum: str = "7.2",
+        installed: str = "7.2.15-200.fc44.x86_64\n",
+        env: dict | None = None,
+    ):
+        tags = HOLD_TAGS if tags is None else tags
+        self.pulled: list[str] = []
+        self.listed = 0
+
+        def inspect_json(ref: str) -> dict:
+            if "build" in ref:
+                return {"Name": "ghcr.io/example/build", "Digest": "sha256:cafef00d"}
+            if "brew" in ref:
+                return {"Name": "ghcr.io/example/brew", "Digest": "sha256:beefcafe"}
+            kernel, version, digest = tags[ref.rsplit(":", 1)[1]]
+            return {
+                "Name": self.NAME,
+                "Digest": digest,
+                "Labels": {"ostree.linux": kernel, "org.opencontainers.image.version": version},
+            }
+
+        def inspect_digest(ref: str) -> str:
+            tag = ref.rsplit(":", 1)[1]
+            return tags[tag][2] if tag in tags else ""
+
+        def list_tags(name: str) -> list[str]:
+            self.listed += 1
+            return list(tags)
+
+        def pull(args, **kwargs) -> str:
+            self.pulled.append(args[-1])
+            return ""
+
+        base_env = {
+            "USE_INPUT_LOCK": "false",
+            "LOCK_FILE": "ci/inputs.lock.json",
+            "BUILD_CONTAINER_REF": "ghcr.io/example/build:latest",
+            "DEFAULT_BASE_IMAGE": self.BASE_REF,
+            "DEFAULT_ZFS_MINOR_VERSION": "2.4",
+            "DEFAULT_AKMODS_REF": "a" * 40,
+            "DEFAULT_BREW_IMAGE": "ghcr.io/example/brew@sha256:beefcafe",
+        }
+        with (
+            patch.dict(os.environ, base_env | (env or {}), clear=False),
+            patch("ci_tools.resolve_build_inputs.skopeo_inspect_json", side_effect=inspect_json),
+            patch(
+                "ci_tools.resolve_build_inputs.skopeo_inspect_digest", side_effect=inspect_digest
+            ),
+            patch("ci_tools.resolve_build_inputs.list_base_image_tags", side_effect=list_tags),
+            patch("ci_tools.resolve_build_inputs.run_cmd_with_retries", side_effect=pull),
+            patch("ci_tools.resolve_build_inputs.run_cmd", return_value=installed),
+            patch(
+                "ci_tools.resolve_build_inputs.resolve_latest_zfs_version", return_value="2.4.4"
+            ),
+            patch(
+                "ci_tools.resolve_build_inputs.resolve_linux_maximum", return_value=linux_maximum
+            ) as self.linux_maximum,
+            patch(
+                "ci_tools.resolve_build_inputs._utc_today", return_value=date(2026, 11, 18)
+            ),
+        ):
+            return resolve_build_inputs()
+
+    def test_an_unsupported_newest_kernel_holds_the_base_on_the_last_supported_one(self) -> None:
+        resolution = self._resolve()
+        inputs = resolution.inputs
+        self.assertEqual(inputs.kernel_held_from, "7.3.4-200.fc44.x86_64")
+        self.assertEqual(inputs.base_image_pinned, f"{self.NAME}@{self.HELD_DIGEST}")
+        self.assertEqual(inputs.base_image_digest, self.HELD_DIGEST)
+        self.assertEqual(inputs.base_image_tag, "44.20261110.0")
+        self.assertEqual(inputs.kernel_release, "7.2.15-200.fc44.x86_64")
+        self.assertEqual(inputs.version, "44")
+        self.assertEqual(resolution.label_kernel_release, "7.2.15-200.fc44.x86_64")
+        # The floating ref is still recorded as what was asked for.
+        self.assertEqual(inputs.base_image_ref, self.BASE_REF)
+        self.linux_maximum.assert_called_once_with("2.4.4")
+        # Only the held base is pulled: the newest one is never downloaded.
+        self.assertEqual(self.pulled, [f"{self.NAME}@{self.HELD_DIGEST}"])
+
+    def test_a_supported_newest_kernel_is_not_held(self) -> None:
+        resolution = self._resolve(linux_maximum="7.3", installed="7.3.4-200.fc44.x86_64\n")
+        inputs = resolution.inputs
+        self.assertEqual(inputs.kernel_held_from, "")
+        self.assertEqual(inputs.base_image_pinned, f"{self.NAME}@{self.NEWEST_DIGEST}")
+        self.assertEqual(inputs.base_image_tag, "44.20261118.0")
+        self.assertEqual(self.listed, 0)
+
+    def test_no_supported_base_in_the_window_fails_the_run(self) -> None:
+        tags = {tag: value for tag, value in HOLD_TAGS.items() if tag != "44.20261110.0"}
+        with self.assertRaises(CiToolError) as caught:
+            self._resolve(tags=tags)
+        self.assertIn("no base to hold the build on", str(caught.exception))
+        self.assertEqual(self.pulled, [])
+
+    def test_a_held_tag_without_a_digest_fails_before_any_pull(self) -> None:
+        tags = dict(HOLD_TAGS) | {"44.20261110.0": ("7.2.15-200.fc44.x86_64", "44.20261110.0", "")}
+        with self.assertRaises(CiToolError) as caught:
+            self._resolve(tags=tags)
+        self.assertEqual(
+            str(caught.exception),
+            f"Failed to resolve base image digest for {self.NAME}:44.20261110.0",
+        )
+        self.assertEqual(self.pulled, [])
+
+    def test_an_unreadable_openzfs_limit_fails_the_run(self) -> None:
+        with self.assertRaises(CiToolError):
+            self._resolve(linux_maximum="")
+
+    def test_a_lock_file_replay_is_never_held(self) -> None:
+        lock = {
+            "version": 1,
+            "base_image": self.BASE_REF,
+            "build_container": "ghcr.io/example/build:latest",
+            "zfs_minor_version": "2.4",
+            "zfs_version": "2.4.4",
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            lock_path = Path(temp_dir) / "inputs.lock.json"
+            lock_path.write_text(json.dumps(lock), encoding="utf-8")
+            resolution = self._resolve(
+                env={"USE_INPUT_LOCK": "true", "LOCK_FILE": str(lock_path)},
+                installed="7.3.4-200.fc44.x86_64\n",
+            )
+        self.assertEqual(resolution.inputs.kernel_held_from, "")
+        self.assertEqual(resolution.inputs.base_image_digest, self.NEWEST_DIGEST)
+        self.linux_maximum.assert_not_called()
+        self.assertEqual(self.listed, 0)
+
+    def test_a_held_run_says_so_and_exports_the_held_kernel(self) -> None:
+        resolution = self._resolve()
+        with (
+            patch("ci_tools.resolve_build_inputs.resolve_build_inputs", return_value=resolution),
+            patch("ci_tools.resolve_build_inputs.write_github_outputs") as write_outputs,
+            redirect_stdout(io.StringIO()) as stdout,
+        ):
+            main()
+        self.assertEqual(
+            write_outputs.call_args.args[0]["kernel_held_from"], "7.3.4-200.fc44.x86_64"
+        )
+        self.assertIn("Kernel held: the newest base image has kernel 7.3.4", stdout.getvalue())
 
 
 if __name__ == "__main__":

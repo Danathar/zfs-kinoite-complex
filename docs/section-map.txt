@@ -199,6 +199,8 @@
   joined: tests/test_ai_ops_runbook_doc.py
 ## Sticky akmods failure issues
   joined: tests/test_ai_ops_runbook_doc.py
+## The kernel-held issue
+  joined: tests/test_workflow_kernel_held_issue.py
 ## The gate hook refuses a command
   joined: tests/test_ai_ops_runbook_doc.py
 ## An agent pull request that looks wrong

@@ -12,7 +12,7 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
-from ci_tools.common import require_env
+from ci_tools.common import optional_env, require_env
 
 ARTIFACT_DIR = Path("artifacts")
 ARTIFACT_PATH = ARTIFACT_DIR / "build-inputs.json"
@@ -54,6 +54,9 @@ def main() -> None:
             "zfs_minor_version": require_env("ZFS_MINOR_VERSION"),
             "zfs_version": require_env("ZFS_VERSION"),
             "akmods_upstream_ref": require_env("AKMODS_UPSTREAM_REF"),
+            # Empty unless the run held the base image on an older kernel; the
+            # triage workflow reads it to open or close the "Kernel held" issue.
+            "kernel_held_from": optional_env("KERNEL_HELD_FROM"),
         },
     }
 

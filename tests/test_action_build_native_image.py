@@ -65,6 +65,7 @@ STABLE_SIGNAL_IMAGE = "ghcr.io/ublue-os/kinoite-main:stable"
 STABLE_SIGNAL_DIGEST = "sha256:" + "4" * 64
 AKMODS_UPSTREAM_REF = "5" * 40
 ZFS_VERSION = "2.3.4"
+KERNEL_HELD_FROM = "7.3.4-200.fc44.x86_64"
 IMAGE_REPO = f"ghcr.io/danathar/{IMAGE_NAME}"
 SIGNING_KEY_FILENAME = f"{IMAGE_NAME}.pub"
 
@@ -78,6 +79,7 @@ FULL_INPUTS = {
     "stable_signal_image": STABLE_SIGNAL_IMAGE,
     "stable_signal_digest": STABLE_SIGNAL_DIGEST,
     "zfs_version": ZFS_VERSION,
+    "kernel_held_from": KERNEL_HELD_FROM,
     "image_repo": IMAGE_REPO,
     "signing_key_filename": SIGNING_KEY_FILENAME,
 }
@@ -277,6 +279,8 @@ class BuildActionStepTests(unittest.TestCase):
                 f"org.zfs-kinoite-complex.stable-signal-digest={STABLE_SIGNAL_DIGEST}",
                 "--label",
                 f"org.zfs-kinoite-complex.zfs-version={ZFS_VERSION}",
+                "--label",
+                f"org.zfs-kinoite-complex.kernel-held-from={KERNEL_HELD_FROM}",
                 "-t",
                 f"{IMAGE_NAME}:{IMAGE_TAG}",
                 ".",
@@ -330,6 +334,7 @@ class BuildActionStepTests(unittest.TestCase):
                 "stable_signal_image": "",
                 "stable_signal_digest": "",
                 "zfs_version": "",
+                "kernel_held_from": "",
             },
         )
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -343,6 +348,7 @@ class BuildActionStepTests(unittest.TestCase):
                 "org.zfs-kinoite-complex.stable-signal-image=",
                 "org.zfs-kinoite-complex.stable-signal-digest=",
                 "org.zfs-kinoite-complex.zfs-version=",
+                "org.zfs-kinoite-complex.kernel-held-from=",
             ],
         )
         # The positional arguments buildah reads by position, still where they belong.

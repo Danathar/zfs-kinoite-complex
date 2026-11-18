@@ -48,6 +48,11 @@ best-effort, or reach for `|| true` — including to make a test easier to write
 This is the single most likely wrong suggestion in this repository, because the
 guard looks like an obstacle and the "helpful" fix looks like robustness.
 
+The one sanctioned exception is the kernel hold ("Kernel Hold" in
+`docs/architecture-overview.md`): when the newest base's kernel is newer than
+OpenZFS supports, input resolution builds on an older base whose kernel it does
+support. It relaxes no check, and it is not a pattern to copy for any other guard.
+
 The safety-critical files are `build.yml`,
 `.github/actions/publish-native-image`, `ci_tools/sign_image.py`,
 `ci_tools/promote_stable.py`, `ci_tools/check_akmods_cache.py`,

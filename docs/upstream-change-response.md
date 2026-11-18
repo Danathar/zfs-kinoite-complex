@@ -54,9 +54,16 @@ needs a repository-specific fix, change that fork separately and let this repo
 consume the resulting commit through its normal floating or explicit-ref
 selection.
 
-Do not weaken fail-closed checks to make a build green. If the base image or
-kernel moved ahead of OpenZFS support, the correct short-term result is a red
-candidate and an unchanged stable image.
+Do not weaken fail-closed checks to make a build green. When the newest base
+image's kernel is ahead of OpenZFS support, no check is relaxed: input
+resolution holds the build on the newest base from the last 28 days whose
+kernel OpenZFS does support, and a "Kernel held" issue stays open until the
+hold lifts (see "Kernel Hold" in
+[`architecture-overview.md`](./architecture-overview.md)). That is the one
+sanctioned exception to "no fallback" in AGENTS.md section 0 rule 1: it picks
+an older, verified input and leaves every match, digest and signature check in
+place. If no such base exists, or the failure is anything else, the correct
+short-term result is a red candidate and an unchanged stable image.
 
 For a temporary emergency freeze, set `AKMODS_UPSTREAM_REF` to a known-good
 commit in `ci/defaults.json`, validate the result, and clear the pin when the

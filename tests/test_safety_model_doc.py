@@ -70,7 +70,12 @@ LABEL_RE = re.compile(r'--label "' + re.escape(LABEL_PREFIX) + r"([a-z-]+)=")
 # action stamps must be claimed by exactly one item, so a new label fails until the page
 # says what it records.
 PROVENANCE_LABELS = {
-    "Fedora Kinoite base": {"base-image", "stable-signal-image", "stable-signal-digest"},
+    "Fedora Kinoite base": {
+        "base-image",
+        "stable-signal-image",
+        "stable-signal-digest",
+        "kernel-held-from",
+    },
     "kernel set": set(),
     "OpenZFS release": {"zfs-version"},
     "akmods commit": {"akmods-ref"},

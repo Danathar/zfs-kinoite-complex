@@ -35,7 +35,12 @@ So the bar for changes here is higher than "tests pass."
    a signature cannot be verified, when a digest does not match, or when the
    akmods cache does not cover the required kernel and ZFS line. If one of these
    fires, the correct response is to fix the underlying cause or stop and report
-   it — never to relax the check, add a fallback, or make it best-effort.
+   it — never to relax the check, add a fallback, or make it best-effort. The one
+   sanctioned exception is the kernel hold ("Kernel Hold" in
+   `docs/architecture-overview.md`): when the newest base's kernel is newer than
+   OpenZFS supports, input resolution builds on an older base whose kernel it
+   does support. It relaxes no check, and it is not a pattern to copy for any
+   other guard.
 
 2. **Treat the build, promotion, and signing path as safety-critical.** That is:
    `build.yml`, `.github/actions/publish-native-image`, `ci_tools/sign_image.py`,

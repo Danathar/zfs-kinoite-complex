@@ -11,6 +11,10 @@ later -- silently downgrading ZFS. Filtering to the exact requested line before
 comparing patch numbers makes that impossible.
 Goal: Give both the scheduled-build gate and the akmods cache-reuse check one
 trustworthy answer to "what is the newest release on this line right now".
+
+It also reads the newest Linux kernel that one exact release declares support
+for (`Linux-Maximum` in the release's `META` file), which input resolution
+uses to hold the base image on a kernel that release can build against.
 """
 
 from __future__ import annotations
@@ -26,6 +30,11 @@ from ci_tools.common import CiToolError
 OPENZFS_RELEASES_URL = "https://api.github.com/repos/openzfs/zfs/releases"
 MINOR_VERSION_RE = re.compile(r"^(\d+)\.(\d+)$")
 RELEASE_TAG_RE = re.compile(r"^zfs-(\d+)\.(\d+)\.(\d+)$")
+VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
+OPENZFS_META_URL = "https://api.github.com/repos/openzfs/zfs/contents/META?ref=zfs-{version}"
+# `Linux-Maximum:       7.2` in the META file at a release tag. Only a plain
+# `<major>.<minor>` counts; anything else is treated as missing.
+LINUX_MAXIMUM_RE = re.compile(r"^Linux-Maximum:[ \t]*(\d+\.\d+)[ \t]*$", re.MULTILINE)
 
 # The API caps `per_page` at 100. Five pages covers OpenZFS's entire release
 # history several times over, and bounds this to at most five requests.
@@ -118,3 +127,50 @@ def resolve_latest_zfs_version(
         raise CiToolError(f"No published OpenZFS release found for minor line {minor_version}")
 
     return f"{minor_key[0]}.{minor_key[1]}.{best_patch}"
+
+
+def fetch_openzfs_meta(zfs_version: str) -> str:
+    """
+    Return the text of OpenZFS's `META` file at the `zfs-<zfs_version>` tag.
+
+    Read through the GitHub contents API with the raw media type, so it shares
+    the authenticated rate limit `fetch_openzfs_releases` uses rather than the
+    per-IP limit raw.githubusercontent.com applies to shared runners.
+    """
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or ""
+    headers = {
+        "Accept": "application/vnd.github.raw+json",
+        "User-Agent": "zfs-kinoite-complex",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    url = OPENZFS_META_URL.format(version=zfs_version)
+    request = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return response.read().decode("utf-8")
+    except (OSError, ValueError) as exc:
+        raise CiToolError(f"Failed to fetch OpenZFS META from {url}: {exc}") from exc
+
+
+def resolve_linux_maximum(
+    zfs_version: str,
+    *,
+    meta_fetcher: Callable[[str], str] = fetch_openzfs_meta,
+) -> str:
+    """
+    Return the newest kernel line (for example `7.2`) one OpenZFS release supports.
+
+    `zfs_version` must be an exact `<major>.<minor>.<patch>` release. A missing
+    or malformed `Linux-Maximum` line raises: the caller decides which base
+    image to build on from this value, so an unknown limit must stop the run
+    rather than be guessed.
+    """
+    if not VERSION_RE.match(zfs_version):
+        raise CiToolError(f"Invalid ZFS version: {zfs_version!r}")
+    match = LINUX_MAXIMUM_RE.search(meta_fetcher(zfs_version))
+    if not match:
+        raise CiToolError(f"OpenZFS {zfs_version} META has no Linux-Maximum line")
+    return match.group(1)

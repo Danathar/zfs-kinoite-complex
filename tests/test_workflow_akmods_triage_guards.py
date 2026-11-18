@@ -205,6 +205,32 @@ class TriageGuardTests(unittest.TestCase):
             ],
         )
 
+    def test_the_build_inputs_manifest_is_unzipped_only_when_a_build_ran(self) -> None:
+        # The download step fetches the manifest exactly when the build-inputs artifact exists,
+        # which is what build_ran reports; unzip on a run with none would fail the job.
+        self.check(
+            self.condition("Unzip build inputs manifest"),
+            [
+                ({"build_ran": "true"}, True),
+                ({"build_ran": "false"}, False),
+                ({}, False),
+            ],
+        )
+
+    def test_the_kernel_held_issue_is_kept_only_by_a_green_run_that_really_built(self) -> None:
+        # A gate-skipped green run did not resolve a base, so it says nothing about a hold; a
+        # failed run's hold state is left to the failure issues.
+        self.check(
+            self.condition("Open, refresh or close the kernel-held issue"),
+            [
+                ({"conclusion": "success", "build_ran": "true"}, True),
+                ({"conclusion": "success", "build_ran": "false"}, False),
+                ({"conclusion": "success"}, False),
+                ({"conclusion": "failure", "build_ran": "true"}, False),
+                ({"conclusion": "cancelled", "build_ran": "true"}, False),
+            ],
+        )
+
     def test_a_sticky_issue_is_opened_only_for_a_failed_run_with_a_payload(self) -> None:
         # The step reads artifacts/akmods-failure.json; a failure in any other step has none.
         self.check(
@@ -284,10 +310,12 @@ class TriageGuardTests(unittest.TestCase):
             guarded,
             {
                 "Unzip payload",
+                "Unzip build inputs manifest",
                 "Open or update sticky issue on failed run",
                 "Close stale sticky issues on successful run",
                 "Open or update the build failure issue",
                 "Close the build failure issue on a real green build",
+                "Open, refresh or close the kernel-held issue",
                 "Build OpenZFS/kernel badge payload",
                 "Publish badges to status branch",
             },

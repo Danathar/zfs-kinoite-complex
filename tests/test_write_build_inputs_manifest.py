@@ -102,6 +102,7 @@ class WriteBuildInputsManifestTests(unittest.TestCase):
                 "zfs_minor_version",
                 "zfs_version",
                 "akmods_upstream_ref",
+                "kernel_held_from",
             },
         )
         self.assertFalse(document["inputs"]["use_input_lock"])
@@ -119,6 +120,26 @@ class WriteBuildInputsManifestTests(unittest.TestCase):
             document["inputs"]["akmods_upstream_ref"],
             "abcdef1234567890abcdef1234567890abcdef12",
         )
+        # Unset unless the run held the base; an absent variable is not an error.
+        self.assertEqual(document["inputs"]["kernel_held_from"], "")
+
+    def test_records_the_kernel_a_held_run_skipped(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            artifact_dir = Path(temp_dir) / "artifacts"
+            artifact_path = artifact_dir / "build-inputs.json"
+
+            with (
+                patch.object(script, "ARTIFACT_DIR", artifact_dir),
+                patch.object(script, "ARTIFACT_PATH", artifact_path),
+                patch.dict(
+                    os.environ, _env() | {"KERNEL_HELD_FROM": "7.3.4-200.fc44.x86_64"}, clear=True
+                ),
+            ):
+                script.main()
+
+            document = json.loads(artifact_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(document["inputs"]["kernel_held_from"], "7.3.4-200.fc44.x86_64")
 
 
 if __name__ == "__main__":

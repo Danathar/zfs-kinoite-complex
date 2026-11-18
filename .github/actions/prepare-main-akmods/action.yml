@@ -96,6 +96,11 @@ outputs:
   lock_file_path:
     description: Lock file path recorded in the resolved inputs.
     value: ${{ steps.resolve.outputs.lock_file_path }}
+  kernel_held_from:
+    description: >-
+      The newest base image's kernel when this run held the base on an older
+      image because OpenZFS does not support that kernel yet; empty otherwise.
+    value: ${{ steps.resolve.outputs.kernel_held_from }}
   akmods_cache_exists:
     description: Whether a reusable shared akmods cache was found.
     value: ${{ steps.cache.outputs.exists }}
@@ -172,6 +177,7 @@ runs:
         ZFS_MINOR_VERSION: ${{ steps.resolve.outputs.zfs_minor_version }}
         ZFS_VERSION: ${{ steps.resolve.outputs.zfs_version }}
         AKMODS_UPSTREAM_REF: ${{ steps.resolve.outputs.akmods_upstream_ref }}
+        KERNEL_HELD_FROM: ${{ steps.resolve.outputs.kernel_held_from }}
       run: |
         python3 -m ci_tools.cli write-build-inputs-manifest
 

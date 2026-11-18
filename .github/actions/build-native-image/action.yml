@@ -34,6 +34,14 @@ inputs:
     description: Exact resolved OpenZFS patch version installed by this build. Recorded as an OCI image label for provenance.
     required: false
     default: ""
+  kernel_held_from:
+    description: >-
+      The newest base image's kernel when input resolution held this build on
+      an older base because OpenZFS does not support that kernel yet; empty
+      otherwise. Recorded as an OCI image label, so a published image says it
+      is held, and the scheduled gate and promotion read it back.
+    required: false
+    default: ""
   image_repo:
     description: Public image repository path used by in-image signing policy.
     required: true
@@ -83,6 +91,7 @@ runs:
         STABLE_SIGNAL_IMAGE: ${{ inputs.stable_signal_image }}
         STABLE_SIGNAL_DIGEST: ${{ inputs.stable_signal_digest }}
         ZFS_VERSION: ${{ inputs.zfs_version }}
+        KERNEL_HELD_FROM: ${{ inputs.kernel_held_from }}
       run: |
         set -euo pipefail
         # --format docker (rather than buildah's oci default) writes this local
@@ -107,5 +116,6 @@ runs:
           --label "org.zfs-kinoite-complex.stable-signal-image=${STABLE_SIGNAL_IMAGE}" \
           --label "org.zfs-kinoite-complex.stable-signal-digest=${STABLE_SIGNAL_DIGEST}" \
           --label "org.zfs-kinoite-complex.zfs-version=${ZFS_VERSION}" \
+          --label "org.zfs-kinoite-complex.kernel-held-from=${KERNEL_HELD_FROM}" \
           -t "${IMAGE_NAME}:${IMAGE_TAG}" \
           .

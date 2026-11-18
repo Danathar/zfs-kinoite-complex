@@ -216,6 +216,23 @@ class MainTests(unittest.TestCase):
         self.assertEqual(badge["color"], "yellow")
         self.assertIn("waits for OpenZFS", badge["message"])
 
+    def test_a_manifest_that_was_not_downloaded_leaves_the_badge_alone(self) -> None:
+        # The triage workflow catches a failed manifest download and still reports
+        # build_ran=true; "in sync" would then hide a hold.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            work_dir = Path(temp_dir)
+            outputs = self._run_main(
+                {
+                    "WORKFLOW_CONCLUSION": "success",
+                    "BUILD_RAN": "true",
+                    "BUILD_INPUTS_PATH": "artifacts/build-inputs/build-inputs.json",
+                    "BADGE_OUTPUT_PATH": "artifacts/akmods-badge.json",
+                },
+                cwd=work_dir,
+            )
+            self.assertFalse((work_dir / "artifacts" / "akmods-badge.json").exists())
+        self.assertEqual(outputs["updated"], "false")
+
     def test_the_manifest_path_is_the_one_the_workflow_passes(self) -> None:
         workflow = (
             Path(__file__).resolve().parent.parent / ".github/workflows/akmods-failure-triage.yml"

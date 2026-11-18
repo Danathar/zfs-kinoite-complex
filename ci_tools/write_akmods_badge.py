@@ -106,6 +106,15 @@ def main() -> None:
     build_inputs: dict | None = None
     if build_inputs_path and Path(build_inputs_path).exists():
         build_inputs = json.loads(Path(build_inputs_path).read_text(encoding="utf-8")).get("inputs")
+    elif build_inputs_path and conclusion == "success" and build_ran:
+        # The workflow names a manifest it failed to download. Without it this
+        # run cannot tell a held build from one in sync, so it says neither.
+        write_github_outputs({"updated": "false"})
+        print(
+            f"Build inputs manifest {build_inputs_path} is missing, so whether the kernel is "
+            "held is unknown; leaving the OpenZFS/kernel badge as-is."
+        )
+        return
 
     badge = build_badge_payload(
         conclusion=conclusion,

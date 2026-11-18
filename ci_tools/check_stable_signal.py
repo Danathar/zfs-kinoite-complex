@@ -202,14 +202,24 @@ def evaluate_stable_signal_gate(
     # before holds existed). This reads the stable-signal image's kernel, which
     # stands in for the base image's because both are the same Kinoite tag in
     # ci/defaults.json.
+    #
+    # A held `:latest` past the window builds whether or not upstream moved,
+    # so the run fails and says so instead of the gate skipping forever.
     previous_kernel_held_from = str(labels.get(KERNEL_HELD_FROM_LABEL) or "")
+    if previous_kernel_held_from:
+        held_base_version = str(labels.get(BASE_VERSION_LABEL) or "")
+        if not _held_base_within_lookback(held_base_version, today or datetime.now(UTC).date()):
+            return StableSignalDecision(
+                should_build=True,
+                reason="kernel-held-past-hold-window",
+                stable_signal_ref=stable_signal_image,
+                stable_signal_digest=stable_signal_digest,
+                zfs_version=current_zfs_version,
+            )
     if previous_signal_digest != stable_signal_digest and previous_kernel_held_from:
         upstream_kernel = str((stable_signal_inspect.get("Labels") or {}).get("ostree.linux") or "")
-        held_base_version = str(labels.get(BASE_VERSION_LABEL) or "")
-        if (
-            upstream_kernel
-            and kernel_exceeds_maximum(upstream_kernel, resolve_linux_maximum(current_zfs_version))
-            and _held_base_within_lookback(held_base_version, today or datetime.now(UTC).date())
+        if upstream_kernel and kernel_exceeds_maximum(
+            upstream_kernel, resolve_linux_maximum(current_zfs_version)
         ):
             return StableSignalDecision(
                 should_build=False,

@@ -175,6 +175,14 @@ def _held_latest_inspect() -> dict:
     return held
 
 
+def _held_past_window_latest_inspect() -> dict:
+    """A held `:latest` whose base left the window while upstream did not move at all."""
+    held = _held_latest_inspect()
+    held["Labels"][STABLE_SIGNAL_DIGEST_LABEL] = CURRENT_DIGEST
+    held["Labels"][BASE_VERSION_LABEL] = "44.20261017.0"
+    return held
+
+
 def run_gate(latest, *, signal_digest: str = CURRENT_DIGEST, signal_kernel: str = ""):
     """
     Run the real gate against one fake registry.
@@ -228,6 +236,7 @@ GATE_SCENARIOS = {
     "current-latest-missing-stable-signal-labels": lambda: run_gate(_latest_inspect(labels={})),
     "current-latest-missing-zfs-version-label": lambda: run_gate(_latest_inspect(zfs_version="")),
     "not-schedule-event": lambda: _bypass_decision_offline(),
+    "kernel-held-past-hold-window": lambda: run_gate(_held_past_window_latest_inspect()),
     "kernel-held-upstream-kernel-still-unsupported": lambda: run_gate(
         _held_latest_inspect(), signal_kernel="7.3.5-200.fc44.x86_64"
     ),
@@ -251,7 +260,7 @@ class ScheduledBuildGateTableTests(unittest.TestCase):
         # Guard the guard: every assertion below iterates these rows, and an
         # empty list passes a for-loop silently.
         rows = gate_table()
-        self.assertEqual(len(rows), 9, rows)
+        self.assertEqual(len(rows), 10, rows)
         self.assertEqual(len({reason for reason, _ in rows}), len(rows))
 
     def test_the_documented_reasons_are_exactly_the_gate_source_reasons(self) -> None:
@@ -288,14 +297,21 @@ class ScheduledBuildGateTableTests(unittest.TestCase):
         held = _held_latest_inspect()
         held["Labels"][BASE_VERSION_LABEL] = "44.20261017.0"
         decision = run_gate(held, signal_kernel="7.3.5-200.fc44.x86_64")
-        self.assertEqual(decision.reason, "stable-signal-advanced")
+        self.assertEqual(decision.reason, "kernel-held-past-hold-window")
         self.assertTrue(decision.should_build)
+
+    def test_a_held_latest_inside_the_window_with_no_upstream_change_skips(self) -> None:
+        held = _held_latest_inspect()
+        held["Labels"][STABLE_SIGNAL_DIGEST_LABEL] = CURRENT_DIGEST
+        decision = run_gate(held, signal_kernel="7.3.5-200.fc44.x86_64")
+        self.assertEqual(decision.reason, "stable-signal-unchanged")
+        self.assertFalse(decision.should_build)
 
     def test_a_held_latest_builds_when_its_base_version_cannot_be_read(self) -> None:
         held = _held_latest_inspect()
         held["Labels"][BASE_VERSION_LABEL] = "44"
         decision = run_gate(held, signal_kernel="7.3.5-200.fc44.x86_64")
-        self.assertEqual(decision.reason, "stable-signal-advanced")
+        self.assertEqual(decision.reason, "kernel-held-past-hold-window")
         self.assertTrue(decision.should_build)
 
     def test_a_held_latest_builds_when_the_upstream_kernel_is_unknown(self) -> None:

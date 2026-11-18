@@ -291,6 +291,13 @@ class ScheduledBuildGateTableTests(unittest.TestCase):
         self.assertEqual(decision.reason, "stable-signal-advanced")
         self.assertTrue(decision.should_build)
 
+    def test_a_held_latest_builds_when_its_base_version_cannot_be_read(self) -> None:
+        held = _held_latest_inspect()
+        held["Labels"][BASE_VERSION_LABEL] = "44"
+        decision = run_gate(held, signal_kernel="7.3.5-200.fc44.x86_64")
+        self.assertEqual(decision.reason, "stable-signal-advanced")
+        self.assertTrue(decision.should_build)
+
     def test_a_held_latest_builds_when_the_upstream_kernel_is_unknown(self) -> None:
         decision = run_gate(_held_latest_inspect())
         self.assertEqual(decision.reason, "stable-signal-advanced")

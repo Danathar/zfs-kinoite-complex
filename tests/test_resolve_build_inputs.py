@@ -14,7 +14,7 @@ import os
 import tempfile
 import unittest
 from contextlib import redirect_stdout
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -30,6 +30,7 @@ from ci_tools.resolve_build_inputs import (
     ResolvedBuildInputs,
     _load_lock_file,
     _resolve_default_akmods_ref,
+    _utc_today,
     choose_base_image_tag,
     dated_base_tags_newest_first,
     dated_base_version_key,
@@ -1125,6 +1126,15 @@ KINOITE_44_KERNELS = {
 }
 
 
+class UtcTodayTests(unittest.TestCase):
+    def test_is_the_utc_calendar_date(self) -> None:
+        # The dated tags are stamped in UTC; near midnight a local date would be off by one.
+        before = datetime.now(UTC).date()
+        today = _utc_today()
+        after = datetime.now(UTC).date()
+        self.assertIn(today, {before, after})
+
+
 class FindHeldBaseTagTests(unittest.TestCase):
     TODAY = date(2026, 11, 18)
     NAME = "quay.io/fedora-ostree-desktops/kinoite"
@@ -1311,6 +1321,16 @@ class ResolveBuildInputsKernelHoldTests(unittest.TestCase):
         with self.assertRaises(CiToolError) as caught:
             self._resolve(tags=tags)
         self.assertIn("no base to hold the build on", str(caught.exception))
+        self.assertEqual(self.pulled, [])
+
+    def test_a_held_tag_without_a_digest_fails_before_any_pull(self) -> None:
+        tags = dict(HOLD_TAGS) | {"44.20261110.0": ("7.2.15-200.fc44.x86_64", "44.20261110.0", "")}
+        with self.assertRaises(CiToolError) as caught:
+            self._resolve(tags=tags)
+        self.assertEqual(
+            str(caught.exception),
+            f"Failed to resolve base image digest for {self.NAME}:44.20261110.0",
+        )
         self.assertEqual(self.pulled, [])
 
     def test_an_unreadable_openzfs_limit_fails_the_run(self) -> None:

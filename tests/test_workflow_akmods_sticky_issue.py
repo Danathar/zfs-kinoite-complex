@@ -85,6 +85,9 @@ const github = {
         { data: { artifacts: input.artifacts } }),
       downloadArtifact: async (params) => {
         calls.push(['downloadArtifact', params]);
+        if ((input.failing_artifact_ids || []).includes(params.artifact_id)) {
+          throw new Error(`artifact ${params.artifact_id} has expired`);
+        }
         const bytes = Buffer.from(input.zip_base64, 'base64');
         // Octokit hands back an ArrayBuffer for a binary download.
         return { data: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.length) };
@@ -113,7 +116,11 @@ const github = {
   },
 };
 const context = { repo: { owner: 'o', repo: 'r' }, payload: { workflow_run: input.run } };
-const core = { info: () => {}, setOutput: (name, value) => { outputs.push([name, value]); } };
+const core = {
+  info: () => {},
+  warning: () => {},
+  setOutput: (name, value) => { outputs.push([name, value]); },
+};
 const done = (ok) => process.stdout.write(JSON.stringify({ ok, calls, outputs }));
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 new AsyncFunction('github', 'context', 'core', input.script)(github, context, core).then(
@@ -177,6 +184,7 @@ class AkmodsStickyIssueStepTests(unittest.TestCase):
         label_status: int | None = None,
         runs: list[dict] | None = None,
         expect_ok: bool = True,
+        failing_artifact_ids: list[int] | None = None,
     ) -> tuple[list[list], dict[str, str]]:
         self.assertIn(step_name, self.steps, f"no step named {step_name!r}; was it renamed?")
         step = self.steps[step_name]
@@ -189,6 +197,7 @@ class AkmodsStickyIssueStepTests(unittest.TestCase):
             "label_status": label_status,
             "runs": runs or [],
             "zip_base64": base64.b64encode(ZIP_BYTES).decode("ascii"),
+            "failing_artifact_ids": failing_artifact_ids or [],
         }
         result = subprocess.run(
             [NODE, "-e", HARNESS],
@@ -231,10 +240,27 @@ class AkmodsStickyIssueStepTests(unittest.TestCase):
         self.assertEqual(calls, [])
         self.assertFalse((self.work_dir / "artifacts").exists())
 
+    def inputs_zip_path(self) -> Path:
+        return self.work_dir / "artifacts" / "build-inputs" / "build-inputs.zip"
+
     def test_the_build_inputs_artifact_means_a_real_build_ran(self) -> None:
         calls, outputs = self.run_download([artifact(1, f"build-inputs-{RUN['id']}")])
         self.assertEqual(outputs, {"build_ran": "true", "has_payload": "false"})
-        self.assertEqual(calls, [])
+        # The manifest itself is fetched too: the kernel-held issue and the badge read it.
+        self.assertEqual(
+            calls,
+            [
+                [
+                    "downloadArtifact",
+                    {"owner": "o", "repo": "r", "artifact_id": 1, "archive_format": "zip"},
+                ]
+            ],
+        )
+        self.assertIn(
+            "unzip -o build-inputs.zip", self.steps["Unzip build inputs manifest"]["run"]
+        )
+        self.assertEqual(self.inputs_zip_path().read_bytes(), ZIP_BYTES)
+        self.assertFalse(self.zip_path().exists())
 
     def test_a_failure_payload_is_downloaded_into_artifacts(self) -> None:
         artifacts = [
@@ -249,13 +275,34 @@ class AkmodsStickyIssueStepTests(unittest.TestCase):
             [
                 [
                     "downloadArtifact",
+                    {"owner": "o", "repo": "r", "artifact_id": 1, "archive_format": "zip"},
+                ],
+                [
+                    "downloadArtifact",
                     {"owner": "o", "repo": "r", "artifact_id": 3, "archive_format": "zip"},
-                ]
+                ],
             ],
         )
         # The next step runs `cd artifacts && unzip -o akmods-failure.zip`.
         self.assertIn("unzip -o akmods-failure.zip", self.steps["Unzip payload"]["run"])
         self.assertEqual(self.zip_path().read_bytes(), ZIP_BYTES)
+
+    def test_a_manifest_that_cannot_be_downloaded_still_lets_the_payload_through(self) -> None:
+        # The failure payload decides whether a red build gets its sticky issue; losing the
+        # manifest only leaves the kernel-held issue and badge as they were.
+        artifacts = [
+            artifact(1, f"build-inputs-{RUN['id']}"),
+            artifact(3, f"akmods-failure-{RUN['id']}"),
+        ]
+        calls, outputs = self.run_step(
+            DOWNLOAD_STEP, artifacts=artifacts, failing_artifact_ids=[1]
+        )
+        self.assertEqual(outputs, {"build_ran": "true", "has_payload": "true"})
+        self.assertEqual([name for name, _ in calls[1:]], ["downloadArtifact", "downloadArtifact"])
+        self.assertFalse(self.inputs_zip_path().exists())
+        self.assertEqual(self.zip_path().read_bytes(), ZIP_BYTES)
+        unzip = self.steps["Unzip build inputs manifest"]["run"]
+        self.assertIn("[ ! -f artifacts/build-inputs/build-inputs.zip ]", unzip)
 
     def test_build_ran_and_has_payload_are_reported_independently(self) -> None:
         calls, outputs = self.run_download([artifact(3, f"akmods-failure-{RUN['id']}")])

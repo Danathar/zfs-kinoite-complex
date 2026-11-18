@@ -142,6 +142,7 @@ This page defines terms used across this repository's docs and workflow comments
 - `USE_INPUT_LOCK`: whether input-lock replay mode is enabled.
 - `LOCK_FILE`: input-lock path passed into the resolver.
 - `LOCK_FILE_PATH`: input-lock path recorded in the build-inputs manifest.
+- `KERNEL_HELD_FROM`: the newest base image's kernel when input resolution held the run on an older base because OpenZFS does not support that kernel yet; empty otherwise. Recorded in the build-inputs manifest as `kernel_held_from` and on the image as the `org.zfs-kinoite-complex.kernel-held-from` label (see "Kernel Hold" in [`architecture-overview.md`](./architecture-overview.md)).
 - `AKMODS_FAILURE_LOG`: path to the captured akmods build log used for failure classification.
 - `AKMODS_FAILURE_PAYLOAD_PATH`: path where the failure classifier writes the sticky-issue payload.
 - `REQUIRE_MATCH`: when `true`, `check-akmods-cache` runs in strict mode after a rebuild, where a cache that does not carry the resolved `ZFS_VERSION` is a failure rather than a "rebuild needed" answer.
@@ -150,6 +151,7 @@ This page defines terms used across this repository's docs and workflow comments
 - `WORKFLOW_CONCLUSION`: conclusion of the build workflow run (`success`, `failure`, ...) that the akmods badge writer reports on.
 - `BUILD_RAN`: whether that run actually built, so a successful gate-skipped schedule run leaves the akmods badge untouched.
 - `FAILURE_PAYLOAD_PATH`: path of the classifier payload the akmods badge writer reads; the file `AKMODS_FAILURE_PAYLOAD_PATH` named when it was written.
+- `BUILD_INPUTS_PATH`: path of the run's `build-inputs.json` the akmods badge writer reads, so a green build that held the kernel shows as held rather than in sync.
 - `BADGE_OUTPUT_PATH`: path where a badge writer puts its shields.io JSON payload; each writer has its own default under `artifacts/`.
 - `BOOT_TEST_IMAGE`: image the boot test boots, by tag or digest; `boot-test.yml` passes `:latest` unless a dispatch names another.
 - `BOOT_TEST_WORK`: directory where the boot test writes its check script, VM logs and `result.json`; defaults to `artifacts/boot-test`.

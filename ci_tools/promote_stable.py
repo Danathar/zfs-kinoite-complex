@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 
+from ci_tools.check_stable_signal import BASE_VERSION_LABEL, KERNEL_HELD_FROM_LABEL
 from ci_tools.common import (
     COSIGN_TIMEOUT,
     REGISTRY_METADATA_TIMEOUT,
@@ -25,8 +26,11 @@ from ci_tools.common import (
     run_json_cmd,
     skopeo_copy,
     skopeo_inspect_digest,
+    skopeo_inspect_json,
+    skopeo_inspect_json_optional,
 )
 from ci_tools.prune_registry import STABLE_RE
+from ci_tools.resolve_build_inputs import dated_base_version_key
 from ci_tools.tagging_context import build_candidate_tag
 
 
@@ -79,6 +83,57 @@ def refuse_older_than_published(*, run_number: str, tags: list[str]) -> None:
             "promoted a newer image to latest. Re-running an older build's promotion "
             "would move latest backwards. To roll back on purpose, start a new run."
         )
+
+
+def refuse_held_base_older_than_latest(*, candidate_labels: dict, latest_labels: dict | None) -> None:
+    """
+    Refuse to promote a held candidate built on an older base than `:latest`.
+
+    A held build sits on the newest Kinoite base whose kernel OpenZFS supports
+    (`resolve_build_inputs.find_held_base_tag`). If `:latest` is already on a
+    newer base, promoting the held candidate would move users back to an older
+    Fedora, kernel included. Candidates that were not held are left to the
+    existing checks, so a deliberate rollback replayed from a lock file still
+    promotes as before.
+
+    Both images inherit `org.opencontainers.image.version` (`44.20261110.0`)
+    from their base. A held candidate whose base version, or whose `:latest`
+    base version, cannot be read is refused: that is the fail-closed direction.
+    """
+    if not str(candidate_labels.get(KERNEL_HELD_FROM_LABEL) or ""):
+        return
+    if latest_labels is None:
+        return
+    candidate_version = str(candidate_labels.get(BASE_VERSION_LABEL) or "")
+    latest_version = str(latest_labels.get(BASE_VERSION_LABEL) or "")
+    candidate_key = dated_base_version_key(candidate_version)
+    latest_key = dated_base_version_key(latest_version)
+    if candidate_key is None or latest_key is None:
+        raise CiToolError(
+            "Refusing to promote a held candidate: cannot compare its base version "
+            f"{candidate_version!r} with the base version {latest_version!r} of latest."
+        )
+    if candidate_key < latest_key:
+        raise CiToolError(
+            f"Refusing to promote a held candidate on base {candidate_version}: latest is "
+            f"already on the newer base {latest_version}. Promoting it would move users "
+            "back to an older Fedora and kernel."
+        )
+
+
+def refuse_held_candidate_older_than_latest(*, candidate_ref: str, latest_ref: str, creds: str) -> None:
+    """
+    Read the candidate's labels and, only for a held candidate, `latest`'s, then
+    apply `refuse_held_base_older_than_latest`.
+    """
+    candidate_labels = skopeo_inspect_json(candidate_ref, creds=creds).get("Labels") or {}
+    if not candidate_labels.get(KERNEL_HELD_FROM_LABEL):
+        return
+    latest_inspect = skopeo_inspect_json_optional(latest_ref, creds=creds)
+    refuse_held_base_older_than_latest(
+        candidate_labels=candidate_labels,
+        latest_labels=None if latest_inspect is None else latest_inspect.get("Labels") or {},
+    )
 
 
 def verify_candidate_signature(*, image_org: str, image_name: str, candidate_digest: str) -> None:
@@ -167,6 +222,12 @@ def main() -> None:
     )
 
     stable_ref = f"docker://ghcr.io/{image_org}/{image_name}:latest"
+
+    # Fail closed before any tag moves: a held candidate never takes `latest`
+    # back to an older base. `latest` is read only for a held candidate.
+    refuse_held_candidate_older_than_latest(
+        candidate_ref=candidate_ref, latest_ref=stable_ref, creds=creds
+    )
     audit_ref = f"docker://ghcr.io/{image_org}/{image_name}:stable-{run_number}-{sha_short}"
 
     # Publish the immutable audit tag before moving the user-facing `latest`

@@ -82,7 +82,28 @@ jobs:
             // artifact yet still reports the run conclusion as "success". The
             // auto-close step below gates on this so a skipped run cannot close
             // sticky issues that track a still-unfixed failure.
-            core.setOutput('build_ran', artifacts.some(a => a.name.startsWith('build-inputs-')) ? 'true' : 'false');
+            const inputsArtifact = artifacts.find(a => a.name.startsWith('build-inputs-'));
+            core.setOutput('build_ran', inputsArtifact ? 'true' : 'false');
+
+            // The manifest records whether the run held the base image on an
+            // older kernel (inputs.kernel_held_from); the kernel-held issue and
+            // the OpenZFS/kernel badge below read it. Failing to fetch it must
+            // not stop the failure payload below from being fetched: without
+            // the file those two steps leave the issue and badge as they are.
+            if (inputsArtifact) {
+              try {
+                const inputsZip = await github.rest.actions.downloadArtifact({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  artifact_id: inputsArtifact.id,
+                  archive_format: 'zip',
+                });
+                fs.mkdirSync('artifacts/build-inputs', { recursive: true });
+                fs.writeFileSync('artifacts/build-inputs/build-inputs.zip', Buffer.from(inputsZip.data));
+              } catch (error) {
+                core.warning(`Could not download ${inputsArtifact.name}: ${error.message}`);
+              }
+            }
 
             const prefix = 'akmods-failure-';
             const artifact = artifacts.find(a => a.name.startsWith(prefix));
@@ -106,6 +127,18 @@ jobs:
         run: |
           cd artifacts
           unzip -o akmods-failure.zip
+          ls -la
+
+      - name: Unzip build inputs manifest
+        if: steps.download.outputs.build_ran == 'true'
+        shell: bash
+        run: |
+          if [ ! -f artifacts/build-inputs/build-inputs.zip ]; then
+            echo "No build inputs manifest was downloaded; the kernel-held issue and badge stay as they are."
+            exit 0
+          fi
+          cd artifacts/build-inputs
+          unzip -o build-inputs.zip
           ls -la
 
       - name: Open or update sticky issue on failed run
@@ -312,6 +345,90 @@ jobs:
               core.info(`Closed build failure issue #${issue.number}`);
             }
 
+      # A green build that held the base image on an older kernel, because
+      # OpenZFS does not support the newest Kinoite kernel yet, is not a
+      # failure, so nothing above files it -- and the step above has just
+      # closed the akmods-failure issue that described the incompatibility.
+      # This issue keeps the hold visible for as long as it lasts: opened or
+      # refreshed by every real green build that held, closed by the first one
+      # that did not. Matched by title and author, like the build failure issue.
+      - name: Open, refresh or close the kernel-held issue
+        if: >-
+          github.event.workflow_run.conclusion == 'success' &&
+          steps.download.outputs.build_ran == 'true'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const fs = require('fs');
+            const title = 'Kernel held: waiting for OpenZFS to support the newest Fedora kernel';
+            const run = context.payload.workflow_run;
+            const manifest = 'artifacts/build-inputs/build-inputs.json';
+            if (!fs.existsSync(manifest)) {
+              core.info('No build inputs manifest; leaving the kernel-held issue as it is.');
+              return;
+            }
+            const inputs = JSON.parse(fs.readFileSync(manifest, 'utf8')).inputs || {};
+            // A lock-file replay is never held, so it says nothing about
+            // whether the newest base is held right now.
+            if (inputs.use_input_lock === true) {
+              core.info('Lock-file replay; leaving the kernel-held issue as it is.');
+              return;
+            }
+            // Registry label values: keep them to one plain line inside a code span.
+            const plain = v => String(v || '').replace(/[`\r\n]/g, '');
+            const heldFrom = plain(inputs.kernel_held_from);
+            const open = (await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              per_page: 100,
+            })).filter(i => !i.pull_request && i.title === title && i.user.login === 'github-actions[bot]');
+            if (heldFrom) {
+              const body = [
+                `The newest Kinoite base image has kernel \`${heldFrom}\`, which OpenZFS \`${plain(inputs.zfs_version)}\` does not support yet.`,
+                `Builds are held on \`${plain(inputs.base_image_name)}:${plain(inputs.base_image_tag)}\` (kernel \`${plain(inputs.kernel_release)}\`), the newest base whose kernel it does support.`,
+                '',
+                'Everything in that base, not only the kernel, stays as Fedora shipped it on that day until the hold lifts. This repository\'s own layers keep updating.',
+                '',
+                `Last refreshed by ${run.html_url} on ${run.head_sha}.`,
+                '',
+                'The hold lifts by itself: the first build whose newest base has a supported kernel closes this issue. If no base from the last 28 days has one, the build fails instead (docs/upstream-change-response.md).',
+              ].join('\n');
+              if (open.length > 0) {
+                await github.rest.issues.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: open[0].number,
+                  body: body,
+                });
+                core.info(`Refreshed kernel-held issue #${open[0].number}`);
+              } else {
+                const created = await github.rest.issues.create({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  title: title,
+                  body: body,
+                });
+                core.info(`Opened kernel-held issue #${created.data.number}`);
+              }
+            } else {
+              for (const issue of open) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  body: `Build ${run.html_url} on ${run.head_sha} used the newest base image; the kernel is no longer held. Closing.`,
+                });
+                await github.rest.issues.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issue.number,
+                  state: 'closed',
+                });
+                core.info(`Closed kernel-held issue #${issue.number}`);
+              }
+            }
+
       # Only two conclusions tell us anything new about OpenZFS/kernel compat:
       # a classified upstream-compat failure (has_payload is only 'true' when
       # the akmods build step actually ran and failed) or a clean success. Any
@@ -334,6 +451,7 @@ jobs:
           WORKFLOW_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
           BUILD_RAN: ${{ steps.download.outputs.build_ran }}
           FAILURE_PAYLOAD_PATH: artifacts/akmods-failure.json
+          BUILD_INPUTS_PATH: artifacts/build-inputs/build-inputs.json
           BADGE_OUTPUT_PATH: artifacts/akmods-badge.json
         run: |
           python3 -m ci_tools.cli write-akmods-badge

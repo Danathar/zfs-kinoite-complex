@@ -180,7 +180,10 @@ Every file in `.github/workflows/` has an entry here.
   issue titled `Scheduled run failing: Build And Promote Main Image`, which
   the next scheduled run that really builds and succeeds closes. The job is
   "Manage sticky akmods failure issue". See the next section for the akmods
-  issues themselves. When that job closes a sticky issue, or a green build
+  issues themselves. After a green build that really built, it also opens,
+  refreshes or closes the `Kernel held: waiting for OpenZFS to support the
+  newest Fedora kernel` issue, from the run's build-inputs manifest (see "The
+  kernel-held issue" below). When that job closes a sticky issue, or a green build
   follows a failed one (the sticky issue may already have been closed by hand
   or by a merged pull request), a second job, "Re-run pull request builds
   stopped by the cleared failure", re-runs the failed jobs
@@ -289,9 +292,12 @@ Every file in `.github/workflows/` has an entry here.
   pattern matched. That is not evidence it is upstream. Read the log.
 - **First:** open the failing run linked in the issue body and read the
   matched patterns and the failing step. Then follow
-  [`upstream-change-response.md`](./upstream-change-response.md). The correct
-  short-term result when upstream is ahead is a red candidate and an unchanged
-  stable image.
+  [`upstream-change-response.md`](./upstream-change-response.md). A kernel
+  OpenZFS does not support yet no longer turns the build red on its own: the
+  build holds on an older base (see "The kernel-held issue" below). An issue
+  here therefore means the hold could not help, for example no supported base
+  in the last 28 days, or a different failure. The correct short-term result
+  then is a red candidate and an unchanged stable image.
 - **Closing:** the workflow closes the issue itself with a comment after the
   next green `build.yml` run that really built. A skipped scheduled run does
   not close it. If you close one by hand and the same failure comes back, the
@@ -299,6 +305,23 @@ Every file in `.github/workflows/` has an entry here.
   ones.
 - **Detail:** [`quality.md`](./quality.md); the payload is written by
   `ci_tools/classify_akmods_failure.py`.
+
+## The kernel-held issue
+
+- **What it looks like:** author `app/github-actions`, no label, title
+  `Kernel held: waiting for OpenZFS to support the newest Fedora kernel`.
+- **Means:** builds are green, but on an older Kinoite base: the newest one has
+  a kernel the resolved OpenZFS release does not support yet. The body names
+  that kernel, the OpenZFS version, and the held base and its kernel. Fedora
+  updates in that base, security fixes included, wait until the hold lifts.
+- **First:** nothing to fix. Do not pin, patch or relabel anything to end the
+  hold. Check whether OpenZFS has a release whose `Linux-Maximum` covers the
+  newer kernel; until it does, the hold is correct.
+- **Closing:** `akmods-failure-triage.yml` closes it after the first green
+  build that really built and was not held. If the hold reaches 28 days the
+  build fails instead, and the failure issues above take over.
+- **Detail:** "Kernel Hold" in
+  [`architecture-overview.md`](./architecture-overview.md).
 
 ## The gate hook refuses a command
 

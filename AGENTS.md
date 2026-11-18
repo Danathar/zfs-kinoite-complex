@@ -35,7 +35,11 @@ guidance in sections 1–7 below when they conflict:
    does not cover the required kernel and ZFS line. If one of these fires, fix the
    underlying cause or stop and report it. Do not relax the check, add a fallback, or make
    it best-effort — this is exactly the kind of "helpful" robustness section 3 (Simplicity
-   First) tells you to resist, and it is more important here than usual.
+   First) tells you to resist, and it is more important here than usual. The one
+   sanctioned exception is the kernel hold ("Kernel Hold" in
+   `docs/architecture-overview.md`): when the newest base's kernel is newer than OpenZFS
+   supports, input resolution builds on an older base whose kernel it does support. It
+   relaxes no check, and it is not a pattern to copy for any other guard.
 2. **Treat the build, promotion, and signing path as safety-critical.** That is:
    `build.yml`, `.github/actions/publish-native-image`, `ci_tools/sign_image.py`,
    `ci_tools/promote_stable.py`, `ci_tools/check_akmods_cache.py`,

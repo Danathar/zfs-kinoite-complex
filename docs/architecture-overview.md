@@ -91,12 +91,13 @@ built against a kernel OpenZFS declines to support is a worse outcome than
 temporarily staying on the previous Fedora major.
 
 This repo's own `:latest` image only carries provenance: every
-build writes three OCI labels onto the candidate (and promotion carries them
+build writes four OCI labels onto the candidate (and promotion carries them
 onto `:latest`):
 
 - `org.zfs-kinoite-complex.stable-signal-image`: which upstream image was used as the signal
 - `org.zfs-kinoite-complex.stable-signal-digest`: that image's digest at build time
 - `org.zfs-kinoite-complex.zfs-version`: the exact OpenZFS patch version this build resolved and installed
+- `org.zfs-kinoite-complex.kernel-held-from`: the newest base image's kernel when the build was held on an older base (see "Kernel hold" below); empty otherwise
 
 The gate compares the current upstream digest against the base-image signal
 labels, AND independently compares the newest release on the configured ZFS
@@ -117,6 +118,7 @@ It returns one of:
 | `current-latest-missing-stable-signal-labels` | `:latest` exists but predates this gate, or was built by a non-schedule event before provenance was recorded | yes |
 | `current-latest-missing-zfs-version-label` | `:latest` exists but predates the `zfs-version` label | yes |
 | `not-schedule-event` | push or manual run; the gate is bypassed entirely | yes |
+| `kernel-held-upstream-kernel-still-unsupported` | `:latest` is held on an older base, the upstream kernel is still newer than the resolved OpenZFS release supports, and the held base is inside the 28-day hold window, so a rebuild would resolve the same held base | no |
 
 The `zfs-version` label baked onto the image is *not* sourced from this gate's
 own resolution, unlike the stable-signal labels. It comes from the real
@@ -179,6 +181,43 @@ That action does six things in one place:
 4. rebuild and republish the shared cache only when required
 5. resolve the checked or rebuilt cache tag to the digest-pinned ref passed to the final image build
 6. after a rebuild, verify that the cache at that pinned digest carries the resolved ZFS version
+
+#### Kernel Hold
+
+Fedora can ship a kernel before OpenZFS supports it. Each OpenZFS release
+names the newest kernel line it supports in its `META` file
+(`Linux-Maximum: 7.2`), and its build refuses anything newer. Input resolution
+reads that line for the exact release it resolved
+(`ci_tools/zfs_release.py`, `resolve_linux_maximum`) and compares it with the
+newest base image's kernel label (`ostree.linux`).
+
+When the kernel is newer, the run does not fail. It walks the base
+repository's plain dated tags (`44.20261110.0`), newest first and no older
+than 28 days, and builds on the newest one whose kernel OpenZFS supports
+(`resolve_build_inputs.find_held_base_tag`). The chosen tag is then pinned by
+digest and its kernel read from `/lib/modules` as usual, so every check after
+this point is unchanged: the akmods cache must still cover that exact kernel
+and ZFS version, and the image is still signed and verified. Pull request
+builds resolve their inputs the same way, so they build on the held base too.
+
+A held run records the kernel it skipped as `kernel_held_from` in the
+build-input manifest and as the `org.zfs-kinoite-complex.kernel-held-from`
+image label. `akmods-failure-triage.yml` keeps a "Kernel held" issue open
+while builds are held, and the OpenZFS/kernel badge says so. The hold lifts by
+itself: once an OpenZFS release supports the newer kernel (a new patch release
+triggers a scheduled build), the newest base qualifies again and the issue
+closes.
+
+What a hold costs: the held base is all of Fedora as it was on that day, not
+only its kernel, so Fedora updates (security fixes included) wait until the
+hold lifts. Only this repository's own layers keep moving. That is why the
+hold is limited to 28 days (`KERNEL_HOLD_LOOKBACK_DAYS`), which is also as long as quay.io keeps a
+dated Kinoite tag (`quay.expires-after=4w`). With no qualifying
+base in that window the run fails, as every run did before holds existed.
+
+A lock-file replay is never held: it rebuilds exactly the base it names.
+Promotion refuses a held candidate whose base is older than `latest`'s (see
+"Promotion And Signing").
 
 ### 2. Shared Akmods Cache Reuse Or Rebuild
 
@@ -591,8 +630,11 @@ It:
 2. re-verifies that digest's cosign signature against the committed `cosign.pub`
 3. refuses to go on if a newer run has already promoted, that is if any
    `stable-<run>-<sha>` tag carries a higher run number than this run's
-4. copies that digest to `stable-<run>-<sha>` (the immutable audit tag)
-5. copies that digest to `latest`
+4. refuses a held candidate (one with a `kernel-held-from` label) built on an
+   older base than `latest`, compared by the `org.opencontainers.image.version`
+   both inherit from their base
+5. copies that digest to `stable-<run>-<sha>` (the immutable audit tag)
+6. copies that digest to `latest`
 
 Step 2 is deliberately redundant with the signing that already happened during
 candidate publication. Promotion runs as a separate job on a fresh runner, and

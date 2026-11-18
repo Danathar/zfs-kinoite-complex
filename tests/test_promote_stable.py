@@ -14,7 +14,12 @@ import unittest
 from unittest.mock import patch
 
 from ci_tools.common import COSIGN_TIMEOUT, CiToolError
-from ci_tools.promote_stable import list_repository_tags, main, refuse_older_than_published
+from ci_tools.promote_stable import (
+    list_repository_tags,
+    main,
+    refuse_held_base_older_than_latest,
+    refuse_older_than_published,
+)
 
 
 def _env() -> dict[str, str]:
@@ -38,6 +43,16 @@ class PromoteStableTests(unittest.TestCase):
         )
         self.list_tags = tags.start()
         self.addCleanup(tags.stop)
+        # The candidate is not held unless a test says so; then `latest` is read.
+        candidate = patch(
+            "ci_tools.promote_stable.skopeo_inspect_json",
+            return_value={"Labels": {"org.opencontainers.image.version": "43.20261110.0"}},
+        )
+        self.inspect_candidate = candidate.start()
+        self.addCleanup(candidate.stop)
+        latest = patch("ci_tools.promote_stable.skopeo_inspect_json_optional", return_value=None)
+        self.inspect_latest = latest.start()
+        self.addCleanup(latest.stop)
 
     def test_promotes_audit_tag_before_latest_with_digest_preserving_flags(self) -> None:
         with patch.dict(os.environ, _env(), clear=True):
@@ -241,6 +256,66 @@ class PromoteStableTests(unittest.TestCase):
 
         skopeo_copy.assert_not_called()
 
+    def test_an_unheld_candidate_never_reads_latest(self) -> None:
+        with (
+            patch.dict(os.environ, _env(), clear=True),
+            patch("ci_tools.promote_stable.skopeo_inspect_digest", return_value="sha256:abc"),
+            patch("ci_tools.promote_stable.skopeo_copy") as skopeo_copy,
+            patch("ci_tools.promote_stable.run_cmd"),
+        ):
+            main()
+
+        self.inspect_candidate.assert_called_once_with(
+            "docker://ghcr.io/danathar/zfs-kinoite-complex@sha256:abc", creds="actor:token"
+        )
+        self.inspect_latest.assert_not_called()
+        self.assertEqual(skopeo_copy.call_count, 2)
+
+    def test_a_held_candidate_on_an_older_base_never_moves_any_tag(self) -> None:
+        self.inspect_candidate.return_value = {
+            "Labels": {
+                "org.zfs-kinoite-complex.kernel-held-from": "7.3.4-200.fc43.x86_64",
+                "org.opencontainers.image.version": "43.20261110.0",
+            }
+        }
+        self.inspect_latest.return_value = {
+            "Labels": {"org.opencontainers.image.version": "43.20261120.0"}
+        }
+        with (
+            patch.dict(os.environ, _env(), clear=True),
+            patch("ci_tools.promote_stable.skopeo_inspect_digest", return_value="sha256:abc"),
+            patch("ci_tools.promote_stable.skopeo_copy") as skopeo_copy,
+            patch("ci_tools.promote_stable.run_cmd"),
+            self.assertRaises(CiToolError) as context,
+        ):
+            main()
+
+        self.inspect_latest.assert_called_once_with(
+            "docker://ghcr.io/danathar/zfs-kinoite-complex:latest", creds="actor:token"
+        )
+        self.assertIn("43.20261120.0", str(context.exception))
+        skopeo_copy.assert_not_called()
+
+    def test_a_held_candidate_on_the_same_base_as_latest_promotes(self) -> None:
+        self.inspect_candidate.return_value = {
+            "Labels": {
+                "org.zfs-kinoite-complex.kernel-held-from": "7.3.4-200.fc43.x86_64",
+                "org.opencontainers.image.version": "43.20261110.0",
+            }
+        }
+        self.inspect_latest.return_value = {
+            "Labels": {"org.opencontainers.image.version": "43.20261110.0"}
+        }
+        with (
+            patch.dict(os.environ, _env(), clear=True),
+            patch("ci_tools.promote_stable.skopeo_inspect_digest", return_value="sha256:abc"),
+            patch("ci_tools.promote_stable.skopeo_copy") as skopeo_copy,
+            patch("ci_tools.promote_stable.run_cmd"),
+        ):
+            main()
+
+        self.assertEqual(skopeo_copy.call_count, 2)
+
     def test_non_numeric_run_number_is_refused(self) -> None:
         env = _env() | {"GITHUB_RUN_NUMBER": "12a"}
         with (
@@ -285,6 +360,54 @@ class RefuseOlderThanPublishedTests(unittest.TestCase):
         refuse_older_than_published(
             run_number="5", tags=["stable-999", "stable-999-NOTHEX", "br-stable-999-abc", "999"]
         )
+
+
+HELD = {"org.zfs-kinoite-complex.kernel-held-from": "7.3.4-200.fc44.x86_64"}
+
+
+def _base(version: str) -> dict[str, str]:
+    return {"org.opencontainers.image.version": version}
+
+
+class RefuseHeldBaseOlderThanLatestTests(unittest.TestCase):
+    def test_an_unheld_candidate_is_not_checked(self) -> None:
+        # A lock-file rollback onto an older base is not held, and still promotes.
+        refuse_held_base_older_than_latest(
+            candidate_labels=_base("44.20261101.0"), latest_labels=_base("44.20261118.0")
+        )
+
+    def test_an_unheld_candidate_with_an_empty_held_label_is_not_checked(self) -> None:
+        refuse_held_base_older_than_latest(
+            candidate_labels={"org.zfs-kinoite-complex.kernel-held-from": ""} | _base("44.20261101.0"),
+            latest_labels=_base("44.20261118.0"),
+        )
+
+    def test_allows_a_held_candidate_when_there_is_no_latest(self) -> None:
+        refuse_held_base_older_than_latest(
+            candidate_labels=HELD | _base("44.20261110.0"), latest_labels=None
+        )
+
+    def test_allows_a_held_candidate_on_the_same_or_a_newer_base(self) -> None:
+        for latest in ("44.20261110.0", "44.20261109.0", "44.20261110.0", "43.20261201.0"):
+            with self.subTest(latest=latest):
+                refuse_held_base_older_than_latest(
+                    candidate_labels=HELD | _base("44.20261110.0"), latest_labels=_base(latest)
+                )
+
+    def test_refuses_a_held_candidate_on_an_older_base(self) -> None:
+        for latest in ("44.20261111.0", "44.20261110.1", "45.20261001.0"):
+            with self.subTest(latest=latest), self.assertRaises(CiToolError) as context:
+                refuse_held_base_older_than_latest(
+                    candidate_labels=HELD | _base("44.20261110.0"), latest_labels=_base(latest)
+                )
+            self.assertIn("Refusing to promote a held candidate", str(context.exception))
+
+    def test_refuses_a_held_candidate_whose_base_versions_cannot_be_read(self) -> None:
+        for candidate, latest in (("", "44.20261110.0"), ("44.20261110.0", ""), ("44.2026111.0", "44.20261110.0")):
+            with self.subTest(candidate=candidate, latest=latest), self.assertRaises(CiToolError):
+                refuse_held_base_older_than_latest(
+                    candidate_labels=HELD | _base(candidate), latest_labels=_base(latest)
+                )
 
 
 class ListRepositoryTagsTests(unittest.TestCase):

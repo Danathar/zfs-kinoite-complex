@@ -20,7 +20,7 @@ signals mean, that one is how to get numbers.
 | **tests** | Actions status for `test.yml` on `main` | Did lint, the unit suite and the per-module coverage floors pass on `main`? |
 | **nightly compliance** | Actions status for `nightly-compliance.yml` on `main` | Does the image a user would pull right now still verify against the committed `cosign.pub`, and does GitHub still enforce the committed merge rules? |
 | **last good build** | `status` branch payload written from the published `:latest` image | Is there a usable signed image, and how old is it? |
-| **OpenZFS/kernel status** | `status` branch payload written by `akmods-failure-triage.yml` | If the build is red, is it because ZFS cannot be built for the current kernel? |
+| **OpenZFS/kernel status** | `status` branch payload written by `akmods-failure-triage.yml` | If the build is red, is it because ZFS cannot be built for the current kernel? If it is green, is it held on an older kernel while OpenZFS catches up (yellow, `held at ...`)? |
 
 **Read them together.** A red **build** with a recent **last good build** means
 the published image is still there and has not been refreshed. It does **not**

@@ -15,6 +15,7 @@ scheduled runs.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, date, datetime
 
 from ci_tools.common import (
     CiToolError,
@@ -27,11 +28,19 @@ from ci_tools.common import (
     skopeo_inspect_json_optional,
     write_github_outputs,
 )
-from ci_tools.zfs_release import resolve_latest_zfs_version
+from ci_tools.resolve_build_inputs import (
+    KERNEL_HOLD_LOOKBACK_DAYS,
+    dated_base_version_key,
+    kernel_exceeds_maximum,
+)
+from ci_tools.zfs_release import resolve_latest_zfs_version, resolve_linux_maximum
 
 STABLE_SIGNAL_IMAGE_LABEL = "org.zfs-kinoite-complex.stable-signal-image"
 STABLE_SIGNAL_DIGEST_LABEL = "org.zfs-kinoite-complex.stable-signal-digest"
 ZFS_VERSION_LABEL = "org.zfs-kinoite-complex.zfs-version"
+KERNEL_HELD_FROM_LABEL = "org.zfs-kinoite-complex.kernel-held-from"
+# Inherited from the Kinoite base, so it names the dated base the image was built on.
+BASE_VERSION_LABEL = "org.opencontainers.image.version"
 
 
 @dataclass(frozen=True)
@@ -82,6 +91,19 @@ def _bypass_decision(stable_signal_image: str) -> StableSignalDecision:
     )
 
 
+def _held_base_within_lookback(base_version: str, today: date) -> bool:
+    """
+    True when a held image's base (`44.20261110.0`) is still inside the hold window.
+
+    An unreadable version counts as outside it, so the gate builds rather than
+    skips on a label it cannot read.
+    """
+    key = dated_base_version_key(base_version)
+    if key is None:
+        return False
+    return (today - key[1]).days <= KERNEL_HOLD_LOOKBACK_DAYS
+
+
 def _docker_ref(image_ref: str) -> str:
     """Return a `docker://` registry ref for `skopeo` commands."""
     if image_ref.startswith("docker://"):
@@ -96,6 +118,7 @@ def evaluate_stable_signal_gate(
     stable_signal_image: str,
     zfs_minor_version: str,
     creds: str,
+    today: date | None = None,
 ) -> StableSignalDecision:
     """
     Compare upstream stable-signal state, AND the current resolved ZFS patch
@@ -170,6 +193,31 @@ def evaluate_stable_signal_gate(
             stable_signal_digest=stable_signal_digest,
             zfs_version=current_zfs_version,
         )
+
+    # While `:latest` is held on an older base, Kinoite still publishes a new
+    # digest every day, but every one of them carries the kernel OpenZFS cannot
+    # build for, so a rebuild would resolve the same held base again. Skip
+    # until the upstream kernel is supported (the hold then lifts) or the held
+    # base passes the hold window (the build then runs and fails, as it did
+    # before holds existed). This reads the stable-signal image's kernel, which
+    # stands in for the base image's because both are the same Kinoite tag in
+    # ci/defaults.json.
+    previous_kernel_held_from = str(labels.get(KERNEL_HELD_FROM_LABEL) or "")
+    if previous_signal_digest != stable_signal_digest and previous_kernel_held_from:
+        upstream_kernel = str((stable_signal_inspect.get("Labels") or {}).get("ostree.linux") or "")
+        held_base_version = str(labels.get(BASE_VERSION_LABEL) or "")
+        if (
+            upstream_kernel
+            and kernel_exceeds_maximum(upstream_kernel, resolve_linux_maximum(current_zfs_version))
+            and _held_base_within_lookback(held_base_version, today or datetime.now(UTC).date())
+        ):
+            return StableSignalDecision(
+                should_build=False,
+                reason="kernel-held-upstream-kernel-still-unsupported",
+                stable_signal_ref=stable_signal_image,
+                stable_signal_digest=stable_signal_digest,
+                zfs_version=current_zfs_version,
+            )
 
     if previous_signal_digest == stable_signal_digest:
         return StableSignalDecision(

@@ -1024,6 +1024,10 @@ class DiagnoseGuardTableTests(unittest.TestCase):
         "Replay lock file not found": True,  # pass the lock file
         # Correct refusal of a re-run that would move `:latest` backwards.
         "Refusing to promote run": False,
+        # Correct refusal of a held build that would move `:latest` to an older base.
+        "held candidate on base": False,
+        # A base version label that cannot be read: escalate, the guard is ours.
+        "held candidate: cannot compare": True,
         "Missing tag list": False,  # transient registry failure
         "GITHUB_RUN_NUMBER is not a run number": True,  # the workflow's environment
         "REQUIRE_MATCH=true needs AKMODS_IMAGE_PINNED": True,  # the action's wiring

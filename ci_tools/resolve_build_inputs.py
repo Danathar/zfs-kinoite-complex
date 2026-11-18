@@ -12,9 +12,12 @@ import json
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
+from ci_tools.classify_akmods_failure import kernel_major_minor
 from ci_tools.common import (
+    REGISTRY_METADATA_TIMEOUT,
     REGISTRY_RETRY_ATTEMPTS,
     REGISTRY_TRANSFER_TIMEOUT,
     CiToolError,
@@ -26,12 +29,13 @@ from ci_tools.common import (
     require_env_or_default,
     run_cmd,
     run_cmd_with_retries,
+    run_json_cmd,
     skopeo_inspect_digest,
     skopeo_inspect_json,
     sort_kernel_releases,
     write_github_outputs,
 )
-from ci_tools.zfs_release import resolve_latest_zfs_version
+from ci_tools.zfs_release import resolve_latest_zfs_version, resolve_linux_maximum
 
 TAG_FROM_REF_RE = re.compile(r"^[^@]+:([^/:@]+)$")
 GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -40,6 +44,18 @@ PLAIN_VERSION_LABEL_RE = re.compile(r"^(?P<fedora>[0-9]+)\.(?P<stamp>[0-9]{8}(?:
 PREFIXED_VERSION_LABEL_RE = re.compile(
     r"^(?P<prefix>[^-]+)-(?P<fedora>[0-9]+)\.(?P<stamp>[0-9]{8}(?:\.[0-9]+)?)$"
 )
+# A Kinoite daily tag such as `44.20261110.0`. The arch-suffixed copies
+# (`44.20261110.0-x86_64`) deliberately do not match: the plain tag is the one
+# the rest of this module pins and records.
+DATED_BASE_TAG_RE = re.compile(r"^(?P<fedora>[0-9]+)\.(?P<day>[0-9]{8})\.(?P<respin>[0-9]+)$")
+# How far back a held build may reach for a base image whose kernel OpenZFS
+# supports. Past this the run fails as it did before the hold existed: a held
+# base is all of Fedora frozen on that day, security updates included, not
+# only the kernel. 28 days, not more, because Kinoite labels its images
+# `quay.expires-after=4w`: quay.io deletes a dated tag after four weeks, so an
+# older base could not be pulled anyway, and a longer window here would let the
+# scheduled gate keep skipping after the real build would already fail.
+KERNEL_HOLD_LOOKBACK_DAYS = 28
 
 
 @dataclass(frozen=True)
@@ -80,6 +96,9 @@ class ResolvedBuildInputs:
     akmods_upstream_ref: str
     use_input_lock: bool
     lock_file_path: str
+    # The newest base image's kernel when this run held the base back because
+    # OpenZFS does not support that kernel yet; "" when it did not.
+    kernel_held_from: str = ""
 
 
 @dataclass(frozen=True)
@@ -207,6 +226,108 @@ def choose_base_image_tag(
     )
 
 
+def kernel_exceeds_maximum(kernel_release: str, linux_maximum: str) -> bool:
+    """
+    True when a kernel release's major.minor is newer than an OpenZFS `Linux-Maximum`.
+
+    Either value failing to parse raises: the answer decides which base image
+    the run builds on, so it is never guessed.
+    """
+    kernel = kernel_major_minor(kernel_release)
+    maximum = kernel_major_minor(linux_maximum)
+    if kernel is None:
+        raise CiToolError(f"Cannot read a kernel version from {kernel_release!r}")
+    if maximum is None:
+        raise CiToolError(f"Cannot read a kernel version from OpenZFS Linux-Maximum {linux_maximum!r}")
+    return kernel > maximum
+
+
+def dated_base_version_key(version: str) -> tuple[int, date, int] | None:
+    """
+    Return a sortable (fedora, day, respin) key for `44.20261110.0`, or None.
+
+    The same string is a Kinoite tag and the `org.opencontainers.image.version`
+    label every image built on that base inherits.
+    """
+    match = DATED_BASE_TAG_RE.match(version)
+    if not match:
+        return None
+    try:
+        day = datetime.strptime(match.group("day"), "%Y%m%d").date()
+    except ValueError:
+        return None
+    return int(match.group("fedora")), day, int(match.group("respin"))
+
+
+def dated_base_tags_newest_first(
+    tags: list[str], *, fedora_version: str, today: date, lookback_days: int
+) -> list[str]:
+    """
+    Return the plain dated base tags for one Fedora release, newest first.
+
+    Only tags dated within `lookback_days` of `today` are kept, so a hold can
+    never reach for an arbitrarily old base.
+    """
+    earliest = today - timedelta(days=lookback_days)
+    dated: list[tuple[tuple[int, date, int], str]] = []
+    for tag in tags:
+        key = dated_base_version_key(tag)
+        if key is None or str(key[0]) != fedora_version or key[1] < earliest:
+            continue
+        dated.append((key, tag))
+    return [tag for _, tag in sorted(dated, reverse=True)]
+
+
+def _utc_today() -> date:
+    """Today's date in UTC, the calendar the dated base tags are stamped in."""
+    return datetime.now(UTC).date()
+
+
+def list_base_image_tags(base_image_name: str) -> list[str]:
+    """Return every tag in the base image repository."""
+    listing = run_json_cmd(
+        ["skopeo", "list-tags", f"docker://{base_image_name}"], timeout=REGISTRY_METADATA_TIMEOUT
+    )
+    tags = listing.get("Tags")
+    if not isinstance(tags, list):
+        raise CiToolError(f"Missing tag list in skopeo list-tags output for {base_image_name}")
+    return [str(tag) for tag in tags]
+
+
+def find_held_base_tag(
+    *,
+    base_image_name: str,
+    fedora_version: str,
+    linux_maximum: str,
+    today: date,
+    list_tags: Callable[[str], list[str]] = list_base_image_tags,
+    inspect: Callable[[str], dict] = skopeo_inspect_json,
+) -> str:
+    """
+    Return the newest dated base tag whose kernel label OpenZFS supports.
+
+    The label only chooses the tag. The caller still pins the tag's digest and
+    reads the real kernel from `/lib/modules` before building on it.
+    """
+    for tag in dated_base_tags_newest_first(
+        list_tags(base_image_name),
+        fedora_version=fedora_version,
+        today=today,
+        lookback_days=KERNEL_HOLD_LOOKBACK_DAYS,
+    ):
+        labels = inspect(f"docker://{base_image_name}:{tag}").get("Labels") or {}
+        kernel_label = str(labels.get("ostree.linux") or "")
+        if kernel_major_minor(kernel_label) is None:
+            continue
+        if not kernel_exceeds_maximum(kernel_label, linux_maximum):
+            return tag
+    raise CiToolError(
+        f"No {base_image_name} Fedora {fedora_version} base image from the last "
+        f"{KERNEL_HOLD_LOOKBACK_DAYS} days has a kernel OpenZFS supports (Linux-Maximum "
+        f"{linux_maximum}), so there is no base to hold the build on."
+    )
+
+
 def _load_lock_file(lock_file_path: str) -> dict:
     # Lock file is a plain JSON object saved from a previous run.
     lock_path = Path(lock_file_path)
@@ -297,6 +418,7 @@ def write_resolved_build_outputs(inputs: ResolvedBuildInputs) -> None:
             "akmods_upstream_ref": inputs.akmods_upstream_ref,
             "use_input_lock": "true" if inputs.use_input_lock else "false",
             "lock_file_path": inputs.lock_file_path,
+            "kernel_held_from": inputs.kernel_held_from,
         }
     )
 
@@ -441,6 +563,30 @@ def resolve_build_inputs() -> BuildInputResolution:
     if not label_kernel_release:
         raise CiToolError(f"Failed to read ostree.linux label from {base_image_ref}")
 
+    # Hold the base on the newest image whose kernel this OpenZFS release
+    # supports, instead of building on one it cannot (the ZFS build would fail
+    # there anyway). A lock-file replay is never held: it must rebuild exactly
+    # the base it names.
+    kernel_held_from = ""
+    linux_maximum = "" if use_input_lock else resolve_linux_maximum(zfs_version)
+    if not use_input_lock and kernel_exceeds_maximum(label_kernel_release, linux_maximum):
+        kernel_held_from = label_kernel_release
+        held_tag = find_held_base_tag(
+            base_image_name=base_image_name,
+            fedora_version=extract_fedora_version(label_kernel_release),
+            linux_maximum=linux_maximum,
+            today=_utc_today(),
+            list_tags=list_base_image_tags,
+            inspect=skopeo_inspect_json,
+        )
+        held_inspect_json = skopeo_inspect_json(f"docker://{base_image_name}:{held_tag}")
+        base_image_digest = str(held_inspect_json.get("Digest") or "")
+        held_labels = held_inspect_json.get("Labels") or {}
+        label_kernel_release = str(held_labels.get("ostree.linux") or "")
+        base_image_version_label = str(held_labels.get("org.opencontainers.image.version") or "")
+        if not base_image_digest:
+            raise CiToolError(f"Failed to resolve base image digest for {base_image_name}:{held_tag}")
+
     base_image_pinned = f"{base_image_name}@{base_image_digest}"
     detected_kernel_releases = detect_base_image_kernel_releases(base_image_pinned)
     kernel_release = detected_kernel_releases[-1]
@@ -509,6 +655,7 @@ def resolve_build_inputs() -> BuildInputResolution:
             akmods_upstream_ref=akmods_upstream_ref,
             use_input_lock=use_input_lock,
             lock_file_path=lock_file_path,
+            kernel_held_from=kernel_held_from,
         ),
         label_kernel_release=label_kernel_release,
         candidate_tags=tuple(candidate_tags),
@@ -539,6 +686,12 @@ def main() -> None:
     print(f"Fedora version: {inputs.version}")
     print(f"ZFS minor version: {inputs.zfs_minor_version}")
     print(f"Resolved ZFS version: {inputs.zfs_version}")
+    if inputs.kernel_held_from:
+        print(
+            f"Kernel held: the newest base image has kernel {inputs.kernel_held_from}, which "
+            f"OpenZFS {inputs.zfs_version} does not support yet; building on "
+            f"{inputs.base_image_name}:{inputs.base_image_tag} ({inputs.kernel_release}) instead."
+        )
 
     # Helpful for debugging: shows exactly which tags were considered.
     if resolution.candidate_tags:

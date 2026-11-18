@@ -20,13 +20,18 @@ BADGE_LABEL = "openzfs/kernel"
 
 
 def build_badge_payload(
-    *, conclusion: str, failure_payload: dict | None, build_ran: bool
+    *,
+    conclusion: str,
+    failure_payload: dict | None,
+    build_ran: bool,
+    build_inputs: dict | None = None,
 ) -> dict | None:
     """
     Return a shields.io endpoint-badge payload, or None when the badge should be left alone.
 
-    Only two states are ever rendered: a classified upstream-compat failure (red, with the
-    specific versions involved), and a successful build (green). Any other conclusion
+    Only three states are ever rendered: a classified upstream-compat failure (red, with the
+    specific versions involved), a successful build (green), and a successful build that held
+    the base on an older kernel (yellow). Any other conclusion
     (unclassified failure, cancelled run, etc.) is not this badge's concern, since it does not
     tell us anything new about OpenZFS/kernel compatibility.
 
@@ -38,10 +43,23 @@ def build_badge_payload(
     if the akmods build step actually ran, which the workflow always uploads the
     `build-inputs-<run_id>` artifact for earlier in the same job, so `build_ran` is already
     true whenever `failure_payload` is present.
+
+    `build_inputs` is the run's `build-inputs.json` `inputs` object. A green build that held
+    the base on an older kernel (`kernel_held_from` set) shows that instead of "in sync": the
+    image is current on everything but the kernel, which is waiting for OpenZFS.
     """
     if conclusion == "success":
         if not build_ran:
             return None
+        kernel_held_from = str((build_inputs or {}).get("kernel_held_from") or "")
+        if kernel_held_from:
+            kernel_release = str((build_inputs or {}).get("kernel_release") or "an older kernel")
+            return {
+                "schemaVersion": 1,
+                "label": BADGE_LABEL,
+                "message": f"held at {kernel_release}: {kernel_held_from} waits for OpenZFS",
+                "color": "yellow",
+            }
         return {
             "schemaVersion": 1,
             "label": BADGE_LABEL,
@@ -79,13 +97,21 @@ def main() -> None:
     failure_payload_path = optional_env("FAILURE_PAYLOAD_PATH")
     badge_output_path = optional_env("BADGE_OUTPUT_PATH") or "artifacts/akmods-badge.json"
     build_ran = optional_env("BUILD_RAN", "false").lower() == "true"
+    build_inputs_path = optional_env("BUILD_INPUTS_PATH")
 
     failure_payload: dict | None = None
     if failure_payload_path and Path(failure_payload_path).exists():
         failure_payload = json.loads(Path(failure_payload_path).read_text(encoding="utf-8"))
 
+    build_inputs: dict | None = None
+    if build_inputs_path and Path(build_inputs_path).exists():
+        build_inputs = json.loads(Path(build_inputs_path).read_text(encoding="utf-8")).get("inputs")
+
     badge = build_badge_payload(
-        conclusion=conclusion, failure_payload=failure_payload, build_ran=build_ran
+        conclusion=conclusion,
+        failure_payload=failure_payload,
+        build_ran=build_ran,
+        build_inputs=build_inputs,
     )
 
     if badge is None:

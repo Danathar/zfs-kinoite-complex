@@ -23,8 +23,10 @@ from ci_tools.common import CiToolError
 from ci_tools.zfs_release import (
     MAX_RELEASE_PAGES,
     RELEASES_PER_PAGE,
+    fetch_openzfs_meta,
     fetch_openzfs_releases,
     resolve_latest_zfs_version,
+    resolve_linux_maximum,
 )
 
 # Recreates the real batch observed on 2026-06-12: three minor lines published
@@ -207,6 +209,97 @@ class FetchOpenzfsReleasesTests(unittest.TestCase):
             fetch_openzfs_releases()
 
         self.assertIn("rate limit exceeded", str(context.exception))
+
+
+# The META file at zfs-2.4.4, as published.
+META_2_4_4 = """Meta:          1
+Name:          zfs
+Branch:        1.0
+Version:       2.4.4
+Release:       1
+Release-Tags:  relext
+License:       CDDL
+Author:        OpenZFS
+Linux-Maximum: 7.2
+Linux-Minimum: 4.18
+"""
+
+
+class ResolveLinuxMaximumTests(unittest.TestCase):
+    def test_reads_linux_maximum_from_the_release_meta(self) -> None:
+        asked: list[str] = []
+
+        def fetcher(version: str) -> str:
+            asked.append(version)
+            return META_2_4_4
+
+        self.assertEqual(resolve_linux_maximum("2.4.4", meta_fetcher=fetcher), "7.2")
+        self.assertEqual(asked, ["2.4.4"])
+
+    def test_a_missing_or_malformed_line_raises(self) -> None:
+        for meta in (
+            META_2_4_4.replace("Linux-Maximum: 7.2\n", ""),
+            META_2_4_4.replace("Linux-Maximum: 7.2", "Linux-Maximum: 7"),
+            META_2_4_4.replace("Linux-Maximum: 7.2", "Linux-Maximum: 7.2.1"),
+            META_2_4_4.replace("Linux-Maximum: 7.2", "Linux-Maximum: latest"),
+            "",
+        ):
+            with self.subTest(meta=meta[-40:]), self.assertRaises(CiToolError):
+                resolve_linux_maximum("2.4.4", meta_fetcher=lambda version, meta=meta: meta)
+
+    def test_only_an_exact_release_is_looked_up(self) -> None:
+        def fetcher(version: str) -> str:
+            raise AssertionError(f"fetched META for {version!r}")
+
+        for version in ("2.4", "2.4.4.1", "zfs-2.4.4", "2.4.4/../../x", ""):
+            with self.subTest(version=version), self.assertRaises(CiToolError):
+                resolve_linux_maximum(version, meta_fetcher=fetcher)
+
+
+class FetchOpenzfsMetaTests(unittest.TestCase):
+    """Covers the HTTP behaviour of the META fetcher, without a live call."""
+
+    def _fake_urlopen(self, body: str, seen: list[Request]):
+        class FakeResponse:
+            def read(self) -> bytes:
+                return body.encode("utf-8")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_exc) -> bool:
+                return False
+
+        def fake_urlopen(request, timeout=None):
+            del timeout
+            seen.append(request)
+            return FakeResponse()
+
+        return fake_urlopen
+
+    def test_reads_meta_at_the_release_tag_as_raw_text_with_the_token(self) -> None:
+        seen: list[Request] = []
+        with patch.dict(os.environ, {"GITHUB_TOKEN": "secret-token"}, clear=False), patch(
+            "ci_tools.zfs_release.urllib.request.urlopen", self._fake_urlopen(META_2_4_4, seen)
+        ):
+            text = fetch_openzfs_meta("2.4.4")
+
+        self.assertEqual(text, META_2_4_4)
+        self.assertEqual(
+            seen[0].full_url,
+            "https://api.github.com/repos/openzfs/zfs/contents/META?ref=zfs-2.4.4",
+        )
+        self.assertEqual(seen[0].get_header("Accept"), "application/vnd.github.raw+json")
+        self.assertEqual(seen[0].get_header("Authorization"), "Bearer secret-token")
+
+    def test_wraps_network_failures_as_ci_tool_error(self) -> None:
+        with patch(
+            "ci_tools.zfs_release.urllib.request.urlopen",
+            side_effect=OSError("HTTP Error 404: Not Found"),
+        ), self.assertRaises(CiToolError) as context:
+            fetch_openzfs_meta("2.4.4")
+
+        self.assertIn("Not Found", str(context.exception))
 
 
 if __name__ == "__main__":

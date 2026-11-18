@@ -141,6 +141,7 @@ jobs:
       akmods_upstream_ref: ${{ steps.prepare.outputs.akmods_upstream_ref }}
       use_input_lock: ${{ steps.prepare.outputs.use_input_lock }}
       lock_file_path: ${{ steps.prepare.outputs.lock_file_path }}
+      kernel_held_from: ${{ steps.prepare.outputs.kernel_held_from }}
       akmods_cache_exists: ${{ steps.prepare.outputs.akmods_cache_exists }}
       akmods_image: ${{ steps.prepare.outputs.akmods_image }}
       akmods_image_pinned: ${{ steps.prepare.outputs.akmods_image_pinned }}
@@ -370,6 +371,7 @@ jobs:
           stable_signal_image: ${{ needs.preflight.outputs.stable_signal_ref }}
           stable_signal_digest: ${{ needs.preflight.outputs.stable_signal_digest }}
           zfs_version: ${{ needs.build-zfs-akmods.outputs.zfs_version }}
+          kernel_held_from: ${{ needs.build-zfs-akmods.outputs.kernel_held_from }}
           image_repo: ghcr.io/${{ steps.registry.outputs.image_org }}/${{ steps.defaults.outputs.image_name }}
           signing_key_filename: ${{ steps.defaults.outputs.image_name }}.pub
 

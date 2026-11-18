@@ -41,6 +41,39 @@ class BuildBadgePayloadTests(unittest.TestCase):
         badge = build_badge_payload(conclusion="success", failure_payload=None, build_ran=False)
         self.assertIsNone(badge)
 
+    def test_a_held_green_build_says_held_not_in_sync(self) -> None:
+        badge = build_badge_payload(
+            conclusion="success",
+            failure_payload=None,
+            build_ran=True,
+            build_inputs={
+                "kernel_held_from": "7.3.4-200.fc44.x86_64",
+                "kernel_release": "7.2.15-200.fc44.x86_64",
+            },
+        )
+        self.assertEqual(
+            badge["message"],
+            "held at 7.2.15-200.fc44.x86_64: 7.3.4-200.fc44.x86_64 waits for OpenZFS",
+        )
+        self.assertEqual(badge["color"], "yellow")
+
+    def test_an_unheld_green_build_is_in_sync(self) -> None:
+        for inputs in ({"kernel_held_from": ""}, {}, None):
+            with self.subTest(inputs=inputs):
+                badge = build_badge_payload(
+                    conclusion="success", failure_payload=None, build_ran=True, build_inputs=inputs
+                )
+                self.assertEqual(badge["message"], "in sync")
+
+    def test_a_gate_skipped_run_leaves_the_badge_even_with_a_held_manifest(self) -> None:
+        badge = build_badge_payload(
+            conclusion="success",
+            failure_payload=None,
+            build_ran=False,
+            build_inputs={"kernel_held_from": "7.3.4-200.fc44.x86_64"},
+        )
+        self.assertIsNone(badge)
+
     def test_upstream_compat_failure_names_the_specific_versions(self) -> None:
         badge = build_badge_payload(
             conclusion="failure",
@@ -153,6 +186,41 @@ class MainTests(unittest.TestCase):
             # The publish step copies from this path, so it has to be the path
             # main() reports, not the one the test happened to ask for.
             self.assertEqual(outputs["badge_path"], "artifacts/akmods-badge.json")
+
+    def test_a_held_build_is_read_off_the_build_inputs_manifest(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            work_dir = Path(temp_dir)
+            manifest = work_dir / "artifacts" / "build-inputs" / "build-inputs.json"
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "inputs": {
+                            "kernel_held_from": "7.3.4-200.fc44.x86_64",
+                            "kernel_release": "7.2.15-200.fc44.x86_64",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            outputs = self._run_main(
+                {
+                    "WORKFLOW_CONCLUSION": "success",
+                    "BUILD_RAN": "true",
+                    "BUILD_INPUTS_PATH": "artifacts/build-inputs/build-inputs.json",
+                },
+                cwd=work_dir,
+            )
+            badge = json.loads((work_dir / outputs["badge_path"]).read_text(encoding="utf-8"))
+        self.assertEqual(badge["color"], "yellow")
+        self.assertIn("waits for OpenZFS", badge["message"])
+
+    def test_the_manifest_path_is_the_one_the_workflow_passes(self) -> None:
+        workflow = (
+            Path(__file__).resolve().parent.parent / ".github/workflows/akmods-failure-triage.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("BUILD_INPUTS_PATH: artifacts/build-inputs/build-inputs.json", workflow)
 
     def test_badge_output_path_defaults_to_the_path_the_workflow_publishes(self) -> None:
         # akmods-failure-triage.yml sets BADGE_OUTPUT_PATH today, but its publish

@@ -508,9 +508,18 @@ class LabelerEntry(RunbookTest):
 
     def test_the_workflow_only_reads_the_changed_file_list(self) -> None:
         text = workflow_text("labeler.yml")
-        self.assertIn("pull_request_target:", text)
+        self.assertIn("  pull_request:", text)
+        self.assertNotIn("pull_request_target:", text)
         self.assertNotIn("actions/checkout", text)
         self.assertIn("name: Apply area labels", text)
+
+    def test_the_job_skips_a_fork_as_the_page_says(self) -> None:
+        entry = collapse(self.sections["labeler.yml"])
+        self.assertIn("A skipped run on a pull request from a fork is normal.**", entry)
+        self.assertIn(
+            "if: github.event.pull_request.head.repo.full_name == github.repository",
+            workflow_text("labeler.yml"),
+        )
 
 
 class NightlyEntry(RunbookTest):

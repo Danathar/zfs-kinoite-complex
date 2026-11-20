@@ -1990,6 +1990,13 @@ CORPUS: tuple[Row, ...] = (
     ),
     Row(
         "environment",
+        "timeout -s KILL 5 /usr/bin/env -i git log -p",
+        "refused",
+        "an env spelled as a path is found only by walking the wrapper chain past the option values",
+        "settings environment",
+    ),
+    Row(
+        "environment",
         "env -i bash -c 'git log -p'",
         "refused",
         "the emptied environment reaches a git inside a shell string this scan reads separately",
@@ -3575,7 +3582,7 @@ MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
         "stepping over another wrapper's option values",
         'elif [[ "${word}" =~ ^[0-9.]+[smhd]?$ ]] || ((prev_opt)); then',
         "elif false; then",
-        "timeout -s KILL 5 env -i git log -p",
+        "timeout -s KILL 5 /usr/bin/env -i git log -p",
     ),
 )
 

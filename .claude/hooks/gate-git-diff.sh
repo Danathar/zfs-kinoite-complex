@@ -1375,7 +1375,7 @@ names_settings_env() {
 # walked as bash and the wrappers read them: assignments, then wrapper names
 # with their own options, then the command's name and its operands.
 check_settings_env_segment() {
-  local -a seg=("$@")
+  local -a seg=("$@") parts=()
   local n=${#seg[@]} i=0 cur='' prev_opt=0 word base opt value j ch
   ((n)) || return 0
   while ((i < n)); do
@@ -1422,8 +1422,20 @@ check_settings_env_segment() {
             value="${seg[i]-}"
           fi
           names_settings_env "${value}" && refuse "${SETTINGS_ENV_MSG}"
-        elif [[ "${word}" != *=* ]] && ((${#opt} >= 3)) &&
-          [[ --chdir == "${opt}"* || --split-string == "${opt}"* ]]; then
+        elif ((${#opt} >= 3)) && [[ --split-string == "${opt}"* ]]; then
+          # env splits the string into words and reads them as its own
+          # arguments, options included: `env --split '-i git log -p'`
+          # empties the environment. Read them in its place.
+          if [[ "${word}" == *=* ]]; then
+            value="${word#*=}"
+          else
+            ((i++))
+            value="${seg[i]-}"
+          fi
+          read -ra parts <<<"${value}"
+          seg=("${seg[@]:0:i+1}" "${parts[@]}" "${seg[@]:i+1}")
+          n=${#seg[@]}
+        elif [[ "${word}" != *=* ]] && ((${#opt} >= 3)) && [[ --chdir == "${opt}"* ]]; then
           ((i++)) # the option's value
         fi
       elif [[ "${word}" == -* ]]; then

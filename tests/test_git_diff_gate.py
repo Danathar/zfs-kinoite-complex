@@ -2006,6 +2006,34 @@ CORPUS: tuple[Row, ...] = (
         "allowed",
         "env -i as a search pattern is an operand of git grep, not a wrapper",
     ),
+    Row(
+        "environment",
+        "env --split '-i git log -p'",
+        "refused",
+        "env reads the words of a split string as its own options, so -i inside one empties "
+        "the environment",
+        "settings environment",
+    ),
+    Row(
+        "environment",
+        "env --spl=-i git log -p",
+        "refused",
+        "an abbreviated --split-string carrying its string after = is read the same way",
+        "settings environment",
+    ),
+    Row(
+        "environment",
+        "env --split '-u GIT_CONFIG_COUNT' git log -p",
+        "refused",
+        "a -u inside a split string removes the variable it names",
+        "settings environment",
+    ),
+    Row(
+        "environment",
+        "env --split 'git log -1'",
+        "allowed",
+        "a split string that only names the command leaves the environment as it is",
+    ),
     # --- 2. redirection ----------------------------------------------------
     #
     # Output opens a path for writing before the command runs. Input hands the

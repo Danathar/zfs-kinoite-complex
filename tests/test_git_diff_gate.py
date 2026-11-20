@@ -1956,6 +1956,33 @@ CORPUS: tuple[Row, ...] = (
     ),
     Row(
         "environment",
+        "flock /tmp/l env -i git log -p",
+        "refused",
+        "env behind flock and its lock file still empties the environment",
+        "settings environment",
+    ),
+    Row(
+        "environment",
+        "watch env -i git log -p",
+        "refused",
+        "env behind watch still empties the environment",
+        "settings environment",
+    ),
+    Row(
+        "environment",
+        "setsid env -u GIT_CONFIG_COUNT git log -p",
+        "refused",
+        "env -u behind setsid still removes the count",
+        "settings environment",
+    ),
+    Row(
+        "environment",
+        "flock /tmp/l env -u FOO git log -p",
+        "allowed",
+        "env -u of another name behind flock leaves the setting",
+    ),
+    Row(
+        "environment",
         "timeout -s KILL 5 env -i git log -p",
         "refused",
         "an env behind another wrapper and its option values is still in the command's chain",
@@ -3537,6 +3564,12 @@ MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
         '[[ "${word:1}" == *c* ]] && refuse "${SETTINGS_ENV_MSG}"',
         '[[ "${word:1}" == *c* ]] && true',
         "exec -lc git log -p",
+    ),
+    (
+        "reading the tail behind a program the wrapper walk does not step over",
+        'env | exec | unset | export | declare | typeset | local | readonly)\n        check_settings_env_segment "${seg[@]:k}"',
+        'env | exec | unset | export | declare | typeset | local | readonly)\n        true',
+        "flock /tmp/l env -i git log -p",
     ),
     (
         "stepping over another wrapper's option values",

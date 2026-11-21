@@ -183,7 +183,13 @@ def _held_past_window_latest_inspect() -> dict:
     return held
 
 
-def run_gate(latest, *, signal_digest: str = CURRENT_DIGEST, signal_kernel: str = ""):
+def run_gate(
+    latest,
+    *,
+    signal_digest: str = CURRENT_DIGEST,
+    signal_kernel: str = "",
+    today: date = GATE_TODAY,
+):
     """
     Run the real gate against one fake registry.
 
@@ -218,7 +224,7 @@ def run_gate(latest, *, signal_digest: str = CURRENT_DIGEST, signal_kernel: str 
             stable_signal_image=SIGNAL_IMAGE,
             zfs_minor_version="2.4",
             creds="actor:token",
-            today=GATE_TODAY,
+            today=today,
         )
 
 
@@ -304,6 +310,16 @@ class ScheduledBuildGateTableTests(unittest.TestCase):
         held = _held_latest_inspect()
         held["Labels"][STABLE_SIGNAL_DIGEST_LABEL] = CURRENT_DIGEST
         decision = run_gate(held, signal_kernel="7.3.5-200.fc44.x86_64")
+        self.assertEqual(decision.reason, "stable-signal-unchanged")
+        self.assertFalse(decision.should_build)
+
+    def test_the_hold_window_is_judged_on_the_day_the_gate_is_given(self) -> None:
+        # The base is a week old on the day passed in and years old by the real
+        # clock, so a gate that read the clock instead would build.
+        held = _held_latest_inspect()
+        held["Labels"][STABLE_SIGNAL_DIGEST_LABEL] = CURRENT_DIGEST
+        held["Labels"][BASE_VERSION_LABEL] = "44.20200101.0"
+        decision = run_gate(held, signal_kernel="7.3.5-200.fc44.x86_64", today=date(2020, 1, 8))
         self.assertEqual(decision.reason, "stable-signal-unchanged")
         self.assertFalse(decision.should_build)
 

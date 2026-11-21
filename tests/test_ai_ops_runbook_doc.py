@@ -766,15 +766,15 @@ class AgentAuditEntry(RunbookTest):
 
     def test_red_means_one_of_the_two_findings(self) -> None:
         self.assertIn(
-            "opened by the Hive app with no `— hive:` signature line, so the role and model that"
-            " wrote it are unrecorded",
+            "opened by the Hive app with no `-- hive:` signature line (the older `— hive:` also"
+            " counts), so the role and model that wrote it are unrecorded",
             self.workflow,
         )
         self.assertIn('carry no Signed-off-by trailer"', self.workflow)
         self.assertEqual(self.workflow.count('then "#\\(.number): '), 2)
         self.assertIn(
-            "a pull request the Hive app opened with no `— hive:` signature line, or a commit on"
-            " an agent pull request with no `Signed-off-by:` trailer.",
+            "a pull request the Hive app opened with no `-- hive:` (or older `— hive:`) signature"
+            " line, or a commit on an agent pull request with no `Signed-off-by:` trailer.",
             self.entry,
         )
 

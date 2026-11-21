@@ -42,8 +42,12 @@ Hive writes a signature as the last line of the issues and pull requests it
 opens. It looks like this:
 
 ```text
-— hive: agent=quality backend=claude model=claude-opus-5-5 effort=medium claude=2.1.287
+-- hive: agent=quality backend=claude model=claude-opus-5-5 effort=medium claude=2.1.287
 ```
+
+Since 2026-11-18 (hive v5.322.0) the line starts with two ASCII hyphens. Before
+that Hive wrote an em dash, `— hive:`, so older issues and pull requests carry
+`— hive: agent=`. Both count wherever the line is read.
 
 - `agent` is the role that wrote it, for example `quality`, `architect`,
   `guide`, `scanner`, `sec-check`, `ci-maintainer` or `strategist`.
@@ -51,7 +55,7 @@ opens. It looks like this:
 - `effort` and `claude` say the effort level and the tool version. `effort` is
   not on every line.
 - Issues that Hive's dashboard opens carry a shorter line:
-  `— hive: agent=dashboard`.
+  `-- hive: agent=dashboard` (`— hive: agent=dashboard` on older ones).
 
 Hive issues also carry a line just above it that names the instance and a
 commit SHA. Do not treat the SHA as a pointer into this repository: some read
@@ -184,7 +188,7 @@ See which branch prefix goes with which role, from the real pull requests:
 
 ```sh
 gh pr list --state all --author app/danathar-atomic-hive --limit 300 --json headRefName,body \
-  --jq '.[] | [(.headRefName | split("/")[0]), ((.body | capture("— hive: agent=(?<a>[a-z-]+)")? | .a) // "none")] | @tsv' | sort | uniq -c
+  --jq '.[] | [(.headRefName | split("/")[0]), ((.body | capture("(--|—) hive: agent=(?<a>[a-z-]+)")? | .a) // "none")] | @tsv' | sort | uniq -c
 ```
 
 List agent branches started by the in-repo path:

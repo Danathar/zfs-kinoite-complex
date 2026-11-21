@@ -6,7 +6,8 @@ Two kinds of thing act on this repository without a person typing: GitHub
 Actions workflows, and agents. Agents run mostly outside this repository, in
 an external system called Hive. They open issues and pull requests here as
 `app/danathar-atomic-hive`, and they end the body with a signature line that
-starts `— hive: agent=`. [`docs/SECURITY-AI.md`](./SECURITY-AI.md) says what an
+starts `-- hive: agent=` (`— hive: agent=`, with an em dash, before
+2026-11-18). [`docs/SECURITY-AI.md`](./SECURITY-AI.md) says what an
 agent may do. This page says what you do when one of them, or one of the
 workflows, tells you something.
 
@@ -251,8 +252,8 @@ Every file in `.github/workflows/` has an entry here.
   the issue it closes, its sign-offs, and whether the labeler marked it
   safety-critical (Tier 3). It writes nothing else.
 - **Red means a record is missing:** a pull request the Hive app opened with
-  no `— hive:` signature line, or a commit on an agent pull request with no
-  `Signed-off-by:` trailer. A merge that brings in commits from outside the
+  no `-- hive:` (or older `— hive:`) signature line, or a commit on an agent
+  pull request with no `Signed-off-by:` trailer. A merge that brings in commits from outside the
   pull request (an update from `main`) is exempt; a merge of another unmerged
   branch is not. Misses merged before 2026-10-08 are listed but do not fail
   it. A red scheduled run also opens a
@@ -271,8 +272,8 @@ Every file in `.github/workflows/` has an entry here.
   request instead of a merged one. Its job "Check the agent signature line"
   runs on a pull request that `danathar-atomic-hive[bot]` opened or that comes
   from an `ai-fix/` branch, and is skipped on every other one. It fails when
-  the description's last line is not a `— hive:` signature line, judged by
-  the same definition the audit uses. Its token has no permissions.
+  the description's last line is not a `-- hive:` (or older `— hive:`)
+  signature line, judged by the same definition the audit uses. Its token has no permissions.
 - **Advisory:** it is not a required check, so a red run does not stop a
   merge. It can be made required once it has run clean for a month.
 - **First, if it is red:** add the signature line as the last line of the
@@ -348,7 +349,7 @@ Every file in `.github/workflows/` has an entry here.
 
 - **Recognise one:** author `app/danathar-atomic-hive`, a branch prefix such
   as `quality/`, `arch/`, `architect/`, `scanner/`, `guide/`, `sec/` or `ci/`,
-  and the `— hive: agent=` line at the end of the body. An `ai-fix/*`
+  and the `-- hive: agent=` line at the end of the body. An `ai-fix/*`
   branch is the in-repo agent instead.
 - **Means:** nothing yet. Green CI is not approval. The labels listed by the
   command below have the description "Approved by a Hive merger/owner for

@@ -52,8 +52,9 @@ raise the score without changing anything, which is the thing to avoid.
 
 These roles are read from the repository's own history, not from a Hive
 document. Hive's pull requests and issues end with a signature line of the form
-`— hive: agent=<role> backend=... model=...`, and the branch name starts with a
-prefix for the role.
+`-- hive: agent=<role> backend=... model=...` (`— hive:`, with an em dash, on
+those from before 2026-11-18), and the branch name starts with a prefix for the
+role.
 
 | Role in the signature | Branch prefix | What its pull requests tend to be |
 | --- | --- | --- |
@@ -83,7 +84,7 @@ gh pr list --state all --limit 300 --json author,headRefName \
 
 # Which roles sign their pull requests:
 gh pr list --state all --limit 300 --json body \
-  -q '.[].body | capture("— hive: agent=(?<role>\\S+)").role' | sort | uniq -c
+  -q '.[].body | capture("(--|—) hive: agent=(?<role>\\S+)").role' | sort | uniq -c
 ```
 
 Both need `-R Danathar/zfs-kinoite-complex` outside a checkout.

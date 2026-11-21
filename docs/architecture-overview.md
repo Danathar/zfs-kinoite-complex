@@ -118,6 +118,7 @@ It returns one of:
 | `current-latest-missing-stable-signal-labels` | `:latest` exists but predates this gate, or was built by a non-schedule event before provenance was recorded | yes |
 | `current-latest-missing-zfs-version-label` | `:latest` exists but predates the `zfs-version` label | yes |
 | `not-schedule-event` | push or manual run; the gate is bypassed entirely | yes |
+| `kernel-held-past-hold-window` | `:latest` is held and its base is older than the 28-day hold window (or its base version cannot be read), so the run builds whether or not upstream moved, and fails if there is still no supported base | yes |
 | `kernel-held-upstream-kernel-still-unsupported` | `:latest` is held on an older base, the upstream kernel is still newer than the resolved OpenZFS release supports, and the held base is inside the 28-day hold window, so a rebuild would resolve the same held base | no |
 
 The `zfs-version` label baked onto the image is *not* sourced from this gate's

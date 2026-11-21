@@ -103,6 +103,8 @@ Every file in `.github/workflows/` has an entry here.
 - **Means:** its job "Apply area labels" attaches an `area/*` label to a pull
   request by changed path. These labels describe a change. They never mean
   approval.
+- **A skipped run on a pull request from a fork is normal.** The job runs only
+  for branches in this repository, because a fork's token cannot add a label.
 - **First:** if a label looks wrong, read `.github/labeler.yml` and compare
   with the paths changed. A wrong or missing `area/*` label changes which
   risk tier a reader assumes, so take the highest tier that any path implies.

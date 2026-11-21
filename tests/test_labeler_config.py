@@ -328,14 +328,30 @@ class LabelerWorkflowTests(unittest.TestCase):
 
     def test_the_scan_finds_the_job(self) -> None:
         self.assertGreater(len(self.steps), 0)
-        self.assertIn("pull_request_target", self.triggers)
+        self.assertIn("pull_request", self.triggers)
+
+    def test_the_workflow_does_not_use_pull_request_target(self) -> None:
+        # From 2026-12-02 GitHub does not run pull_request_target in a public
+        # repository without an event policy, and the hive's App cannot create
+        # one. A labeler moved back to it would stop labelling without a red run.
+        self.assertNotIn("pull_request_target", self.triggers)
+
+    def test_the_job_skips_pull_requests_from_forks(self) -> None:
+        # Under pull_request a fork gets a read-only token, so the labeler
+        # would fail. The job-level condition turns that into a skipped run.
+        for job_id, job in self.workflow["jobs"].items():
+            with self.subTest(job=job_id):
+                self.assertEqual(
+                    job.get("if"),
+                    "github.event.pull_request.head.repo.full_name == github.repository",
+                )
 
     def test_the_job_never_runs_pull_request_code(self) -> None:
-        # This is why pull_request_target is safe here. The job holds a
-        # pull-requests: write token and runs the *base* branch's workflow; the
-        # moment it checks out the head ref or runs a script from the pull
-        # request, that token is reachable from a fork. Adding a checkout is a
-        # one-line change and looks harmless in review.
+        # The job holds a pull-requests: write token. The moment it checks out
+        # the head ref or runs a script from the pull request, that token is
+        # in reach of the pull request's code, which on a Renovate or
+        # Dependabot branch was written outside this repository. Adding a
+        # checkout is a one-line change and looks harmless in review.
         for step in self.steps:
             with self.subTest(step=step.get("name", step.get("uses"))):
                 self.assertNotIn("run", step, "a run: step would execute repo code")

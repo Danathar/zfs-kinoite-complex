@@ -39,7 +39,7 @@ the layout and the reading order. To match what
 [`.github/workflows/test.yml`](./.github/workflows/test.yml) installs today:
 
 ```bash
-pip install pytest "ruff==0.17.3" pyyaml
+pip install pytest "ruff==0.17.6" pyyaml
 python3 -m pytest tests/ -v
 ruff check ci_tools/ shared/ tests/ files/ containerfiles/
 ```
@@ -241,6 +241,14 @@ breaks each changed line in a few fixed ways (drops one alternative from a
 `==`/`!=`, flips a `x=1` or `x=0` assignment), runs the two test files that
 run the hook against each one, and puts the original file back afterwards.
 Its survivors go in the same report and the same ledger (#590).
+
+It covers the workflows in `.github/workflows/` and the composite actions in
+`.github/actions/` too. A changed line of the form `<key>: ${{ <expr> }}`
+inside a `with:`, `env:` or `outputs:` block, or an action output's
+`value: ${{ <expr> }}`, gets two mutants: the line deleted, and its value
+replaced with `""`. Each runs against every test file whose text names that
+file's path, or for an action its directory. A changed line of that form in a
+file no test names is reported on its own (#602).
 
 For each mutant it lists, either add a test that fails against it, or add it to
 [`.mutation-survivors.json`](./.mutation-survivors.json) with the reason it

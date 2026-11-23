@@ -2,7 +2,7 @@
 Script: tests/test_codeowners.py
 What: Joins `.github/CODEOWNERS` to the owner-merge paths, the list the hive's `auto_merge.human_merge_paths` gate holds for this repository, to the `area/safety-critical` globs in `.github/labeler.yml`, and to the ruleset.
 Doing: Parses each CODEOWNERS line, resolves it against the tracked tree, and checks that it owns exactly the files the owner-merge paths match, and only files the safety-critical label also matches.
-Why: Since the owner's decision of 2026-11-23 GitHub no longer requires code-owner review. The hive's human_merge_paths gate is what keeps the owner on the merge button for image signing, the rulesets and this file, and CODEOWNERS is how GitHub asks for his review on those pull requests. A path missing here gets no review request, an extra path asks for a review nothing waits on, and a catch-all line asks on every pull request.
+Why: Since the owner's decision of 2026-11-23 GitHub no longer requires code-owner review. The hive's human_merge_paths gate is what keeps the owner on the merge button for image signing, the workflows, the rulesets and this file, and CODEOWNERS is how GitHub asks for his review on those pull requests. A path missing here gets no review request, an extra path asks for a review nothing waits on, and a catch-all line asks on every pull request.
 Goal: Make a dropped line, a stray `*`, or a list that no longer matches the owner-merge paths fail here, in the pull request that does it.
 
 The hive's setting lives on the hive, not in this repository, so OWNER_MERGE_PATHS below is
@@ -34,6 +34,7 @@ OWNER_MERGE_PATHS = (
     "files/scripts/configure_signing_policy.py",
     ".github/actions/install-signing-tools/**",
     ".github/actions/publish-native-image/**",
+    ".github/workflows/**",
     ".github/rulesets/**",
     ".github/CODEOWNERS",
 )

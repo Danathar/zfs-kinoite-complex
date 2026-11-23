@@ -252,7 +252,9 @@ run (#402, #434, #436), with no approval. The maintainer gated every Tier 3
 path behind the code owner's approval on GitHub (#454), then narrowed that on
 2026-11-23: ordinary changes, Tier 3 ones included, merge on the required check
 and the hive's AI reviewer. Only the owner-merge paths still wait for the
-maintainer: image signing, `.github/rulesets/` and `.github/CODEOWNERS`. The
+maintainer: image signing, every workflow, `.github/rulesets/` and
+`.github/CODEOWNERS`. Workflows are on the list because the `production-signing` environment has only a branch policy and no required
+reviewer, so any workflow on `main` can request it and be handed the cosign key. The
 hive's own `auto_merge.human_merge_paths` setting holds them, not GitHub: the
 App labels such a pull request `needs-owner-merge` and leaves the merge to the
 maintainer. [`.github/CODEOWNERS`](../.github/CODEOWNERS) lists the same paths

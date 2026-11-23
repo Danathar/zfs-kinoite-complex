@@ -80,17 +80,16 @@ for a maintainer. Merged pull requests have included one labelled
 `area/safety-critical`, so that label does not exclude a pull request from App
 merges. Since the owner's decision of 2026-11-23 GitHub does not hold one back
 either: the ruleset no longer requires the code owner's review, so the App
-merges most Tier 3 pull requests, workflow changes included, on the required
-check and the hive's AI reviewer. What holds one back is the hive's own
-`auto_merge.human_merge_paths` setting. It lists the owner-merge paths, which
-are image signing, `.github/rulesets/` and `.github/CODEOWNERS`, and the App
-labels a pull request that touches one `needs-owner-merge` and leaves the merge
-to the owner. [`.github/CODEOWNERS`](../.github/CODEOWNERS) lists the same paths
-so that GitHub asks for the owner's review
-([`branch-protection.md`](./branch-protection.md#the-ruleset)). A workflow
-change is not one of them, although once a workflow is on `main` any job in it
-can declare the `production-signing` environment and be handed the signing key.
-The required check and the hive's AI reviewer are what stand in front of that.
+merges most Tier 3 pull requests on the required check and the hive's AI
+reviewer. What holds one back is the hive's own `auto_merge.human_merge_paths`
+setting. It lists the owner-merge paths, which are image signing, every
+workflow, `.github/rulesets/` and `.github/CODEOWNERS`, and the App labels a
+pull request that touches one `needs-owner-merge` and leaves the merge to the
+owner. [`.github/CODEOWNERS`](../.github/CODEOWNERS) lists the same paths so
+that GitHub asks for the owner's review
+([`branch-protection.md`](./branch-protection.md#the-ruleset)). Every workflow
+is on the list because the `production-signing` environment has only a branch policy and no required
+reviewer, so any workflow on `main` can request it and be handed the cosign key.
 
 Some labels also have a description that calls them an **approval to auto-merge
 on green CI**. As of this writing, every label whose description says so:

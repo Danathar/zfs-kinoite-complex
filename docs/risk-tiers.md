@@ -40,7 +40,11 @@ Labelled `area/safety-critical`.
 - `cosign.pub`, `ci/defaults.json`'s ZFS and base-image values
 - `.github/workflows/`, every workflow and not only `build.yml`, because once a
   workflow is on `main` any job in it can declare the production-signing
-  environment and be handed the key that signs the published image
+  environment and be handed the key that signs the published image. It is
+  an owner-merge path (below), so every workflow change waits for the owner,
+  except Renovate's own patch, minor, digest and pin updates, which merge
+  themselves on green CI (see
+  [`branch-protection.md`](./branch-protection.md#renovate-merges-its-own-non-major-updates))
 - `.github/policies/workflow-permissions.json`, because a token that gains
   `packages: write` can push an image to the registry these machines pull from
 - `.github/rulesets/`, because the ruleset in it is what keeps `main`, and so
@@ -79,7 +83,10 @@ exception is the **owner-merge paths**: image signing (`cosign.pub`,
 `ci_tools/sign_image.py`, `ci_tools/promote_stable.py`,
 `files/scripts/configure_signing_policy.py`,
 `.github/actions/install-signing-tools/`, `.github/actions/publish-native-image/`),
-`.github/rulesets/` and `.github/CODEOWNERS`. An agent may not complete a change
+every workflow in `.github/workflows/`, `.github/rulesets/` and
+`.github/CODEOWNERS`. Workflows are on the list because the `production-signing` environment has only a branch policy and no required
+reviewer, so any workflow on `main` can request it and be handed the cosign key.
+An agent may not complete a change
 to one of them unattended. It may propose one, with the analysis, on a branch.
 The hive enforces this, not GitHub: its `auto_merge.human_merge_paths` setting
 lists these paths, and it labels a pull request that touches one
@@ -102,7 +109,7 @@ image build, so say how the change was verified or say plainly that it was not.
 Watch specifically for a new external action in a composite action under
 `.github/actions/`. A widened `permissions:` block, a new secret reference, a
 new `environment:` or a new external action in a workflow is a Tier 3 question,
-because every workflow file is Tier 3. A
+and since every workflow file is an owner-merge path it waits for the owner. A
 widened block cannot arrive alone: the unit suite fails until
 `.github/policies/workflow-permissions.json` changes in the same pull request,
 and that file is Tier 3.

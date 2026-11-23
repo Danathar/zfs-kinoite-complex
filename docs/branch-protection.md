@@ -81,9 +81,12 @@ on every change to `main`. What each rule does:
   image signing (`cosign.pub`, `ci_tools/sign_image.py`,
   `ci_tools/promote_stable.py`, `files/scripts/configure_signing_policy.py`,
   `.github/actions/install-signing-tools/` and
-  `.github/actions/publish-native-image/`), the rulesets in `.github/rulesets/`,
-  and `.github/CODEOWNERS`. The hive labels a pull request that touches one of
-  them `needs-owner-merge` and leaves the merge to the owner.
+  `.github/actions/publish-native-image/`), every workflow in
+  `.github/workflows/`, the rulesets in `.github/rulesets/`, and
+  `.github/CODEOWNERS`. Workflows are on the list because the `production-signing` environment has only a branch policy and no required
+  reviewer, so any workflow on `main` can request it and be handed the cosign key.
+  The hive labels a pull request that touches one of them `needs-owner-merge`
+  and leaves the merge to the owner.
   [`.github/CODEOWNERS`](../.github/CODEOWNERS) lists the same paths, so GitHub
   asks for the owner's review on those pull requests; it no longer gates
   anything by itself. `tests/test_codeowners.py` keeps the two lists the same,

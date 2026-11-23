@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import unittest
 from pathlib import Path
+from typing import ClassVar
 
 ROOT = Path(__file__).resolve().parents[1]
 CORPUS = ROOT / "tests/fixtures/gate-refusal-corpus.json"
@@ -99,14 +100,14 @@ class GateRefusalsAreDocumentedTests(unittest.TestCase):
 class UndocumentedCheckTests(unittest.TestCase):
     """The check above fails for the reasons it claims to."""
 
-    CORPUS = {
+    CORPUS: ClassVar[dict] = {
         "rows": [
             {"class": "configuration removal", "verdict": "refuse"},
             {"class": "wrapper", "verdict": "refuse"},
             {"class": "ordinary use", "verdict": "allow"},
         ]
     }
-    KEYWORDS = {
+    KEYWORDS: ClassVar[dict] = {
         "configuration removal": ("env -i", "exec -c"),
         "wrapper": ("wrapper",),
     }

@@ -21,7 +21,7 @@ how much of it to do.
 ZFS line, anything pool-facing, the files the image installs onto every booted
 machine, every workflow file, the policy file that says what each workflow's
 token may do, the ruleset that keeps `main` behind a pull request, the file
-that says who must approve all of these, and the files that decide what an
+that says whose review GitHub asks for, and the files that decide what an
 agent may run here without a prompt.
 Labelled `area/safety-critical`.
 
@@ -40,18 +40,15 @@ Labelled `area/safety-critical`.
 - `cosign.pub`, `ci/defaults.json`'s ZFS and base-image values
 - `.github/workflows/`, every workflow and not only `build.yml`, because once a
   workflow is on `main` any job in it can declare the production-signing
-  environment and be handed the key that signs the published image. The cost:
-  every workflow change waits for the owner, except Renovate's own patch,
-  minor, digest and pin updates, which merge themselves on green CI (see
-  [`branch-protection.md`](./branch-protection.md#renovate-merges-its-own-non-major-updates))
+  environment and be handed the key that signs the published image
 - `.github/policies/workflow-permissions.json`, because a token that gains
   `packages: write` can push an image to the registry these machines pull from
 - `.github/rulesets/`, because the ruleset in it is what keeps `main`, and so
   the signing build, behind a pull request. Loosening it reopens the direct
   push; see [`branch-protection.md`](./branch-protection.md)
-- `.github/CODEOWNERS`, because it lists the paths in this tier and the ruleset
-  requires the code owner's approval for them. A line dropped from it takes
-  that path out from behind the owner
+- `.github/CODEOWNERS`, because it lists the owner-merge paths below and is
+  one of them. A line dropped from it stops GitHub asking for the owner's
+  review on that path
 - `.claude/settings.json`, `.claude/hooks/`, `.claude/commands/`, `tests/run_tests.py`:
   together these are the agent permission boundary. The settings file is the permission table: its deny list keeps
   signing, registry pushes, merges and workflow dispatch away from an agent,
@@ -75,10 +72,20 @@ to import those pools, which breaks the recovery path everything else assumes.
 **Never in this tier, regardless of who asks:** weakening a fail-closed check.
 That is not a tier, it is a refusal (`AGENTS.md` section 0 rule 1).
 
-**An agent may not complete a Tier 3 change unattended.** It may propose one,
-with the analysis, on a branch. GitHub enforces this: every path above is in
-[`.github/CODEOWNERS`](../.github/CODEOWNERS), and the ruleset requires the
-code owner's approving review before a pull request that touches one can merge
+**Who merges a Tier 3 change.** Since the owner's decision of 2026-11-23, most
+Tier 3 changes merge on the required check and the hive's AI reviewer, with no
+owner review. The tier still sets what review they need, above. The
+exception is the **owner-merge paths**: image signing (`cosign.pub`,
+`ci_tools/sign_image.py`, `ci_tools/promote_stable.py`,
+`files/scripts/configure_signing_policy.py`,
+`.github/actions/install-signing-tools/`, `.github/actions/publish-native-image/`),
+`.github/rulesets/` and `.github/CODEOWNERS`. An agent may not complete a change
+to one of them unattended. It may propose one, with the analysis, on a branch.
+The hive enforces this, not GitHub: its `auto_merge.human_merge_paths` setting
+lists these paths, and it labels a pull request that touches one
+`needs-owner-merge` and leaves the merge to the owner.
+[`.github/CODEOWNERS`](../.github/CODEOWNERS) lists the same paths so that
+GitHub asks for the owner's review
 ([`branch-protection.md`](./branch-protection.md#the-ruleset)).
 
 ### Tier 2 — can break the build or a published artifact indirectly
@@ -95,7 +102,7 @@ image build, so say how the change was verified or say plainly that it was not.
 Watch specifically for a new external action in a composite action under
 `.github/actions/`. A widened `permissions:` block, a new secret reference, a
 new `environment:` or a new external action in a workflow is a Tier 3 question,
-and since every workflow file is Tier 3 it waits for the owner's approval. A
+because every workflow file is Tier 3. A
 widened block cannot arrive alone: the unit suite fails until
 `.github/policies/workflow-permissions.json` changes in the same pull request,
 and that file is Tier 3.

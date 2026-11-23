@@ -323,14 +323,17 @@ class CommittedFileTests(unittest.TestCase):
         self.assertTrue(self.committed["rules"])
         self.assertEqual(find_weaker_rules(self.committed, live_from(self.committed)), [])
 
-    def test_the_live_state_issue_454_left_fails(self) -> None:
-        # What GitHub enforced on main when #488 was filed: everything in the file, except
-        # code owner review.
+    def test_the_committed_code_owner_review_off_matches_a_live_off(self) -> None:
+        # The owner turned code owner review off on 2026-11-23, live and in the file. The
+        # #454 shape, the file asking for it and GitHub not, is test_code_owner_review_off_live_fails.
+        main = json.loads(RULESET_FILE.read_text(encoding="utf-8"))
+        (pull_request,) = [rule for rule in main["rules"] if rule["type"] == "pull_request"]
+        self.assertIs(pull_request["parameters"]["require_code_owner_review"], False)
         live = live_from(self.committed)
-        live_rule(live, "pull_request")["parameters"]["require_code_owner_review"] = False
-        findings = find_weaker_rules(self.committed, live)
-        self.assertEqual(len(findings), 1, findings)
-        self.assertIn("require_code_owner_review", findings[0])
+        self.assertIs(
+            live_rule(live, "pull_request")["parameters"]["require_code_owner_review"], False
+        )
+        self.assertEqual(find_weaker_rules(self.committed, live), [])
 
 
 class RenderReportTests(unittest.TestCase):
@@ -469,13 +472,12 @@ class MainTests(unittest.TestCase):
 
     def test_weaker_live_rules_fail_the_run(self) -> None:
         committed, _ = load_committed()
-        live = live_from(committed)
-        live_rule(live, "pull_request")["parameters"]["require_code_owner_review"] = False
+        live = [rule for rule in live_from(committed) if rule["type"] != "non_fast_forward"]
         stdout, summary, error = self._run(live)
         self.assertIsInstance(error, CiToolError)
         self.assertIn("weaker", str(error))
-        self.assertIn("require_code_owner_review", stdout)
-        self.assertIn("require_code_owner_review", summary)
+        self.assertIn("rule `non_fast_forward`", stdout)
+        self.assertIn("rule `non_fast_forward`", summary)
 
     def test_without_a_step_summary_it_still_prints(self) -> None:
         stdout, summary, error = self._run([], summary=False)

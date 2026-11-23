@@ -57,39 +57,41 @@ on every change to `main`. What each rule does:
   `protect main` lists `{"actor_id": 2740, "actor_type": "Integration",
   "bypass_mode": "pull_request"}`. 2740 is the Renovate GitHub App
   (`gh api /apps/renovate`). In `pull_request` mode Renovate can merge its own
-  pull request without the code owner's approval. It still cannot push to
-  `main` directly, delete it or rewrite it. A bypass only skips the rules of
+  pull request past the rules of `protect main`. It was added so that merge
+  would not wait for code owner review; with that review off since
+  2026-11-23 it skips nothing another pull request has to meet, and it is
+  unchanged. It still cannot push to `main` directly, delete it or rewrite it. A bypass only skips the rules of
   the ruleset that lists it, and `required checks` lists no bypass actors, so
   Renovate's pull request still has to pass `Python Unit Tests`. No other app,
   and not Actions, may bypass: that would hand back the direct push this
   exists to stop.
 - **`deletion` and `non_fast_forward`** stop `main` being deleted or rewritten.
-- **`pull_request` with 0 approvals, and code owner review required.** GitHub
+- **`pull_request` with 0 approvals, and no code owner review.** GitHub
   does not let anyone approve their own pull request. On a single-maintainer
   repository, requiring one approval for *every* pull request means nothing can
   ever merge, including the change that relaxes the rule. What 0 still enforces
   is that every change arrives as a pull request and is merged through one.
-  `require_code_owner_review` is what puts the owner on the merge button where
-  it matters: [`.github/CODEOWNERS`](../.github/CODEOWNERS) lists only the
-  Tier 3 paths ([`risk-tiers.md`](./risk-tiers.md)), so a pull request that
-  touches one of them cannot merge, by anyone or any token, until the owner
-  approves it on GitHub, and that approval is on record. The one exception is
-  the Renovate bypass above. Any other pull request
-  touches no listed path and merges on the required check alone. That is why
-  `CODEOWNERS` has no catch-all `*` line, and `tests/test_codeowners.py` fails
-  if one comes back.
+  `require_code_owner_review` is `false`, by the owner's decision of
+  2026-11-23: ordinary changes, Tier 3 ones included, merge on the required
+  check and the hive's AI reviewer, with no owner review. Until then it was
+  `true`, and every Tier 3 path waited for the owner's approval on GitHub.
 
-  The cost: the owner is the only code owner and cannot approve their own pull
-  request, so a pull request the owner opens that touches a Tier 3 path cannot
-  merge either. Either have an agent open it and approve that, or add a bypass
-  for the admin role in `pull_request` mode (`{"actor_id": 5, "actor_type":
-  "RepositoryRole", "bypass_mode": "pull_request"}` in `bypass_actors`). That
-  bypass lets an admin merge a pull request past code owner review and
-  everything else in `protect main`. It would not skip the required check,
-  which is in `required checks`, but it is still not in the file. Every
-  workflow file is Tier 3, so Renovate's major updates, OpenZFS minor-line
-  bumps and cosign bumps there still wait for the owner's approval. Its patch,
-  minor, digest and pin updates no longer do (the bypass above).
+  What still needs the owner is a gate on the hive's side, not GitHub's. The
+  hive's `auto_merge.human_merge_paths` setting lists the owner-merge paths:
+  image signing (`cosign.pub`, `ci_tools/sign_image.py`,
+  `ci_tools/promote_stable.py`, `files/scripts/configure_signing_policy.py`,
+  `.github/actions/install-signing-tools/` and
+  `.github/actions/publish-native-image/`), the rulesets in `.github/rulesets/`,
+  and `.github/CODEOWNERS`. The hive labels a pull request that touches one of
+  them `needs-owner-merge` and leaves the merge to the owner.
+  [`.github/CODEOWNERS`](../.github/CODEOWNERS) lists the same paths, so GitHub
+  asks for the owner's review on those pull requests; it no longer gates
+  anything by itself. `tests/test_codeowners.py` keeps the two lists the same,
+  and fails if a catch-all `*` line comes back.
+
+  The cost: the hive's gate holds only the Hive app. A person or another token
+  that can merge here can merge a green pull request that touches an
+  owner-merge path, and GitHub will not stop it.
 - **One required check, `Python Unit Tests`, in its own ruleset.** It is the
   only rule in `main-checks.json`, so the Renovate bypass in `main.json`
   does not reach it. Strict mode is off
@@ -146,9 +148,11 @@ Three settings make it work, and each one is needed:
 - `renovate.json` turns `automerge` on for those update types, with
   `"automergeType": "pr"` and `"platformAutomerge": false`. Renovate itself
   merges the pull request once its checks are green. GitHub's own auto-merge is
-  not used, because it would wait for code owner review and ignore the bypass.
+  not used. It was ruled out while code owner review was on, because it would
+  have waited for that review and ignored the bypass.
 - `protect main` lists the Renovate app as a bypass actor in `pull_request`
-  mode, so its merge does not wait for code owner review on Tier 3 paths.
+  mode. It kept Renovate's merge from waiting for code owner review on Tier 3
+  paths; since that review went off on 2026-11-23 it skips nothing.
 - The required check lives in `required checks`, a ruleset with no bypass
   actors. A bypass skips only the rules of the ruleset that lists it, so CI is
   still enforced on Renovate's pull requests by GitHub, not only by Renovate's
@@ -160,14 +164,14 @@ cosign bump (`docs/architecture-overview.md` makes version-specific claims
 about it). `renovate.json` keeps `automerge` off for each of those, and
 `tests/test_renovate_config.py` checks that. A new GitHub Actions release also waits three days
 (`minimumReleaseAge`) before Renovate takes it, so a compromised action release
-has time to be found and pulled before it can merge into a signing workflow. Renovate pull requests that
-change no Tier 3 path, and every pull request from anyone else, are unchanged.
+has time to be found and pulled before it can merge into a signing workflow. Every pull request from
+anyone else follows [the ruleset](#the-ruleset) and the hive's owner-merge paths.
 
 `renovate.json` deliberately does not list the Hive app in
 `gitIgnoredAuthors`. A commit anyone other than Renovate adds to a Renovate
 branch makes Renovate stop merging that branch, and that is wanted: otherwise a
-Hive commit on a Renovate branch would merge under Renovate's bypass without the
-owner's approval. When a Renovate branch needs rebuilding, the Hive ticks the
+Hive commit on a Renovate branch would be merged by Renovate itself, outside
+the hive's owner-merge gate. When a Renovate branch needs rebuilding, the Hive ticks the
 rebase box on the pull request and Renovate regenerates the branch from scratch.
 
 ## A pull request that never gets the check
@@ -242,7 +246,8 @@ It fails only when GitHub is weaker than the file:
 Extra rules, or stricter ones, pass. When two rulesets apply to the branch,
 GitHub returns a rule of the same type once for each, and the strongest one
 counts. Strict mode is `false` in this repository's file, so strict mode off
-live is not drift. A failed run opens an issue through
+live is not drift. Code owner review is `false` in this repository's file, so
+code owner review off live is not drift. A failed run opens an issue through
 [`.github/workflows/auto-issues.yml`](../.github/workflows/auto-issues.yml).
 The fix is the `PUT` above, not an edit to the file.
 

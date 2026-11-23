@@ -78,13 +78,19 @@ merges agent pull requests once their required checks are green; the maintainer
 chose that. Pull requests labelled `hold` are not merged automatically and wait
 for a maintainer. Merged pull requests have included one labelled
 `area/safety-critical`, so that label does not exclude a pull request from App
-merges. What does hold one back is the ruleset: it requires the code owner's
-approval for every path [`.github/CODEOWNERS`](../.github/CODEOWNERS) lists,
-which are the Tier 3 paths, so the App cannot merge a Tier 3 pull request until
-the owner has approved it ([`branch-protection.md`](./branch-protection.md#the-ruleset)).
-`.github/CODEOWNERS` owns every file under `.github/workflows/`, because once a
-workflow is on `main` any job in it can declare the `production-signing`
-environment and be handed the signing key.
+merges. Since the owner's decision of 2026-11-23 GitHub does not hold one back
+either: the ruleset no longer requires the code owner's review, so the App
+merges most Tier 3 pull requests, workflow changes included, on the required
+check and the hive's AI reviewer. What holds one back is the hive's own
+`auto_merge.human_merge_paths` setting. It lists the owner-merge paths, which
+are image signing, `.github/rulesets/` and `.github/CODEOWNERS`, and the App
+labels a pull request that touches one `needs-owner-merge` and leaves the merge
+to the owner. [`.github/CODEOWNERS`](../.github/CODEOWNERS) lists the same paths
+so that GitHub asks for the owner's review
+([`branch-protection.md`](./branch-protection.md#the-ruleset)). A workflow
+change is not one of them, although once a workflow is on `main` any job in it
+can declare the `production-signing` environment and be handed the signing key.
+The required check and the hive's AI reviewer are what stand in front of that.
 
 Some labels also have a description that calls them an **approval to auto-merge
 on green CI**. As of this writing, every label whose description says so:

@@ -40,8 +40,8 @@ name: Labeler
 # run, their authors already have write access (and could add a workflow of
 # their own), and the edit to .github/labeler.yml shows in the diff. That file
 # is in `area/ci`, not `area/safety-critical`, and .github/CODEOWNERS does not
-# list it. The label is a review cue. The gate on the safety-critical files is
-# .github/CODEOWNERS, which GitHub reads from the base branch.
+# list it. The label is a review cue. The gate on the owner-merge files is the
+# hive's human_merge_paths setting, which .github/CODEOWNERS mirrors.
 #
 # The job never checks out or executes the pull request's code. Adding a
 # checkout of the head ref, or any step that runs code from the pull request,

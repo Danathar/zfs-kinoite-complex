@@ -1062,6 +1062,9 @@ GH_JQ_ENV_MSG='blocked: gh evaluates its --jq (-q) filter with gojq, which hands
 # shellcheck disable=SC2016 # the message quotes shell spellings as literal text
 SETTINGS_ENV_MSG='blocked: this command takes git'"'"'s settings environment (GIT_CONFIG_COUNT, GIT_CONFIG_KEY_*, GIT_CONFIG_VALUE_*) away from git or overwrites it. .claude/settings.json sets safe.bareRepository=explicit through those variables so git refuses a bare repository a branch commits; without them git falls back to safe.bareRepository=all, and `git log -p` loads the planted folder'"'"'s config and runs the diff textconv program it names. `unset GIT_CONFIG_COUNT`, `export -n`, `declare +x` / `typeset +x` / `local +x`, `env -u GIT_CONFIG_COUNT` (or --unset), a bare `GIT_CONFIG_COUNT=0` statement, and the two that empty the whole environment -- `env -i` (or a lone -, or --ignore-environment) and bash'"'"'s `exec -c` -- each made the planted program run, so they are refused wherever they stand in the string, behind any wrapper, whatever command follows. Run the command without touching those variables; removing or un-exporting any other variable is not affected.'
 
+# shellcheck disable=SC2016 # the message quotes shell spellings as literal text
+BUILTIN_ASSIGN_MSG='blocked: a shell builtin that writes a variable assigns this one the way a bare `NAME=value` statement does, and the variable is one the shell already exports to every command after it: git'"'"'s settings environment (GIT_CONFIG_COUNT, GIT_CONFIG_KEY_*, GIT_CONFIG_VALUE_*, which .claude/settings.json uses to set safe.bareRepository=explicit), HOME, XDG_CONFIG_HOME or PATH. `read GIT_CONFIG_VALUE_0 <<< all; git log -p` turns safe.bareRepository back to all, so a bare folder a branch planted runs its diff textconv program; `read -r HOME <<< planted`, `printf -v HOME %s planted` and `for HOME in planted; do git diff ...; done` make git read planted/.gitconfig, whose diff.external a branch can commit; and `mapfile -t PATH < list` makes bash look git up in a directory the list names. read, mapfile and readarray (any name they would fill), printf -v, let and the name of a for or select loop are refused when they name one of those variables, wherever they stand in the string. Use another variable name.'
+
 command_is_gated() {
   local joined="$1" prefix
   for prefix in "${GATED_PREFIXES[@]}"; do
@@ -1380,6 +1383,16 @@ names_settings_env() {
   [[ "${1%%=*}" == GIT_CONFIG* ]]
 }
 
+# The settings environment above, or one of the other variables this shell
+# already exports and git reads its configuration (HOME, XDG_CONFIG_HOME) or
+# its own location (PATH) from. A builtin that assigns one of them reaches
+# every later command the way a bare assignment does. A subscript
+# (`HOME[0]`) is the same variable to bash.
+names_reached_env() {
+  names_settings_env "$1" && return 0
+  [[ "${1%%=*}" =~ ^(HOME|XDG_CONFIG_HOME|PATH)(\[.*)?$ ]]
+}
+
 # One simple command, as the quote-removed words between two separators:
 # refuse it when it takes the settings environment away from what runs after
 # it. Read on its own pass, after every other refusal, so the messages the
@@ -1455,14 +1468,21 @@ check_settings_env_segment() {
           n=${#seg[@]}
         elif [[ "${word}" != *=* ]] && ((${#opt} >= 3)) && [[ --chdir == "${opt}"* ]]; then
           ((i++)) # the option's value
+        elif [[ "${word}" != *=* ]] && ((${#opt} >= 3)) && [[ --argv0 == "${opt}"* ]]; then
+          # The name the command runs under; env keeps reading its own
+          # options after it, so `env --argv0 name -i git` still empties
+          # the environment.
+          ((i++))
         fi
       elif [[ "${word}" == -* ]]; then
-        # A cluster of short options: -i empties the environment; -u, -C and
-        # -S take the rest of the word, or the next word, as their value.
+        # A cluster of short options: -i empties the environment; -u, -C, -S
+        # and -a take the rest of the word, or the next word, as their value.
+        # -a NAME is the name the command runs under, and env keeps reading
+        # its own options after it (`env -a name -i git`).
         for ((j = 1; j < ${#word}; j++)); do
           ch="${word:j:1}"
           [[ "${ch}" == i ]] && refuse "${SETTINGS_ENV_MSG}"
-          if [[ "${ch}" == [uCS] ]]; then
+          if [[ "${ch}" == [uCSa] ]]; then
             value="${word:j+1}"
             if [[ -z "${value}" ]]; then
               ((i++))
@@ -1537,7 +1557,51 @@ check_settings_env_segment() {
       [[ "${word}" == *=* ]] && refuse "${SETTINGS_ENV_MSG}"
     done
     ;;
-  git | echo | printf | grep | egrep | fgrep) ;; # git reads its own operands; the others only print or match
+  read | mapfile | readarray)
+    # Every word that is not an option may be a name they fill, and so may
+    # the tail of an option cluster (`-aHOME`, `-raPATH`), the attached
+    # spelling of `-a NAME`. An option's value read as a name can only
+    # over-refuse.
+    for word in "${rest[@]}"; do
+      if [[ "${word}" == -* ]]; then
+        for ((j = 2; j < ${#word}; j++)); do
+          names_reached_env "${word:j}" && refuse "${BUILTIN_ASSIGN_MSG}"
+        done
+        continue
+      fi
+      names_reached_env "${word}" && refuse "${BUILTIN_ASSIGN_MSG}"
+    done
+    ;;
+  printf)
+    # `printf -v NAME` and `printf -vNAME` store the output in NAME.
+    for ((j = 0; j < ${#rest[@]}; j++)); do
+      word="${rest[j]}"
+      [[ "${word}" == -- || "${word}" != -* ]] && break
+      if [[ "${word}" == -v ]]; then
+        ((j++))
+        value="${rest[j]-}"
+      else
+        value="${word#-v}"
+        [[ "${value}" == "${word}" ]] && continue
+      fi
+      names_reached_env "${value}" && refuse "${BUILTIN_ASSIGN_MSG}"
+    done
+    ;;
+  let)
+    # Each word is an arithmetic expression, and any name in it may be the
+    # one it assigns (`GIT_CONFIG_COUNT=0`, `PATH+=1`, `HOME++`).
+    for word in "${rest[@]}"; do
+      if [[ "${word}" =~ (^|[^A-Za-z0-9_])(GIT_CONFIG[A-Za-z0-9_]*|HOME|XDG_CONFIG_HOME|PATH)([^A-Za-z0-9_]|$) ]]; then
+        refuse "${BUILTIN_ASSIGN_MSG}"
+      fi
+    done
+    ;;
+  for | select)
+    # The loop assigns its name before the body runs, so a git inside the
+    # body sees the new value.
+    names_reached_env "${rest[0]-}" && refuse "${BUILTIN_ASSIGN_MSG}"
+    ;;
+  git | echo | grep | egrep | fgrep) ;; # git reads its own operands; the others only print or match
   *)
     # A program the wrapper walk does not step over (`flock /tmp/l env -i
     # git`, `watch env -i git`, `setsid env -u NAME git`) runs the words

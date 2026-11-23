@@ -52,7 +52,20 @@ OPTIONAL_FIELDS = {"wraps"}
 
 # SHA-256 of the canonical tests/fixtures/gate-refusal-corpus.json in
 # Danathar/atomic-image-builder. Copy the file from there; never edit it here.
-CANONICAL_SHA256 = "9bb984ef871ff8ad63b113d48976f4eea4cbb44be270574fc7a9b3819865bd56"
+CANONICAL_SHA256 = "64246cb4d92cf1226a9eb07d3f1381942850fb090cfa59fcf50e23eb5c212558"
+
+# Allow rows this gate refuses on purpose, with the reason. Each one is
+# asserted to still be refused, so loosening the gate fails here until the id
+# is removed, and an allow row that is not listed cannot start being refused
+# silently. Only allow rows belong here: a refuse row the gate lets through is
+# a gate bug, never an entry (Danathar/goodreads-mcp#467,
+# Danathar/aurora-zfs-simple#523).
+OVER_REFUSED: dict[str, str] = {
+    # The name scan refuses every env -S (--split-string) outright, because
+    # the split string is a command the scan never sees as words; reading the
+    # split value as env's own options is done only by the settings-env pass.
+    "config-removal-allow-env-split-other-u": "env -S is refused whatever it splits",
+}
 
 
 def allow_prefixes(settings: dict) -> list[str]:
@@ -106,7 +119,16 @@ GLOB_CHARS = re.compile(r"[*?[]")
 EXTGLOB_GROUP = re.compile(r"[@?*+!]\([^()]*\)")
 MAX_BRACE_WORDS = 32
 # git global options whose value can be the next word (`git -C dir log`).
-GIT_OPTIONS_WITH_VALUE = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--config-env"}
+GIT_OPTIONS_WITH_VALUE = {
+    "-C",
+    "-c",
+    "--attr-source",
+    "--shallow-file",
+    "--git-dir",
+    "--work-tree",
+    "--namespace",
+    "--config-env",
+}
 
 
 def ansi_c(text: str, start: int) -> tuple[str, int]:
@@ -552,11 +574,28 @@ class CorpusVerdictTests(unittest.TestCase):
         # skipped and the verdict test would pass on nothing.
         self.assertGreaterEqual(len(self.rows), 20)
 
+    def test_every_over_refused_entry_names_a_reachable_allow_row(self) -> None:
+        rows = {row["id"]: row for row in self.corpus["rows"]}
+        reachable = {row["id"] for row in self.rows}
+        for row_id in sorted(OVER_REFUSED):
+            with self.subTest(row=row_id):
+                self.assertIn(row_id, rows, f"OVER_REFUSED names {row_id}, not in the corpus")
+                self.assertEqual(rows[row_id]["verdict"], ALLOW, f"{row_id} is not an allow row")
+                self.assertIn(row_id, reachable, f"{row_id} does not run here; remove it")
+                self.assertTrue(OVER_REFUSED[row_id].strip(), "say why it is refused")
+
     def test_every_row_this_repository_allows_is_decided_the_way_it_says(self) -> None:
         for row in self.rows:
             with self.subTest(row=row["id"], command=row["command"]):
                 verdict, result = decide(row["command"], self.hook, self.project)
                 self.assertIn(result.returncode, (0, 2), result.stderr)
+                if row["id"] in OVER_REFUSED:
+                    self.assertEqual(
+                        verdict,
+                        REFUSE,
+                        f"the gate now allows {row['id']}; remove it from OVER_REFUSED",
+                    )
+                    continue
                 self.assertEqual(
                     verdict,
                     row["verdict"],

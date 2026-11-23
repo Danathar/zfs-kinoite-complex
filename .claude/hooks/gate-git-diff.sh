@@ -254,6 +254,9 @@ BRACE_MSG='blocked: bash expands braces before git sees the words, and this gate
 
 # shellcheck disable=SC2016 # the backticks quote command spellings for the reader
 GIT_GLOBAL_MSG='blocked: a git global option written before the subcommand reaches the same primitives from outside the part an allow rule matches. `-c diff.external=/tmp/evil` runs that program once per changed path -- the config spelling of GIT_EXTERNAL_DIFF -- and `-c core.sshCommand`, `-c credential.helper` and `-c alias.x=!cmd` are the same shape; `--config-env` names an environment variable to take the value from; `-C <dir>` moves git to another directory, so `git -C /home/<user> diff -- .netrc .profile` printed a file outside this checkout while the containment test below resolved both operands inside it; and `--exec-path` is the value form of GIT_EXEC_PATH, which the environment rule refuses in every other spelling. `--git-dir <dir>` and `--bare` (which is `--git-dir=.`) point git at another repository and so at its config: a bare repository committed into a branch names a diff.x.textconv program that `git --git-dir=evil log -p` runs, and safe.bareRepository=explicit in .claude/settings.json allows exactly this spelling, because naming the directory is what makes it explicit; and `--work-tree <dir>` makes git compare tracked paths against another directory, which prints a file outside this checkout as -C does. So -c, -C, --config-env, --exec-path, --git-dir, --bare and --work-tree are refused between the name and the subcommand rather than stepped over. --namespace, --super-prefix and --attr-source only rename what git reports and are still stepped over.'
+SHALLOW_FILE_MSG='blocked: `git --shallow-file FILE` (and `--shallow-file=FILE`) makes git read FILE as its list of shallow commits before any subcommand runs, and the error for a line it cannot parse quotes that line: `git --shallow-file .env log -1` printed `fatal: bad shallow line: NAME=value` from .env past the Read(./.env) deny rule. The option also takes its value as the next word, so a walk that stepped over the option alone read that value as the subcommand and never saw a `--git-dir`, `-c` or `--bare` after it. It is a file read this gate cannot hold to the operand scan, so the option is refused whatever it names. Run git without it.'
+# shellcheck disable=SC2016 # the literal $PATH is what the reader has to see
+INHERITED_ENV_MSG='blocked: HOME, XDG_CONFIG_HOME and PATH are already exported to every command this shell runs, so a plain assignment to one of them (`HOME=dir`, `PATH=dir:$PATH`) written as a statement of its own reaches a later git or allow-listed command of the same string without an `export` word anywhere: `HOME=planted; git diff HEAD~1 HEAD` makes git read planted/.gitconfig, whose diff.external a branch can commit, and `PATH=planted:$PATH; git log -1` runs a file named git that a branch committed in planted/. A leading `HOME=dir git ...` is refused by the assignment rule already; this is the same reach one statement earlier. Run the command without the assignment.'
 
 # shellcheck disable=SC2016 # the backticks quote command spellings for the reader
 GLOB_MSG='blocked: bash expands a glob before git sees the words, so one word here is several operands at git and the operand scan never reaches the count it refuses at: `git diff /home/<user>/.ssh/*` is a single word to this gate and two operands to git, which prints the file. "A glob cannot leave the working directory" is no reason to expand it and check the result either, because the Read(...) deny rules this gate stands in front of name paths inside the checkout -- ./cosign.key, ./.env, **/*.pem. So a `*`, `?` or `[` bash would expand in a word of a git invocation is refused rather than expanded, for the reason the brace and $ rules give: expanding correctly means reimplementing bash in a hook. Quote the pathspec (`git diff -- '"'"'*.md'"'"'`), which is git'"'"'s own glob and is matched against repository content rather than the filesystem, or write the paths out.'
@@ -1189,6 +1192,7 @@ cmd_gh_jq=0   # the next word of this gh command is its --jq/-q filter
 cmd_stack=()  # the outer command's state, while a `$(...)` is being read
 export_idx=-1 # the first word that an export-family command assigns
 allexport=0   # `set -a`/`set -o allexport` ran: every later bare assignment exports
+inherited_idx=-1 # the first bare assignment to HOME, XDG_CONFIG_HOME or PATH
 gate_idx=-1   # the last word at which a gated command or git is running
 reset_command
 for ((idx = 0; idx < ${#words[@]}; idx++)); do
@@ -1243,6 +1247,14 @@ for ((idx = 0; idx < ${#words[@]}; idx++)); do
   if ((${name_assignments[idx]:-0})); then
     cmd_assign=1
     ((allexport)) && ((export_idx < 0)) && export_idx=${idx}
+    # HOME, XDG_CONFIG_HOME and PATH come into this shell exported, so a bare
+    # assignment to one reaches every later command without `set -a`. Armed
+    # whether or not a name follows, the over-refusing direction: a leading
+    # `HOME=x git ...` is refused above in any case.
+    if ((inherited_idx < 0)) &&
+      [[ "${raw_words[idx]}" =~ ^(HOME|XDG_CONFIG_HOME|PATH)(\[[^]]*\])?\+?= ]]; then
+      inherited_idx=${idx}
+    fi
     continue
   fi
   # An xargs the command-name scan stepped over as a wrapper of this command.
@@ -1359,6 +1371,7 @@ check_gated_command
 # Decided once, over the whole string: the export may be written before the
 # command it arms, and only then does it reach it.
 ((export_idx >= 0 && gate_idx > export_idx)) && refuse "${EXPORT_ENV_MSG}"
+((inherited_idx >= 0 && gate_idx > inherited_idx)) && refuse "${INHERITED_ENV_MSG}"
 
 # Whether a word (`NAME` or `NAME=value`, quotes already removed) names one of
 # the variables .claude/settings.json uses to set safe.bareRepository=explicit.
@@ -1845,6 +1858,12 @@ for ((idx = 0; idx < ${#words[@]}; idx++)); do
       --git-dir | --git-dir=* | --bare | --work-tree | --work-tree=*)
       refuse "${GIT_GLOBAL_MSG}"
       ;;
+    # `--shallow-file FILE` reads FILE before the subcommand and quotes the
+    # first line it cannot parse; its value is the next word too, so stepping
+    # over the option alone read FILE as the subcommand and ended the walk.
+    --shallow-file | --shallow-file=*)
+      refuse "${SHALLOW_FILE_MSG}"
+      ;;
     --namespace | --super-prefix | --attr-source)
       skip_git_option_value=1
       continue
@@ -2230,6 +2249,7 @@ finish_segment() {
   ((seg_hit)) || return 0
   ((seg_assign)) && refuse_behind "${GATED_ENV_MSG}"
   ((export_idx >= 0 && seg_hit_idx > export_idx)) && refuse_behind "${EXPORT_ENV_MSG}"
+  ((inherited_idx >= 0 && seg_hit_idx > inherited_idx)) && refuse_behind "${INHERITED_ENV_MSG}"
   if ((seg_writes)); then
     ((seg_git)) && refuse_behind "${REDIRECT_MSG}"
     refuse_behind "${GATED_REDIRECT_MSG}"

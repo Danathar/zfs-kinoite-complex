@@ -1299,6 +1299,57 @@ class GateBehaviourTests(GateRunner, unittest.TestCase):
             with self.subTest(command=command):
                 self.assertRefused(command, "git global option")
 
+    def test_the_shallow_file_global_option_is_refused(self) -> None:
+        # `--shallow-file FILE` makes git read FILE as its shallow list before
+        # the subcommand, and git's error quotes the first line it cannot
+        # parse, so `--shallow-file .env` printed a NAME=value line of .env.
+        # Its value is also the next word: stepping over the option alone read
+        # that value as the subcommand, and a `--git-dir`, `-c` or `--bare`
+        # after it was never seen.
+        for command in (
+            "git --shallow-file .env log -1",
+            "git --shallow-file=.env log -1",
+            "git --shallow-file HEAD --git-dir=evil log -p",
+            "git --shallow-file x -c safe.bareRepository=all log -p",
+            "git --shallow-file x --bare show",
+            "git --no-pager --shallow-file .env show",
+            "timeout 5 git --shallow-file .env log -1",
+        ):
+            with self.subTest(command=command):
+                self.assertRefused(command, "--shallow-file")
+        # After the subcommand it is a word of that subcommand, not the option.
+        self.assertAllowed("git show HEAD --shallow-file")
+
+    def test_a_bare_assignment_to_an_inherited_name_before_git_is_refused(self) -> None:
+        # HOME, XDG_CONFIG_HOME and PATH arrive exported, so `HOME=dir;` on its
+        # own reaches the git after it: git reads dir/.gitconfig, whose
+        # diff.external a branch can commit, and `PATH=dir:$PATH;` runs a
+        # file named git from dir.
+        for command in (
+            "HOME=planted; git diff HEAD~1 HEAD",
+            "HOME=planted; git log -p",
+            "HOME=planted\ngit log -p",
+            "HOME=planted && git show HEAD",
+            "XDG_CONFIG_HOME=planted; git diff HEAD~1 HEAD",
+            "PATH=planted:$PATH; git log -1",
+            "PATH+=:planted; git log -1",
+            "HOME=planted; timeout 5 git log -p",
+            "HOME=planted; flock /tmp/l git log -p",
+            "FOO=1 HOME=planted; git log -1",
+        ):
+            with self.subTest(command=command):
+                self.assertRefused(command, "HOME, XDG_CONFIG_HOME and PATH")
+        # A name that only starts or ends like one, or an assignment after the
+        # last git, reaches nothing.
+        for command in (
+            "FOO=1; git log -1",
+            "HOMEDIR=x; git log -1",
+            "MYPATH=x; git log -1",
+            "git log -1; HOME=x",
+        ):
+            with self.subTest(command=command):
+                self.assertAllowed(command)
+
     def test_rename_only_git_global_options_are_still_stepped_over(self) -> None:
         # `--namespace`, `--super-prefix` and `--attr-source` only rename what
         # git reports; they load no program and the operand scan still runs

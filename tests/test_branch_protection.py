@@ -440,10 +440,20 @@ class TheNightlySectionMatchesTheJob(unittest.TestCase):
 
     def test_code_owner_review_off_live_fails_as_the_page_says(self) -> None:
         self.assertIn("`require_code_owner_review` true in the file and false live", self.text)
-        self.assertTrue(rules_by_type(self.ruleset)["pull_request"]["require_code_owner_review"])
+        committed = copy.deepcopy(self.ruleset)
+        self.live_rule(committed["rules"], "pull_request")["require_code_owner_review"] = True
         live = self.live()
         self.live_rule(live, "pull_request")["require_code_owner_review"] = False
-        self.assertEqual(len(find_weaker_rules(self.ruleset, live)), 1)
+        self.assertEqual(len(find_weaker_rules(committed, live)), 1)
+
+    def test_code_owner_review_off_in_the_file_and_live_passes_as_the_page_says(self) -> None:
+        self.assertIn(
+            "Code owner review is `false` in this repository's file, so code owner review off "
+            "live is not drift.",
+            self.text,
+        )
+        self.assertIs(rules_by_type(self.ruleset)["pull_request"]["require_code_owner_review"], False)
+        self.assertEqual(find_weaker_rules(self.ruleset, self.live()), [])
 
     def test_a_lower_approval_count_live_fails_as_the_page_says(self) -> None:
         self.assertIn("a lower `required_approving_review_count` live", self.text)
@@ -516,8 +526,12 @@ class TheNightlySectionMatchesTheJob(unittest.TestCase):
             "for each, and the strongest one counts.",
             self.text,
         )
+        committed = copy.deepcopy(self.ruleset)
+        self.live_rule(committed["rules"], "pull_request")["require_code_owner_review"] = True
+        stronger = self.live()
+        self.live_rule(stronger, "pull_request")["require_code_owner_review"] = True
         weaker = {"type": "pull_request", "parameters": {"require_code_owner_review": False}}
-        self.assertEqual(find_weaker_rules(self.ruleset, [weaker, *self.live()]), [])
+        self.assertEqual(find_weaker_rules(committed, [weaker, *stronger]), [])
 
     def test_the_settings_it_says_it_does_not_compare_are_not_compared(self) -> None:
         self.assertIn("the other `pull_request` settings, such as dismissing stale reviews", self.text)

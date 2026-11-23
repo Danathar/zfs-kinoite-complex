@@ -242,17 +242,24 @@ gh pr list --state merged --limit 1000 --json mergedBy \
 
 A merge to `main` builds, signs and promotes the image, so the required checks
 are the gate. The rulesets require a pull request and a passing
-`Python Unit Tests`; they require no approving review except the code owner's on
-Tier 3 paths, and the only bypass actor is the Renovate app, which may merge
-its own non-major updates without the code owner's review but cannot skip the
-required check. They apply to the Hive app as to anyone else.
+`Python Unit Tests`; they require no approving review, not even the code
+owner's, and the only bypass actor is the Renovate app, which may merge its
+own pull requests but cannot skip the required check. They apply to the Hive
+app as to anyone else.
 
 The App's merges have included pull requests that changed code the signing jobs
-run (#402, #434, #436), with no approval. The maintainer chose to gate that
-(#454): [`.github/CODEOWNERS`](../.github/CODEOWNERS) lists the Tier 3 paths
-from [`risk-tiers.md`](./risk-tiers.md), and the ruleset requires the code
-owner's approval for them, so the App can still merge a Tier 3 pull request,
-but only after the maintainer has approved it on GitHub.
+run (#402, #434, #436), with no approval. The maintainer gated every Tier 3
+path behind the code owner's approval on GitHub (#454), then narrowed that on
+2026-11-23: ordinary changes, Tier 3 ones included, merge on the required check
+and the hive's AI reviewer. Only the owner-merge paths still wait for the
+maintainer: image signing, every workflow, `.github/rulesets/` and
+`.github/CODEOWNERS`. Workflows are on the list because the `production-signing` environment has only a branch policy and no required
+reviewer, so any workflow on `main` can request it and be handed the cosign key. The
+hive's own `auto_merge.human_merge_paths` setting holds them, not GitHub: the
+App labels such a pull request `needs-owner-merge` and leaves the merge to the
+maintainer. [`.github/CODEOWNERS`](../.github/CODEOWNERS) lists the same paths
+so that GitHub asks for the maintainer's review
+([`risk-tiers.md`](./risk-tiers.md) has the list).
 
 Agent sessions working in this repository do not merge on their own initiative.
 [`AGENTS.md`](../AGENTS.md) section 0 rule 6 says not to

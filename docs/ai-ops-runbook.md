@@ -365,7 +365,7 @@ Every file in `.github/workflows/` has an entry here.
 
   The second command lists the approval labels live. Then take the highest
   risk tier of the files it touches ([`risk-tiers.md`](./risk-tiers.md)). An
-  agent may not complete a Tier 3 change unattended.
+  agent may not complete a change to an owner-merge path unattended.
 - **Then:** review it with [`review-rubric.md`](./review-rubric.md): a
   weakened fail-closed check first, then the safety-critical statement, then
   rollback. Whether to close it or ask for a change is the maintainer's call.

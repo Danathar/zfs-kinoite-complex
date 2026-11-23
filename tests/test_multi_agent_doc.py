@@ -183,18 +183,18 @@ class RulesetClaimTests(unittest.TestCase):
         self.assertNotIn("merge_queue", self.rules)
         self.assertIn("The ruleset has no merge queue", self.page)
 
-    def test_only_renovate_bypasses_and_no_approval_but_the_code_owners(self) -> None:
+    def test_only_renovate_bypasses_and_no_approval_not_even_the_code_owners(self) -> None:
         self.assertEqual(
             self.ruleset["bypass_actors"],
             [{"actor_id": 2740, "actor_type": "Integration", "bypass_mode": "pull_request"}],
         )
         self.assertEqual(self.checks["bypass_actors"], [])
         self.assertEqual(self.rules["pull_request"]["required_approving_review_count"], 0)
-        self.assertIs(self.rules["pull_request"]["require_code_owner_review"], True)
+        self.assertIs(self.rules["pull_request"]["require_code_owner_review"], False)
         self.assertIn(
-            "they require no approving review except the code owner's on Tier 3 paths, "
-            "and the only bypass actor is the Renovate app, which may merge its own non-major "
-            "updates without the code owner's review but cannot skip the required check",
+            "they require no approving review, not even the code owner's, and the only bypass "
+            "actor is the Renovate app, which may merge its own pull requests but cannot skip "
+            "the required check",
             self.page,
         )
 

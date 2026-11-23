@@ -36,6 +36,7 @@ SECURITY_AI = ROOT / "docs/SECURITY-AI.md"
 CLASS_KEYWORDS: dict[str, tuple[str, ...]] = {
     "compound command": ("compound",),
     "configuration override": ("safe.bareRepository", "--config-env"),
+    "configuration reach": ("XDG_CONFIG_HOME", "printf -v", "mapfile"),
     "configuration removal": (
         "unset",
         "export -n",

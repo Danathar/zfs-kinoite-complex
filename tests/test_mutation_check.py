@@ -41,6 +41,7 @@ from mutation_check import (
     imports_target,
     kept_operator,
     load_ledger,
+    names_target,
     naming_pattern,
     outcomes,
     report,
@@ -672,31 +673,31 @@ class YamlMutantsTests(unittest.TestCase):
         source = "inputs:\n  v:\n    value: ${{ inputs.w }}\nwith:\n  v:\n    value: ${{ a }}\n"
         self.assertEqual(self.mutants(source), [])
 
-    def test_the_kernel_held_hand_offs_each_get_both_mutants(self) -> None:
-        # The three lines #602 found unprotected; each must be a mutation site.
-        for target, line in (
+    def test_each_kind_of_hand_off_in_the_real_tree_gets_both_mutants(self) -> None:
+        # yaml_tests picks this file for both targets, so naming one exact line
+        # here would kill that line's mutants whatever the wiring tests check.
+        # Every line of each kind is read instead, and one is enough.
+        for target, pattern in (
             (
                 ".github/actions/prepare-main-akmods/action.yml",
-                "value: ${{ steps.resolve.outputs.kernel_held_from }}",
+                r" +value: \$\{\{ steps\.resolve\.outputs\.\w+ \}\}",
             ),
+            (".github/workflows/build.yml", r" +\w+: \$\{\{ steps\.prepare\.outputs\.\w+ \}\}"),
             (
                 ".github/workflows/build.yml",
-                "kernel_held_from: ${{ steps.prepare.outputs.kernel_held_from }}",
-            ),
-            (
-                ".github/workflows/build.yml",
-                "kernel_held_from: ${{ needs.build-zfs-akmods.outputs.kernel_held_from }}",
+                r" +\w+: \$\{\{ needs\.build-zfs-akmods\.outputs\.\w+ \}\}",
             ),
         ):
-            with self.subTest(target=target, line=line):
+            with self.subTest(target=target, pattern=pattern):
                 source = (ROOT / target).read_text(encoding="utf-8")
-                rows = [row.strip() for row in source.splitlines()]
-                self.assertEqual(rows.count(line), 1)
-                number = rows.index(line) + 1
-                self.assertEqual(
-                    [op for _, op, _ in yaml_mutants(source, {number})],
-                    ["yaml/DeleteLine", "yaml/EmptyValue"],
-                )
+                rows = source.splitlines()
+                numbers = [n for n, row in enumerate(rows, 1) if re.fullmatch(pattern, row)]
+                self.assertGreater(len(numbers), 1)
+                for number in numbers:
+                    self.assertEqual(
+                        [op for _, op, _ in yaml_mutants(source, {number})],
+                        ["yaml/DeleteLine", "yaml/EmptyValue"],
+                    )
 
 
 class YamlTestsTests(unittest.TestCase):
@@ -729,9 +730,26 @@ class YamlTestsTests(unittest.TestCase):
         self.assertFalse(pattern.search('".github/actions/prepare-main-akmods-x"'))
         self.assertFalse(pattern.search('".github/actions/prepare"'))
 
+    def test_a_workflow_is_named_by_its_directory_and_file_name_apart(self) -> None:
+        directory = 'WORKFLOW_DIR = ROOT / ".github" / "workflows"\n'
+        target = ".github/workflows/build.yml"
+        self.assertTrue(names_target(directory + 'read(WORKFLOW_DIR / "build.yml")', target))
+        self.assertFalse(names_target(directory + 'read(WORKFLOW_DIR / "build-pr.yml")', target))
+        self.assertFalse(names_target(directory + "# build.yml in a comment", target))
+        self.assertFalse(names_target('read("build.yml")', target))
+        # An action is named by its own directory, not by "action.yml".
+        self.assertFalse(
+            names_target(
+                'ROOT / ".github" / "actions" / "other" / "action.yml"',
+                ".github/actions/prepare-main-akmods/action.yml",
+            )
+        )
+
     def test_finds_the_test_files_that_read_each_kernel_held_hop(self) -> None:
         for target, test in (
             (".github/workflows/build.yml", "tests/test_workflow_kernel_held_wiring.py"),
+            # Names the workflow as WORKFLOW_DIR / "build.yml".
+            (".github/workflows/build.yml", "tests/test_workflow_build_container.py"),
             (
                 ".github/actions/prepare-main-akmods/action.yml",
                 "tests/test_workflow_kernel_held_wiring.py",

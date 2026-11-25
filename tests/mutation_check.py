@@ -39,9 +39,9 @@ A workflow under .github/workflows/ or a composite action under
 `<key>: ${{ <expr> }}` inside a `with:`, `env:` or `outputs:` block, or an
 output's `value: ${{ <expr> }}`, gets two mutants (see yaml_mutants): the line
 deleted, and its value replaced with "". Each runs against the test files
-whose text names the YAML file's repository path, or for an action its
-directory (see yaml_tests). A changed wiring line in a file no test names is
-reported the way a module no test imports is. Their survivors go in the same
+whose text names the YAML file's repository path, for a workflow its directory
+and its file name apart, or for an action its directory (see names_target). A
+changed wiring line in a file no test names is reported the way a module no test imports is. Their survivors go in the same
 report and the same ledger (#602).
 
 It mutates the files in place, one mutant at a time, and restores each file
@@ -323,14 +323,30 @@ def naming_pattern(target: str) -> re.Pattern:
     return re.compile(joint.join(re.escape(part) for part in parts) + r"(?![\w.-])")
 
 
+def names_target(text: str, target: str) -> bool:
+    """Whether the text of a test file names the YAML file `target`.
+
+    A workflow test may build the path from a constant for the directory,
+    `WORKFLOW_DIR / "build.yml"`, so the directory and the quoted file name
+    anywhere in the text also name a workflow.
+    """
+    if naming_pattern(target).search(text):
+        return True
+    directory, _, name = target.rpartition("/")
+    return (
+        directory == ".github/workflows"
+        and re.search(rf"""["']{re.escape(name)}["']""", text) is not None
+        and naming_pattern(directory).search(text) is not None
+    )
+
+
 def yaml_tests(target: str) -> tuple[str, ...]:
     """Every tracked test file whose text names the YAML file `target`."""
     names = git("ls-files", "tests/test_*.py", "tests/**/test_*.py").splitlines()
-    pattern = naming_pattern(target)
     return tuple(
         name
         for name in sorted(set(names))
-        if pattern.search((ROOT / name).read_text(encoding="utf-8"))
+        if names_target((ROOT / name).read_text(encoding="utf-8"), target)
     )
 
 

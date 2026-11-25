@@ -1634,6 +1634,150 @@ for ((idx = 0; idx < ${#words[@]}; idx++)); do
 done
 check_settings_env_segment "${segment_words[@]}"
 
+# shellcheck disable=SC2016 # the message quotes shell spellings as literal text
+ARITHMETIC_ENV_MSG='blocked: an arithmetic command ((...)) or arithmetic expansion $((...)) names a variable that git or the shell already exports: git'"'"'s settings environment (GIT_CONFIG_COUNT, GIT_CONFIG_KEY_*, GIT_CONFIG_VALUE_*), HOME, XDG_CONFIG_HOME or PATH. `(( PATH = 1 ))` and `: $(( HOME = 1 ))` assign the name with no NAME=value word, so no assignment rule above sees them, and the new value reaches every later command of the string: bash then looks git up in a folder named 1 that a branch can commit, or git reads planted/.gitconfig and runs the diff.external it names. Arithmetic naming one of these variables is refused wherever it stands in the string, a read such as `(( PATH ))` included, which only over-refuses. A single parenthesis is a subshell and is not read here. Use another variable name.'
+
+# shellcheck disable=SC2016 # the message quotes shell spellings as literal text
+DIRECTORY_CHANGE_MSG='blocked: a cd, pushd or popd that may move the shell out of this checkout stands before git or an allow-listed command of the same string. Every operand check in this hook resolves paths against the checkout, so `cd /tmp && git diff -- x .env` passed as two in-tree operands while git ran outside any repository, fell back to --no-index on its own and printed both files. It is the shell'"'"'s spelling of `git -C DIR`, which is refused for the same reason. A cd to the project root (`cd "$CLAUDE_PROJECT_DIR"`) or into a literal relative path inside the checkout (`cd tests`) is not refused. A cd with no operand (HOME), `cd -`, an option, a `~`, a `$`, a backtick, a glob, a brace, a `..` component, an absolute path other than the project root, and every popd are refused, and so is any relative name that is not spelled `./name` while CDPATH is set. Run the command from the checkout and name the paths.'
+
+# Whether the text between the parentheses of an arithmetic command or
+# expansion names a variable git or the shell already exports. Every whole
+# identifier in it is tested, so a name that is only read is refused too.
+arithmetic_names_reached_env() {
+  local runs="${1//[!A-Za-z0-9_]/ }" run
+  # shellcheck disable=SC2086 # split on purpose; only identifier characters and spaces remain
+  for run in ${runs}; do
+    [[ "${run}" == [A-Za-z_]* ]] || continue
+    names_reached_env "${run}" && return 0
+  done
+  return 1
+}
+
+# `(( ... ))` and `$(( ... ))` assign a name with no NAME=value word. The
+# split above keeps the two opening parentheses as two separators, so the
+# expression runs from them to the parentheses that close them; a double
+# quote keeps an expansion inside one word, which is read from the word.
+arithmetic_word_re='\$\(\((.*)\)\)'
+for ((idx = 0; idx < ${#words[@]}; idx++)); do
+  if [[ "${kinds[idx]}" == word && "${words[idx]}" == *'$(('* && "${words[idx]}" =~ ${arithmetic_word_re} ]]; then
+    arithmetic_names_reached_env "${BASH_REMATCH[1]}" && refuse "${ARITHMETIC_ENV_MSG}"
+  fi
+  [[ "${kinds[idx]}" == sep ]] || continue
+  [[ "${words[idx]}" == '(' || "${words[idx]}" == '$(' ]] || continue
+  [[ "${kinds[idx + 1]:-}" == sep && "${words[idx + 1]:-}" == '(' ]] || continue
+  arithmetic_depth=2
+  for ((arithmetic_at = idx + 2; arithmetic_at < ${#words[@]} && arithmetic_depth > 0; arithmetic_at++)); do
+    if [[ "${kinds[arithmetic_at]}" == sep ]]; then
+      case "${words[arithmetic_at]}" in
+      '(' | '$(') ((arithmetic_depth++)) ;;
+      ')' | '$)') ((arithmetic_depth--)) ;;
+      *) ;;
+      esac
+    else
+      arithmetic_names_reached_env "${words[arithmetic_at]}" && refuse "${ARITHMETIC_ENV_MSG}"
+    fi
+  done
+done
+
+# Whether the cd, pushd or popd whose name is word $1 of the current segment
+# (`seg_words`, with the words as typed in `seg_raws`) may move the shell out
+# of the checkout. It stays inside only when its one operand is the project
+# root (a literal path to it, or $CLAUDE_PROJECT_DIR) or a literal relative
+# path with no `..` component whose real path is inside the checkout, symlinks
+# resolved. Anything this cannot read as a literal path leaves: no operand
+# (HOME), `-` (OLDPWD), an option, a `~`, a `$`, a backtick, a glob, a brace,
+# and every popd, which returns to a directory this string does not name.
+# With CDPATH set, bash searches it for a relative name that does not start
+# with `./`, so those leave too. Returns 0 when it may leave.
+directory_change_leaves() {
+  local at="$1" name="${seg_words[$1]}" target raw root candidate
+  local operands=$((${#seg_words[@]} - at - 1))
+  [[ "${name}" == popd ]] && return 0
+  ((operands == 1)) || return 0
+  target="${seg_words[at + 1]}"
+  raw="${seg_raws[at + 1]}"
+  # shellcheck disable=SC2016 # the literal $CLAUDE_PROJECT_DIR is the word compared
+  if [[ "${target}" == '$CLAUDE_PROJECT_DIR' || "${target}" == '${CLAUDE_PROJECT_DIR}' ]]; then
+    return 1
+  fi
+  [[ -n "${target}" && "${target}" != [-+]* && "${raw}" != '~'* ]] || return 0
+  [[ "${raw}" == *'$'* || "${raw}" == *'`'* || "${raw}" == *[*?[]* ]] && return 0
+  brace_would_expand "${raw}" && return 0
+  root="$(realpath -- "${PWD}" 2>/dev/null)" || return 0
+  if [[ "${target}" == /* ]]; then
+    candidate="$(realpath -m -- "${target}" 2>/dev/null)" || return 0
+    [[ "${candidate}" == "${root}" ]] && return 1
+    return 0
+  fi
+  [[ "/${target}/" == */../* ]] && return 0
+  if [[ "${target}" != ./* ]] && [[ -n "${CDPATH-}" || "${command_string}" == *CDPATH* ]]; then
+    return 0
+  fi
+  candidate="$(realpath -m -- "${root}/${target}" 2>/dev/null)" || return 0
+  [[ "${candidate}" == "${root}" || "${candidate}" == "${root}"/* ]] && return 1
+  return 0
+}
+
+# One simple command, as the quote-removed words between two separators. Once
+# an earlier command of the string has changed directory in a way that may
+# leave the checkout (`left`), a later command that runs or names git, or
+# names a gated prefix, is refused. The later words are read as a whole and
+# not only at the name, so `sh -c 'git diff ...'` after the cd is held to the
+# same test: its inner string is read on its own, without the cd.
+left=''
+git_name_re='(^|[^A-Za-z0-9_.-])git([^A-Za-z0-9_.-]|$)'
+seg_words=()
+seg_raws=()
+check_directory_segment() {
+  local n=${#seg_words[@]} i=0 joined='' w prefix
+  ((n)) || return 0
+  if [[ -n "${left}" ]]; then
+    for w in "${seg_words[@]}"; do
+      joined+=" ${w}"
+    done
+    [[ "${joined}" =~ ${git_name_re} ]] && refuse "${DIRECTORY_CHANGE_MSG}"
+    for prefix in "${GATED_PREFIXES[@]}"; do
+      [[ "${joined}" == *"${prefix}"* ]] && refuse "${DIRECTORY_CHANGE_MSG}"
+    done
+    return 0
+  fi
+  while ((i < n)); do
+    case "${seg_words[i]}" in
+    '{' | '!' | if | then | else | elif | do | while | until | time | coproc | builtin | command) ((i++)) ;;
+    *)
+      if [[ "${seg_words[i]}" =~ ^[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?\+?= ]]; then
+        ((i++))
+      else
+        break
+      fi
+      ;;
+    esac
+  done
+  ((i < n)) || return 0
+  case "${seg_words[i]}" in
+  cd | pushd | popd)
+    directory_change_leaves "${i}" && left="${seg_words[i]}"
+    ;;
+  *) ;;
+  esac
+  return 0
+}
+for ((idx = 0; idx < ${#words[@]}; idx++)); do
+  case "${kinds[idx]}" in
+  sep)
+    check_directory_segment
+    seg_words=()
+    seg_raws=()
+    ;;
+  word)
+    seg_words+=("${words[idx]}")
+    seg_raws+=("${raw_words[idx]}")
+    ;;
+  *) ;;
+  esac
+done
+check_directory_segment
+
 # The whole string with quoting removed, for the one test that is a substring
 # match rather than a word: the shell removes quotes and backslashes on the
 # way to git, so `--no-'index'` and `--no-\index` both reach it as

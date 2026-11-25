@@ -36,7 +36,7 @@ SECURITY_AI = ROOT / "docs/SECURITY-AI.md"
 CLASS_KEYWORDS: dict[str, tuple[str, ...]] = {
     "compound command": ("compound",),
     "configuration override": ("safe.bareRepository", "--config-env"),
-    "configuration reach": ("XDG_CONFIG_HOME", "printf -v", "mapfile"),
+    "configuration reach": ("XDG_CONFIG_HOME", "printf -v", "mapfile", "arithmetic"),
     "configuration removal": (
         "unset",
         "export -n",
@@ -47,6 +47,7 @@ CLASS_KEYWORDS: dict[str, tuple[str, ...]] = {
         "exec -c",
         "GIT_CONFIG",
     ),
+    "directory change": ("pushd",),
     "environment": ("GIT_EXTERNAL_DIFF",),
     "gh --jq environment": ("--jq",),
     "local ref": ("git branch -D",),

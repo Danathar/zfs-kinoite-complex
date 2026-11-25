@@ -247,8 +247,9 @@ It covers the workflows in `.github/workflows/` and the composite actions in
 inside a `with:`, `env:` or `outputs:` block, or an action output's
 `value: ${{ <expr> }}`, gets two mutants: the line deleted, and its value
 replaced with `""`. Each runs against every test file whose text names that
-file's path, or for an action its directory. A changed line of that form in a
-file no test names is reported on its own (#602).
+file's path, for a workflow its directory and its file name apart, or for an
+action its directory. A changed line of that form in a file no test names is
+reported on its own (#602).
 
 For each mutant it lists, either add a test that fails against it, or add it to
 [`.mutation-survivors.json`](./.mutation-survivors.json) with the reason it

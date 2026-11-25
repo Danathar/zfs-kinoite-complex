@@ -2427,6 +2427,126 @@ CORPUS: tuple[Row, ...] = (
         "allowed",
         "the loop's name is f; HOME and PATH are only its words",
     ),
+    # Arithmetic assigns a name with no NAME=value word: `(( PATH = 1 ))` and
+    # `$(( HOME = 1 ))` reach the exported variables as a bare assignment does,
+    # and no assignment rule sees them (Danathar/zfs-kinoite-complex#619).
+    Row(
+        "environment",
+        "(( PATH = 1 )); git log -1",
+        "refused",
+        "bash then looks git up in a folder named 1 that a branch can commit",
+        "an arithmetic command",
+    ),
+    Row(
+        "environment",
+        "(( HOME = 1 )); git log -1",
+        "refused",
+        "git then reads 1/.gitconfig and runs the diff.external it names",
+        "an arithmetic command",
+    ),
+    Row(
+        "environment",
+        ": $(( XDG_CONFIG_HOME = 1 )); git log -p -1",
+        "refused",
+        "an arithmetic expansion assigns the name as the command does",
+        "an arithmetic command",
+    ),
+    Row(
+        "environment",
+        ': "$(( GIT_CONFIG_COUNT = 0 ))"; git log -p -1',
+        "refused",
+        "a double-quoted expansion stays one word and is read from the word",
+        "an arithmetic command",
+    ),
+    Row(
+        "environment",
+        "(( i = 1 )); git log -1",
+        "allowed",
+        "arithmetic on a name git takes nothing from",
+    ),
+    Row(
+        "environment",
+        "( echo PATH ); git log -1",
+        "allowed",
+        "a single parenthesis is a subshell, and printing the word PATH assigns nothing",
+    ),
+    # A cd that may leave the checkout moves git to where every operand check
+    # here no longer holds: git runs outside any repository and falls back to
+    # the plain-file mode with no flag.
+    Row(
+        "directory change",
+        "cd /tmp && git diff -- x .env",
+        "refused",
+        "git runs outside any repository and prints /tmp/.env",
+        "may move the shell out of this checkout",
+    ),
+    Row(
+        "directory change",
+        "cd /tmp; git diff -- x .env",
+        "refused",
+        "the same move ended by a semicolon",
+        "may move the shell out of this checkout",
+    ),
+    Row(
+        "directory change",
+        "(cd /tmp && git diff -- x .env)",
+        "refused",
+        "the same move inside a subshell",
+        "may move the shell out of this checkout",
+    ),
+    Row(
+        "directory change",
+        "pushd /tmp && git diff -- x .env",
+        "refused",
+        "pushd moves the shell as cd does",
+        "may move the shell out of this checkout",
+    ),
+    Row(
+        "directory change",
+        "cd && git diff -- .netrc .env",
+        "refused",
+        "a cd with no operand goes to HOME",
+        "may move the shell out of this checkout",
+    ),
+    Row(
+        "directory change",
+        "cd .. && git log -1",
+        "refused",
+        "a .. component leaves the checkout",
+        "may move the shell out of this checkout",
+    ),
+    Row(
+        "directory change",
+        "popd && git log -1",
+        "refused",
+        "popd returns to a directory this string does not name",
+        "may move the shell out of this checkout",
+    ),
+    Row(
+        "directory change",
+        "cd /tmp && sh -c 'git diff -- x .env'",
+        "refused",
+        "a command string after the cd runs from where the cd moved to",
+        "may move the shell out of this checkout",
+    ),
+    Row(
+        "directory change",
+        "cd tests && git log -1",
+        "allowed",
+        "a literal relative directory with no .. stays inside the checkout",
+    ),
+    Row(
+        "directory change",
+        'cd "$CLAUDE_PROJECT_DIR" && git log -1',
+        "allowed",
+        "the project root is the checkout",
+    ),
+    Row(
+        "directory change",
+        "cd /tmp && echo done",
+        "allowed",
+        "a cd that leaves is refused only before git or a gated command",
+    ),
     # --- 2. redirection ----------------------------------------------------
     #
     # Output opens a path for writing before the command runs. Input hands the
@@ -3984,6 +4104,24 @@ MUTATIONS: tuple[tuple[str, str, str, str], ...] = (
         '    names_reached_env "${rest[0]-}" && refuse "${BUILTIN_ASSIGN_MSG}"',
         "    true",
         "for HOME in planted; do git log -p -1; done",
+    ),
+    (
+        "an arithmetic command naming an exported variable",
+        '  [[ "${kinds[idx + 1]:-}" == sep && "${words[idx + 1]:-}" == \'(\' ]] || continue',
+        "  continue",
+        "(( PATH = 1 )); git log -1",
+    ),
+    (
+        "an arithmetic expansion kept whole by double quotes",
+        '    arithmetic_names_reached_env "${BASH_REMATCH[1]}" && refuse "${ARITHMETIC_ENV_MSG}"',
+        "    true",
+        ': "$(( GIT_CONFIG_COUNT = 0 ))"; git log -p -1',
+    ),
+    (
+        "git after a directory change that may leave the checkout",
+        '    [[ "${joined}" =~ ${git_name_re} ]] && refuse "${DIRECTORY_CHANGE_MSG}"',
+        "    true",
+        "cd /tmp && git diff -- x .env",
     ),
     (
         "stepping over another wrapper's option values",

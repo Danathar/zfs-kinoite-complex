@@ -664,6 +664,11 @@ class PackageRuleTests(unittest.TestCase):
                 self.assertIsNot(settings.get("enabled"), False, "this copy is never updated")
                 self.assertTrue((settings.get("groupName") or "").strip(), "no group")
         self.assertEqual(resolved[0].get("groupName"), resolved[1].get("groupName"))
+        # A shared group is not enough: a setting only one copy gets, such as a release-age
+        # wait, holds that copy back while the other moves, and the group's PR splits the pin.
+        for settings in resolved:
+            settings.pop("description", None)
+        self.assertEqual(resolved[0], resolved[1])
 
     def test_the_weekly_group_gathers_every_minor_patch_and_digest_update(self) -> None:
         """One Renovate PR a week, instead of one per dependency, and it merges itself.

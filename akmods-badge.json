@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
   "label": "openzfs/kernel",
-  "message": "held at 7.2.15-200.fc44.x86_64: 7.3.4-200.fc44.x86_64 waits for OpenZFS",
+  "message": "held at 7.2.15-200.fc44.x86_64: 7.3.5-200.fc44.x86_64 waits for OpenZFS",
   "color": "yellow"
 }

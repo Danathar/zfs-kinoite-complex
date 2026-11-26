@@ -2547,6 +2547,149 @@ CORPUS: tuple[Row, ...] = (
         "allowed",
         "a cd that leaves is refused only before git or a gated command",
     ),
+    Row(
+        "directory change",
+        "cd /tmp && gh pr view 1",
+        "refused",
+        "a gated command after the cd is held to the same test as git",
+        "may move the shell out of this checkout",
+    ),
+    Row(
+        "directory change",
+        "CDPATH=/tmp cd tests && git log -1",
+        "refused",
+        "with CDPATH set, bash looks a bare relative name up in CDPATH first",
+        "may move the shell out of this checkout",
+    ),
+    Row(
+        "directory change",
+        "CDPATH=/tmp cd ./tests && git log -1",
+        "allowed",
+        "bash does not search CDPATH for a name spelled ./name",
+    ),
+    # The words that may stand in front of a cd without changing what it
+    # does. Each is stepped over on its own, so each has a row: dropping one
+    # lets that spelling of `cd /tmp` through.
+    Row(
+        "directory change",
+        "{ cd /tmp; } && git log -1",
+        "refused",
+        "a brace group runs in the current shell, so its cd moves the rest of the string",
+        "may move the shell out of this checkout",
+    ),
+    Row(
+        "directory change",
+        "! cd /tmp; git log -1",
+        "refused",
+        "! only negates the status of the cd",
+        "may move the shell out of this checkout",
+    ),
+    Row(
+        "directory change",
+        "if cd /tmp; then git log -1; fi",
+        "refused",
+        "a cd used as an if condition still moves the shell",
+        "may move the shell out of this checkout",
+    ),
+    Row(
+        "directory change",
+        "if true; then cd /tmp; fi; git log -1",
+        "refused",
+        "a cd in a then branch moves the commands after fi",
+        "may move the shell out of this checkout",
+    ),
+    Row(
+        "directory change",
+        "if false; then :; else cd /tmp; fi; git log -1",
+        "refused",
+        "a cd in an else branch moves the commands after fi",
+        "may move the shell out of this checkout",
+    ),
+    Row(
+        "directory change",
+        "if false; then :; elif cd /tmp; then git log -1; fi",
+        "refused",
+        "a cd used as an elif condition still moves the shell",
+        "may move the shell out of this checkout",
+    ),
+    Row(
+        "directory change",
+        "for d in 1; do cd /tmp; done; git log -1",
+        "refused",
+        "a cd in a loop body moves the commands after done",
+        "may move the shell out of this checkout",
+    ),
+    Row(
+        "directory change",
+        "while cd /tmp; do git log -1; break; done",
+        "refused",
+        "a cd used as a while condition still moves the shell",
+        "may move the shell out of this checkout",
+    ),
+    Row(
+        "directory change",
+        "until cd /tmp; do :; done; git log -1",
+        "refused",
+        "a cd used as an until condition still moves the shell",
+        "may move the shell out of this checkout",
+    ),
+    Row(
+        "directory change",
+        "time cd /tmp; git log -1",
+        "refused",
+        "time only measures the cd",
+        "may move the shell out of this checkout",
+    ),
+    Row(
+        "directory change",
+        "coproc cd /tmp; git log -1",
+        "refused",
+        "the cd is read past coproc as past any other leading word, which only over-refuses",
+        "may move the shell out of this checkout",
+    ),
+    Row(
+        "directory change",
+        "builtin cd /tmp && git log -1",
+        "refused",
+        "builtin runs the same cd",
+        "may move the shell out of this checkout",
+    ),
+    Row(
+        "directory change",
+        "command cd /tmp && git log -1",
+        "refused",
+        "command runs the same cd",
+        "may move the shell out of this checkout",
+    ),
+    # Arithmetic is read from its opening parentheses to the ones that close
+    # them, counting every parenthesis in between, so a nested group or
+    # expansion neither ends the scan early nor carries it past the end.
+    Row(
+        "environment",
+        "(( (i) , (i) , PATH = 1 )); git log -1",
+        "refused",
+        "two nested groups close before the assignment, and the expression is still open",
+        "an arithmetic command",
+    ),
+    Row(
+        "environment",
+        "(( x , $(( 2 )) , $(( 3 )) , PATH = 1 )); git log -1",
+        "refused",
+        "two nested expansions close before the assignment, and the expression is still open",
+        "an arithmetic command",
+    ),
+    Row(
+        "environment",
+        "(( i = 1 )); echo PATH",
+        "allowed",
+        "the arithmetic ends at its closing parentheses; the word PATH after it assigns nothing",
+    ),
+    Row(
+        "environment",
+        ": $(( i )); echo PATH",
+        "allowed",
+        "the expansion ends at its closing parentheses; the word PATH after it assigns nothing",
+    ),
     # --- 2. redirection ----------------------------------------------------
     #
     # Output opens a path for writing before the command runs. Input hands the
@@ -4346,6 +4489,24 @@ class CorpusTests(GateRunner, unittest.TestCase):
         )
         (repo / "tracked").write_text("two\n")
         return repo
+
+    def test_a_cd_into_a_symlink_is_judged_by_where_the_link_points(self) -> None:
+        # A literal relative name with no `..` can still leave the checkout
+        # when it is a symlink to a folder outside it, which a branch can
+        # commit. The hook resolves the link, so the name alone does not
+        # decide; a link to a folder inside the checkout stays allowed.
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = self.committed_repository(tmp)
+            outside = Path(tmp) / "outside"
+            outside.mkdir()
+            (repo / "out").symlink_to(outside)
+            (repo / "sub").mkdir()
+            (repo / "in").symlink_to(repo / "sub")
+            left = self.run_gate("cd out && git log -1", cwd=repo)
+            self.assertEqual(left.returncode, 2, left.stderr)
+            self.assertIn("may move the shell out of this checkout", left.stderr)
+            stayed = self.run_gate("cd in && git log -1", cwd=repo)
+            self.assertEqual(stayed.returncode, 0, stayed.stderr)
 
     def test_an_environment_assignment_really_runs_a_program_of_its_own(self) -> None:
         # The reach the environment rule exists for, run rather than reasoned

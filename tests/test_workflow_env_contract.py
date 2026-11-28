@@ -324,6 +324,8 @@ class WorkflowEnvContractTests(unittest.TestCase):
             {
                 "check-akmods-cache",
                 "check-stable-signal",
+                "copy-held-base",
+                "held-base-copy-status",
                 "prepare-validation-build",
                 "promote-stable",
                 "write-last-good-build-badge",
@@ -333,7 +335,14 @@ class WorkflowEnvContractTests(unittest.TestCase):
             command for command in ENTRY_POINTS if CREDENTIAL_PAIR <= _reads(command).required
         }
         self.assertEqual(
-            required, {"check-akmods-cache", "check-stable-signal", "promote-stable"}
+            required,
+            {
+                "check-akmods-cache",
+                "check-stable-signal",
+                "copy-held-base",
+                "held-base-copy-status",
+                "promote-stable",
+            },
         )
 
 

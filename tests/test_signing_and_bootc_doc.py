@@ -898,7 +898,8 @@ class CredentialMechanismTests(unittest.TestCase):
 
         source = COMMON.read_text(encoding="utf-8")
         self.assertIn('command.extend(["--authfile", registry_auth_file(auth_dir)])', source)
-        self.assertIn('["--src-authfile", auth_file, "--dest-authfile", auth_file]', source)
+        self.assertIn('command.extend(["--src-authfile", auth_file])', source)
+        self.assertIn('command.extend(["--dest-authfile", auth_file])', source)
         self.assertIn('env={"DOCKER_CONFIG": auth_dir}', source)
         for token in ("--authfile", "--src-authfile", "--dest-authfile", "DOCKER_CONFIG"):
             with self.subTest(token=token):

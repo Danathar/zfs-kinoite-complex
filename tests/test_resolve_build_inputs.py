@@ -1372,6 +1372,13 @@ class FindHeldBaseTagTests(unittest.TestCase):
         )
         self.assertEqual(found[:2], (self.COPIES, "44.20260820.0"))
 
+    def test_a_trusted_copy_dated_today_is_used(self) -> None:
+        upstream = {"44.20261118.0": "7.3.4-200.fc44.x86_64"}
+        found, _ = self._find_in(
+            upstream, {"44.20261118.0": "7.2.1-200.fc44.x86_64"}, trusted="44.20261118.0"
+        )
+        self.assertEqual(found[:2], (self.COPIES, "44.20261118.0"))
+
     def test_a_trusted_copy_dated_after_today_is_never_used(self) -> None:
         upstream = {"44.20261118.0": "7.3.4-200.fc44.x86_64"}
         with self.assertRaises(CiToolError) as caught:
@@ -1895,6 +1902,20 @@ class ResolveBuildInputsKernelHoldTests(unittest.TestCase):
         self.assertIn("not " + HOLD_HELD_DIGEST, str(caught.exception))
         self.assertEqual(self.pulled, [])
 
+    def test_a_copy_tag_that_resolves_to_no_digest_is_refused(self) -> None:
+        empty = ("7.2.15-200.fc44.x86_64", "44.20261110.0", "")
+        copies = {"44.20261110.0": empty, "other": HOLD_TAGS["44.20261110.0"]}
+        with self.assertRaises(CiToolError) as caught:
+            self._resolve(tags=HOLD_GONE, copies=copies)
+        self.assertIn("resolves to no digest, not " + HOLD_HELD_DIGEST, str(caught.exception))
+
+    def test_a_run_on_an_upstream_base_needs_no_token(self) -> None:
+        # Only a base that is the private copy needs the job's token; everything else is
+        # anonymous, so a pull request from a fork still resolves.
+        inputs = self._resolve(token=False).inputs
+        self.assertEqual(inputs.base_image_name, self.NAME)
+        self.assertEqual(self.pull_auth, [None])
+
     def test_an_unsigned_latest_fails_loudly_and_builds_nothing(self) -> None:
         with self.assertRaises(CiToolError) as caught:
             self._resolve(
@@ -2032,7 +2053,7 @@ class ResolveBuildInputsKernelHoldTests(unittest.TestCase):
                     token=False,
                 )
         self.assertIn("REGISTRY_TOKEN", str(caught.exception))
-        self.assertIn("locked base", str(caught.exception))
+        self.assertIn("held-base copy", str(caught.exception))
 
     def test_a_held_run_says_so_and_exports_the_held_kernel(self) -> None:
         resolution = self._resolve()

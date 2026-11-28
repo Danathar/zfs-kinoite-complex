@@ -12,6 +12,18 @@
       "operator": "core/ReplaceBinaryOperator_Mul_Div",
       "line": "def held_base_copy_exists(copy_ref: str, *, creds: str) -> bool:",
       "reason": "The mutant turns the keyword-only marker `*` into the positional-only marker `/`, so `copy_ref` can no longer be passed by keyword. Every caller passes it first and `creds` by keyword, which both signatures accept, so no input tells them apart."
+    },
+    {
+      "module": "ci_tools/held_base_copy.py",
+      "operator": "core/ReplaceBinaryOperator_Mul_Div",
+      "line": "def _existing_copy_tag(tag_ref: str, *, creds: str) -> dict | None:",
+      "reason": "The mutant turns the keyword-only marker `*` into the positional-only marker `/`, so the first parameter can no longer be passed by keyword. Its one caller passes `tag_ref` first and `creds` by keyword, which both signatures accept, so no input tells them apart."
+    },
+    {
+      "module": "ci_tools/resolve_build_inputs.py",
+      "operator": "core/ReplaceBinaryOperator_Mul_Div",
+      "line": "def detect_base_image_kernel_releases(image_ref: str, *, creds: str | None = None) -> list[str]:",
+      "reason": "The mutant turns the keyword-only marker `*` into the positional-only marker `/`, so the first parameter can no longer be passed by keyword. Every caller passes `image_ref` first and `creds` by keyword, which both signatures accept, so no input tells them apart."
     }
   ]
 }

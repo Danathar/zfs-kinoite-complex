@@ -700,20 +700,19 @@ def resolve_build_inputs() -> BuildInputResolution:
     zfs_version = configured.locked_zfs_version or resolve_latest_zfs_version(zfs_minor_version)
     akmods_upstream_ref = configured.akmods_upstream_ref
 
-    # A lock-file replay of a run whose base was this repository's private copy names that
-    # copy, which only the job's token can read. Every other base is read anonymously.
+    # A base that is this repository's private copy, such as a lock-file replay of a run that
+    # was built on it, can only be read with the job's token. Every other base is read
+    # anonymously.
     kernel_held_from = ""
     copy_repository = ""
     copy_creds: str | None = None
     owner = optional_env("GITHUB_REPOSITORY_OWNER")
-    replayed_copy = (
-        held_base_repository(normalize_owner(owner)) if owner and use_input_lock else ""
-    )
-    if replayed_copy and base_image_ref.startswith((f"{replayed_copy}:", f"{replayed_copy}@")):
+    copy_package = held_base_repository(normalize_owner(owner)) if owner else ""
+    if copy_package and base_image_ref.startswith((f"{copy_package}:", f"{copy_package}@")):
         copy_creds = registry_creds_from_env()
         if not copy_creds:
             raise HeldBaseCopiesUnreadable(
-                f"The locked base {base_image_ref} is this repository's private held-base copy, "
+                f"The base {base_image_ref} is this repository's private held-base copy, "
                 "which needs the job's token to be read, but REGISTRY_ACTOR and REGISTRY_TOKEN "
                 "are not both set for this step."
             )

@@ -57,10 +57,13 @@ CONFIRM_STEP = "Confirm the pushed digest"
 SIGN_STEP = "Sign candidate image"
 PROMOTE_STEP = "Point the candidate tag at the signed digest"
 
-# PATH must reach the stubs and must NOT reach a real buildah/podman/skopeo, which live in
-# /usr/bin on a runner. Only the stub directory plus a shell is offered, so an unstubbed call
-# fails with "command not found" instead of contacting a registry.
+# PATH has to keep /usr/bin and /bin because the steps need coreutils, and real container
+# tools live there on a runner or a developer machine. So every container tool is stubbed in a
+# directory placed first on PATH, and `_resolve_container_tools` proves each one resolves to
+# its stub before a step runs. Shells are started with `--norc --noprofile` and no stdin so a
+# developer's `~/.bashrc` cannot reorder PATH and let the real tool through.
 SAFE_PATH = "/usr/bin:/bin"
+CONTAINER_TOOLS = ("buildah", "podman", "skopeo", "cosign")
 
 REGISTRY = "ghcr.io/danathar"
 IMAGE = "zfs-kinoite-complex"
@@ -173,6 +176,29 @@ def _step_body(name: str, where: str = "action") -> str:
     return body
 
 
+def _resolve_container_tools(env: dict[str, str]) -> dict[str, str]:
+    """Where a step's shell would find each container tool, resolved with the step's own env."""
+
+    resolved = subprocess.run(
+        [
+            "bash",
+            "--norc",
+            "--noprofile",
+            "-c",
+            'for tool in "$@"; do printf "%s=%s\\n" "${tool}" "$(command -v "${tool}")"; done',
+            "resolve",
+            *CONTAINER_TOOLS,
+        ],
+        env=env,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    return dict(line.split("=", 1) for line in resolved.stdout.splitlines())
+
+
 class Result:
     """What a step leaves behind: its exit status, its output, and every tool call it made."""
 
@@ -182,7 +208,11 @@ class Result:
         calls: list[str],
         auth: str = "",
         outputs: str = "",
+        tool_paths: dict[str, str] | None = None,
+        stub_dir: str = "",
     ):
+        self.tool_paths = tool_paths or {}
+        self.stub_dir = stub_dir
         self.returncode = completed.returncode
         self.outputs = outputs.splitlines()
         self.stdout = completed.stdout
@@ -218,7 +248,7 @@ class PublishActionStepTests(unittest.TestCase):
             root = Path(tmp)
             bindir = root / "bin"
             bindir.mkdir()
-            for tool in ("buildah", "podman", "skopeo"):
+            for tool in CONTAINER_TOOLS:
                 stub = bindir / tool
                 stub.write_text(STUB, encoding="utf-8")
                 stub.chmod(0o755)
@@ -257,9 +287,18 @@ class PublishActionStepTests(unittest.TestCase):
                 "IMAGE_DIGEST": SIGNED_DIGEST,
             }
 
+            # Checked before the step runs so a real tool is never reached to find out.
+            tool_paths = _resolve_container_tools(env)
+            self.assertEqual(
+                tool_paths,
+                {tool: str(bindir / tool) for tool in CONTAINER_TOOLS},
+                "a container tool resolves outside the stub directory; refusing to run the step",
+            )
+
             completed = subprocess.run(
-                ["bash", "-c", _step_body(step_name, where)],
+                ["bash", "--norc", "--noprofile", "-c", _step_body(step_name, where)],
                 env=env,
+                stdin=subprocess.DEVNULL,
                 cwd=tmp,
                 capture_output=True,
                 text=True,
@@ -273,7 +312,7 @@ class PublishActionStepTests(unittest.TestCase):
             ]
             captured = auth.read_text(encoding="utf-8") if auth.exists() else ""
             written = outputs.read_text(encoding="utf-8") if outputs.exists() else ""
-            return Result(completed, recorded, captured, written)
+            return Result(completed, recorded, captured, written, tool_paths, str(bindir))
 
     def _promote(self, **kwargs) -> Result:
         """Promote against a registry that already holds the pushed transient tag."""
@@ -286,6 +325,22 @@ class PublishActionStepTests(unittest.TestCase):
         return self._run(PROMOTE_STEP, where="build", registry_contents=contents, **kwargs)
 
     # -- retag -------------------------------------------------------------
+
+    def test_every_container_tool_resolves_to_its_stub(self) -> None:
+        """
+        A unit test must never reach a real container tool.
+
+        A developer's shell startup file can put /usr/bin ahead of the stub directory, and a
+        tool with no stub falls through to the real one. This pins that buildah, podman,
+        skopeo and cosign each resolve to the stub of that name for a publish step.
+        """
+
+        result = self._run(PUSH_STEP)
+
+        self.assertEqual(
+            result.tool_paths,
+            {tool: f"{result.stub_dir}/{tool}" for tool in CONTAINER_TOOLS},
+        )
 
     def test_the_transient_tag_is_cut_from_the_locally_built_image(self) -> None:
         """

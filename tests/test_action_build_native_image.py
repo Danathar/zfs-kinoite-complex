@@ -53,10 +53,13 @@ ACTION_PATH = REPO_ROOT / ".github" / "actions" / "build-native-image" / "action
 ANNOUNCE_STEP = "Show pinned akmods cache input"
 BUILD_STEP = "Build image with buildah"
 
-# PATH must reach the stub and must NOT reach a real buildah, which lives in /usr/bin on a
-# runner. Only the stub directory plus a shell is offered, so an unstubbed call fails with
-# "command not found" instead of contacting a registry.
+# PATH has to keep /usr/bin and /bin because the steps need coreutils, and a real buildah
+# lives there on a runner or a developer machine. So every container tool is stubbed in a
+# directory placed first on PATH, and `_resolve_container_tools` proves each one resolves to
+# its stub before a step runs. Shells are started with `--norc --noprofile` and no stdin so a
+# developer's `~/.bashrc` cannot reorder PATH and let the real tool through.
 SAFE_PATH = "/usr/bin:/bin"
+CONTAINER_TOOLS = ("buildah", "podman", "skopeo", "cosign")
 
 # One realistic set of `with:` values, matching what .github/workflows/build.yml passes: the
 # base, akmods and brew refs arrive already digest-pinned by the preceding jobs.
@@ -172,6 +175,29 @@ def _step_env(name: str, inputs: dict[str, str]) -> dict[str, str]:
     return resolved
 
 
+def _resolve_container_tools(env: dict[str, str]) -> dict[str, str]:
+    """Where a step's shell would find each container tool, resolved with the step's own env."""
+
+    resolved = subprocess.run(
+        [
+            "bash",
+            "--norc",
+            "--noprofile",
+            "-c",
+            'for tool in "$@"; do printf "%s=%s\\n" "${tool}" "$(command -v "${tool}")"; done',
+            "resolve",
+            *CONTAINER_TOOLS,
+        ],
+        env=env,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    return dict(line.split("=", 1) for line in resolved.stdout.splitlines())
+
+
 class Result:
     """What a step leaves behind: its exit status, its output, and buildah's exact argv."""
 
@@ -181,7 +207,11 @@ class Result:
         argv: list[str],
         auth: str | None = None,
         auth_mode: str | None = None,
+        tool_paths: dict[str, str] | None = None,
+        stub_dir: str = "",
     ):
+        self.tool_paths = tool_paths or {}
+        self.stub_dir = stub_dir
         self.auth = auth
         self.auth_mode = auth_mode
         self.returncode = completed.returncode
@@ -218,9 +248,10 @@ class BuildActionStepTests(unittest.TestCase):
             root = Path(tmp)
             bindir = root / "bin"
             bindir.mkdir()
-            stub = bindir / "buildah"
-            stub.write_text(STUB, encoding="utf-8")
-            stub.chmod(0o755)
+            for tool in CONTAINER_TOOLS:
+                stub = bindir / tool
+                stub.write_text(STUB, encoding="utf-8")
+                stub.chmod(0o755)
 
             argv_log = root / "argv"
             argv_log.touch()
@@ -236,9 +267,18 @@ class BuildActionStepTests(unittest.TestCase):
             }
             env.update(_step_env(step_name, supplied))
 
+            # Checked before the step runs so a real tool is never reached to find out.
+            tool_paths = _resolve_container_tools(env)
+            self.assertEqual(
+                tool_paths,
+                {tool: str(bindir / tool) for tool in CONTAINER_TOOLS},
+                "a container tool resolves outside the stub directory; refusing to run the step",
+            )
+
             completed = subprocess.run(
-                ["bash", "-c", _step_body(step_name)],
+                ["bash", "--norc", "--noprofile", "-c", _step_body(step_name)],
                 env=env,
+                stdin=subprocess.DEVNULL,
                 cwd=tmp,
                 capture_output=True,
                 text=True,
@@ -256,7 +296,27 @@ class BuildActionStepTests(unittest.TestCase):
                 recorded,
                 auth_file.read_text(encoding="utf-8") if auth_file.exists() else None,
                 mode_file.read_text(encoding="utf-8").strip() if mode_file.exists() else None,
+                tool_paths,
+                str(bindir),
             )
+
+    # -- the harness itself ------------------------------------------------
+
+    def test_every_container_tool_resolves_to_its_stub(self) -> None:
+        """
+        A unit test must never reach a real container tool.
+
+        A developer's shell startup file can put /usr/bin ahead of the stub directory, and a
+        tool with no stub falls through to the real one. This pins that buildah, podman,
+        skopeo and cosign each resolve to the stub of that name for the build step.
+        """
+
+        result = self._run(BUILD_STEP)
+
+        self.assertEqual(
+            result.tool_paths,
+            {tool: f"{result.stub_dir}/{tool}" for tool in CONTAINER_TOOLS},
+        )
 
     # -- the build contract ------------------------------------------------
 

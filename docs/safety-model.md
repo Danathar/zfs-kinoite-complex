@@ -34,7 +34,7 @@ the image (the `org.zfs-kinoite-complex.kernel-held-from` label), and keeps a
 Because quay.io deletes a dated Kinoite tag after four weeks, a held main
 build keeps its own copy of the held base, at the same digest, in the
 `zfs-kinoite-complex-held-base` package, and a later held build may stand on
-that copy. A held candidate is never promoted over a `latest` on a newer
+that copy only at the digest its signed `latest` was built on. A held candidate is never promoted over a `latest` on a newer
 base. A held image is behind on all of Fedora, not only the kernel, which is
 why the hold is limited to 90 days; see "Kernel Hold" in
 [`architecture-overview.md`](./architecture-overview.md).

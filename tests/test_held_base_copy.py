@@ -117,6 +117,7 @@ class CopyHeldBaseTests(unittest.TestCase):
         base_image_name: str = SOURCE_NAME,
         by_digest_readable: bool = True,
         by_digest_refusal: Exception | None = None,
+        tag_probe_refusal: Exception | None = None,
     ):
         """
         Run `copy_held_base` against a fake registry, with the real `held_base_copy_exists`.
@@ -124,11 +125,14 @@ class CopyHeldBaseTests(unittest.TestCase):
         `tag_digest` is what the copy's version tag already holds (None: nothing yet).
         `copied_digest` is what that tag holds after a copy. `by_digest_readable` and
         `by_digest_refusal` say what the token sees when it reads the copy by digest.
+        `tag_probe_refusal` is raised when the copy's version tag is probed before the copy.
         """
 
         def optional(ref: str, *, creds: str | None = None) -> dict | None:
             self.assertEqual(creds, CREDS, f"{ref} was read without the token")
             if ref == COPY_BY_TAG:
+                if tag_probe_refusal is not None:
+                    raise tag_probe_refusal
                 return None if tag_digest is None else {"Digest": tag_digest}
             self.assertEqual(ref, COPY_BY_DIGEST)
             if by_digest_refusal is not None:
@@ -245,6 +249,39 @@ class CopyHeldBaseTests(unittest.TestCase):
             self.run_copy(version="latest")
         self.assertIn("not a dated base version", str(caught.exception))
         self.assertEqual(self.copy_calls, [])
+
+    def test_a_refused_probe_before_the_first_copy_goes_on_to_copy(self) -> None:
+        # GHCR may answer a read of a package nobody has created with `denied`. The first run
+        # must not depend on telling that from "no such tag" (#628 item 3): it copies, and the
+        # digest check and the read-back check decide.
+        for message in (
+            "denied: permission_denied",
+            "unauthorized: authentication required",
+            "403 Forbidden",
+            "401 Unauthorized",
+        ):
+            with self.subTest(message=message):
+                self.assertEqual(
+                    self.run_copy(tag_probe_refusal=CiToolError(message)), COPY_BY_DIGEST
+                )
+                self.assertEqual(len(self.copy_calls), 1)
+                self.digest.assert_called_once_with(COPY_BY_TAG, creds=CREDS)
+
+    def test_a_refused_probe_still_ends_in_the_digest_and_read_back_checks(self) -> None:
+        refused = CiToolError("denied: permission_denied")
+        with self.subTest("digest"), self.assertRaises(CiToolError) as caught:
+            self.run_copy(tag_probe_refusal=refused, copied_digest="sha256:" + "8" * 64)
+        self.assertIn("digest mismatch", str(caught.exception))
+        with self.subTest("read-back"), self.assertRaises(CiToolError) as caught:
+            self.run_copy(tag_probe_refusal=refused, by_digest_refusal=refused)
+        self.assertIn("cannot read it back", str(caught.exception))
+
+    def test_any_other_error_probing_the_tag_still_fails_the_run(self) -> None:
+        # "Could not tell" is never read as "no copy yet": nothing is copied.
+        for message in ("toomanyrequests", "connection reset by peer"):
+            with self.subTest(message=message), self.assertRaises(CiToolError):
+                self.run_copy(tag_probe_refusal=CiToolError(message))
+            self.assertEqual(self.copy_calls, [])
 
     def test_a_copy_the_token_cannot_read_back_fails_the_run_loudly(self) -> None:
         # The post-copy check asks the gate's own existence function. If it cannot see the copy,

@@ -117,8 +117,15 @@ runs:
         # goes into a 0600 file in a fresh directory, never into argv, and
         # only for a base in that package (ci_tools.resolve_build_inputs
         # HELD_BASE_PACKAGE); any other base is pulled anonymously.
+        #
+        # The entry is keyed to that one repository, not to ghcr.io. buildah
+        # offers an auth entry to every stage of the build, and the Containerfile
+        # also has `FROM ghcr.io/ublue-os/brew@...`, another owner's image, which
+        # must stay anonymous. containers-auth.json takes repository-scoped keys
+        # and uses the most specific match.
         auth_args=()
-        if [[ "${BASE_IMAGE}" == "${IMAGE_REPO%/*}/zfs-kinoite-complex-held-base@"* ]]; then
+        held_repository="${IMAGE_REPO%/*}/zfs-kinoite-complex-held-base"
+        if [[ "${BASE_IMAGE}" == "${held_repository}@"* ]]; then
           if [[ -z "${REGISTRY_USERNAME}" || -z "${REGISTRY_PASSWORD}" ]]; then
             echo "The base image ${BASE_IMAGE} is this repository's private held-base copy, but no registry credential was passed to read it." >&2
             exit 1
@@ -126,8 +133,14 @@ runs:
           umask 077
           auth_dir="$(mktemp -d)"
           trap 'rm -rf "${auth_dir}"' EXIT
-          printf '{"auths":{"ghcr.io":{"auth":"%s"}}}' \
-            "$(printf '%s:%s' "${REGISTRY_USERNAME}" "${REGISTRY_PASSWORD}" | base64 -w0)" \
+          # The encode lands in a variable first so that `set -e` sees a failure
+          # here: inlined in printf's arguments, a failed substitution would write
+          # an empty credential and push on. The pair goes in on stdin, so it is
+          # never argv of anything.
+          encoded_credential="$(printf '%s' "${REGISTRY_USERNAME}:${REGISTRY_PASSWORD}" | base64 -w0)"
+          printf '{"auths":{"%s":{"auth":"%s"}}}\n' \
+            "${held_repository}" \
+            "${encoded_credential}" \
             > "${auth_dir}/config.json"
           auth_args=(--authfile "${auth_dir}/config.json")
         fi

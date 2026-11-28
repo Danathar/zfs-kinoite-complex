@@ -20,7 +20,9 @@ from ci_tools.common import (
     REGISTRY_METADATA_TIMEOUT,
     REGISTRY_RETRY_ATTEMPTS,
     REGISTRY_TRANSFER_TIMEOUT,
+    REPO_ROOT,
     CiToolError,
+    cosign_verify,
     extract_fedora_version,
     git_ls_remote_resolve,
     is_missing_image_error,
@@ -38,6 +40,7 @@ from ci_tools.common import (
     run_json_cmd,
     skopeo_inspect_digest,
     skopeo_inspect_json,
+    skopeo_inspect_json_optional,
     sort_kernel_releases,
     write_github_outputs,
 )
@@ -74,6 +77,8 @@ KERNEL_HOLD_MAX_DAYS = 90
 HELD_BASE_PACKAGE = "zfs-kinoite-complex-held-base"
 # Inherited from the Kinoite base, so it names the dated base an image was built on.
 BASE_VERSION_LABEL = "org.opencontainers.image.version"
+# The digest-pinned base an image was built on, written by `build-native-image`.
+BASE_IMAGE_LABEL = "org.zfs-kinoite-complex.base-image"
 
 
 class HeldBaseCopiesUnreadable(CiToolError):
@@ -293,14 +298,15 @@ def dated_base_tags_newest_first(
     """
     Return the plain dated base tags for one Fedora release, newest first.
 
-    Only tags dated within `lookback_days` of `today` are kept, so a hold can
-    never reach for an arbitrarily old base.
+    Only tags dated from `lookback_days` before `today` up to `today` are kept, so a hold can
+    never reach for an arbitrarily old base, and a tag dated in the future, which no real daily
+    build can have, never outranks a real one.
     """
     earliest = today - timedelta(days=lookback_days)
     dated: list[tuple[tuple[int, date, int], str]] = []
     for tag in tags:
         key = dated_base_version_key(tag)
-        if key is None or str(key[0]) != fedora_version or key[1] < earliest:
+        if key is None or str(key[0]) != fedora_version or not earliest <= key[1] <= today:
             continue
         dated.append((key, tag))
     return [tag for _, tag in sorted(dated, reverse=True)]
@@ -311,19 +317,11 @@ def _utc_today() -> date:
     return datetime.now(UTC).date()
 
 
-def list_base_image_tags(base_image_name: str, *, creds: str | None = None) -> list[str]:
-    """
-    Return every tag in the base image repository.
-
-    Upstream is read anonymously. `creds` is only for this repository's private held-base copy
-    package; it reaches `skopeo` as an auth file, never on the command line.
-    """
-    with registry_auth_dir(creds, f"docker://{base_image_name}") as auth_dir:
-        command = ["skopeo", "list-tags"]
-        if auth_dir:
-            command.extend(["--authfile", registry_auth_file(auth_dir)])
-        command.append(f"docker://{base_image_name}")
-        listing = run_json_cmd(command, timeout=REGISTRY_METADATA_TIMEOUT)
+def list_base_image_tags(base_image_name: str) -> list[str]:
+    """Return every tag in the upstream base image repository, read anonymously."""
+    listing = run_json_cmd(
+        ["skopeo", "list-tags", f"docker://{base_image_name}"], timeout=REGISTRY_METADATA_TIMEOUT
+    )
     tags = listing.get("Tags")
     if not isinstance(tags, list):
         raise CiToolError(f"Missing tag list in skopeo list-tags output for {base_image_name}")
@@ -335,34 +333,60 @@ def held_base_repository(image_org: str) -> str:
     return f"ghcr.io/{image_org}/{HELD_BASE_PACKAGE}"
 
 
-def list_held_base_copy_tags(repository: str, *, creds: str | None) -> list[str]:
+def trusted_held_copy_digest(
+    *, image_org: str, image_name: str, creds: str | None, key_path: str | None = None
+) -> str:
     """
-    Return every tag in the private held-base copy package, read with the job's token.
+    Return the one digest a held-base copy may have, from this repository's signed `:latest`.
 
-    A package that does not exist yet reads as having no copies. A refusal raises
-    `HeldBaseCopiesUnreadable` instead, because GHCR may answer even an authenticated read of a
-    package that was never created with `denied`: nothing here depends on telling the two apart.
-    The caller decides whether it matters, and it only does once no upstream tag is left.
+    The copy package is writable by any workflow run in this repository that declares
+    `packages: write`, so what is in it is not evidence of anything. The only record this
+    repository signs is its own promoted image. This reads `:latest`, pins it by digest, checks
+    its cosign signature against the committed `cosign.pub` (the same check the akmods cache
+    gets), and returns the digest of the base it was built on, from its
+    `org.zfs-kinoite-complex.base-image` label. A copy is used as a base only at that digest.
+
+    Raises `CiToolError`, naming the reason, when `:latest` is missing, unsigned or unverifiable,
+    or records no base digest. Nothing here falls back to an unverified copy.
     """
     if not creds:
         raise HeldBaseCopiesUnreadable(
-            f"{repository} is private and needs the job's token to be read, but REGISTRY_ACTOR "
-            "and REGISTRY_TOKEN are not both set for this step. A pull request from a fork "
-            "cannot read it."
+            f"The held base copy at {held_base_repository(image_org)} is private and is trusted "
+            "only through this repository's signed :latest image, which needs the job's token "
+            "to read, but REGISTRY_ACTOR and REGISTRY_TOKEN are not both set for this step. A "
+            "pull request from a fork cannot read it."
         )
+    latest_ref = f"ghcr.io/{image_org}/{image_name}:latest"
     try:
-        return list_base_image_tags(repository, creds=creds)
+        latest = skopeo_inspect_json_optional(f"docker://{latest_ref}", creds=creds)
     except CiToolError as exc:
-        message = str(exc)
-        if is_missing_image_error(message):
-            return []
-        if is_registry_permission_error(message):
-            raise HeldBaseCopiesUnreadable(
-                f"{repository} could not be read with the job's token (REGISTRY_TOKEN): the "
-                f"package may not exist yet, or the token may not be allowed to read it "
-                f"({message.strip()})"
-            ) from exc
-        raise
+        raise CiToolError(
+            f"Cannot trust a held base copy: reading {latest_ref} failed ({exc})"
+        ) from exc
+    latest_digest = str((latest or {}).get("Digest") or "")
+    if not latest_digest:
+        raise CiToolError(
+            f"Cannot trust a held base copy: {latest_ref} does not exist, so no signed image "
+            "records which base a copy may be."
+        )
+    pinned_latest = f"ghcr.io/{image_org}/{image_name}@{latest_digest}"
+    try:
+        cosign_verify(
+            pinned_latest, key_path=key_path or str(REPO_ROOT / "cosign.pub"), creds=creds
+        )
+    except CiToolError as exc:
+        raise CiToolError(
+            f"Cannot trust a held base copy: the signature on {latest_ref} ({latest_digest}) "
+            f"did not verify against cosign.pub, so the base it records is not trusted ({exc})"
+        ) from exc
+    recorded_base = str(((latest or {}).get("Labels") or {}).get(BASE_IMAGE_LABEL) or "")
+    _, separator, base_digest = recorded_base.rpartition("@")
+    if not separator or not re.fullmatch(r"sha256:[0-9a-f]{64}", base_digest):
+        raise CiToolError(
+            f"Cannot trust a held base copy: the signed {latest_ref} has no usable "
+            f"{BASE_IMAGE_LABEL} label ({recorded_base!r}), so it records no base digest."
+        )
+    return base_digest
 
 
 def _base_kernel_is_supported(inspect_json: dict, linux_maximum: str) -> bool:
@@ -381,28 +405,29 @@ def find_held_base(
     linux_maximum: str,
     today: date,
     list_tags: Callable[[str], list[str]] = list_base_image_tags,
-    list_copy_tags: Callable[[str], list[str]],
+    trusted_copy_digest: Callable[[], str],
     inspect: Callable[[str], dict] = skopeo_inspect_json,
     inspect_copy: Callable[[str], dict],
-) -> tuple[str, str]:
+) -> tuple[str, str, str]:
     """
-    Return `(repository, tag)` of the newest dated base whose kernel OpenZFS supports.
+    Return `(repository, tag, trusted_digest)` of the newest base whose kernel OpenZFS supports.
 
-    Candidates are one Fedora release's dated tags no older than `KERNEL_HOLD_MAX_DAYS` by their
-    own date. Upstream first: the newest supported upstream tag wins while one remains. Only when
-    none does are this repository's copies read, and then the newest supported copy wins.
+    Upstream first: candidates are one Fedora release's dated tags no older than
+    `KERNEL_HOLD_MAX_DAYS` by their own date and none dated after `today`, and the newest
+    supported one wins while one remains. Its `trusted_digest` is "" because the caller pins it
+    from the quay.io tag as before.
 
-    That order is the newest base by date. quay.io keeps every dated tag for four weeks and
-    expires the oldest first, so while any supported upstream tag remains it is at least as new
-    as every copy, and promotion's `refuse_held_base_older_than_latest` cannot be tripped by
-    preferring it. It also means the first run, before the copy package exists, never reads it.
+    Only when no upstream tag qualifies is this repository's copy package consulted, and then
+    never by listing it, because anything that can write the package can plant a tag in it.
+    `trusted_copy_digest()` returns the one digest a copy may have, taken from this repository's
+    signed `:latest` (see `trusted_held_copy_digest`). The copy at that digest is looked up by
+    digest, and it qualifies only if its own version label is a dated base of this Fedora release
+    inside the window and its kernel is supported. If `:latest` cannot be verified, the copy is
+    missing, or it does not qualify, the run fails naming that reason; nothing falls back to a
+    newer-looking tag.
 
-    When the copies are needed and cannot be read, `HeldBaseCopiesUnreadable` propagates and the
-    run fails naming the package and the token. If nothing qualifies, the run fails as it did
-    before the copies existed.
-
-    The label only chooses the tag. The caller still pins the tag's digest and reads the real
-    kernel from `/lib/modules` before building on it.
+    The caller still pins the base by digest and reads the real kernel from `/lib/modules` before
+    building on it.
     """
     window = {
         "fedora_version": fedora_version,
@@ -411,16 +436,46 @@ def find_held_base(
     }
     for tag in dated_base_tags_newest_first(list_tags(base_image_name), **window):
         if _base_kernel_is_supported(inspect(f"docker://{base_image_name}:{tag}"), linux_maximum):
-            return base_image_name, tag
-    for tag in dated_base_tags_newest_first(list_copy_tags(copy_repository), **window):
-        if _base_kernel_is_supported(inspect_copy(f"docker://{copy_repository}:{tag}"), linux_maximum):
-            return copy_repository, tag
-    raise CiToolError(
-        f"No Fedora {fedora_version} base image from the last {KERNEL_HOLD_MAX_DAYS} days, in "
-        f"{base_image_name} or in this repository's copies at {copy_repository}, has a kernel "
-        f"OpenZFS supports (Linux-Maximum {linux_maximum}), so there is no base to hold the "
-        "build on."
+            return base_image_name, tag, ""
+
+    trusted_digest = trusted_copy_digest()
+    copy_ref = f"docker://{copy_repository}@{trusted_digest}"
+    try:
+        copy_inspect = inspect_copy(copy_ref)
+    except CiToolError as exc:
+        message = str(exc)
+        if is_registry_permission_error(message):
+            raise HeldBaseCopiesUnreadable(
+                f"{copy_repository} could not be read with the job's token (REGISTRY_TOKEN): "
+                f"the package may not exist yet, or the token may not be allowed to read it "
+                f"({message.strip()})"
+            ) from exc
+        if is_missing_image_error(message):
+            raise CiToolError(
+                f"No Fedora {fedora_version} base image from the last {KERNEL_HOLD_MAX_DAYS} days "
+                f"in {base_image_name} has a kernel OpenZFS supports (Linux-Maximum "
+                f"{linux_maximum}), and the base the signed :latest was built on "
+                f"({trusted_digest}) has no copy in {copy_repository}. A copy made by a build "
+                "that never became :latest is not trusted, so there is no base to hold the "
+                "build on."
+            ) from exc
+        raise
+    version = str((copy_inspect.get("Labels") or {}).get(BASE_VERSION_LABEL) or "")
+    key = dated_base_version_key(version)
+    in_window = (
+        key is not None
+        and str(key[0]) == fedora_version
+        and today - timedelta(days=KERNEL_HOLD_MAX_DAYS) <= key[1] <= today
     )
+    if not in_window or not _base_kernel_is_supported(copy_inspect, linux_maximum):
+        raise CiToolError(
+            f"No Fedora {fedora_version} base image from the last {KERNEL_HOLD_MAX_DAYS} days, in "
+            f"{base_image_name} or in this repository's copy at {copy_ref}, has a kernel "
+            f"OpenZFS supports (Linux-Maximum {linux_maximum}): the copy the signed :latest was "
+            f"built on is version {version!r}, which is outside the hold window, another Fedora "
+            "release, or on an unsupported kernel, so there is no base to hold the build on."
+        )
+    return copy_repository, version, trusted_digest
 
 
 def _load_lock_file(lock_file_path: str) -> dict:
@@ -645,9 +700,31 @@ def resolve_build_inputs() -> BuildInputResolution:
     zfs_version = configured.locked_zfs_version or resolve_latest_zfs_version(zfs_minor_version)
     akmods_upstream_ref = configured.akmods_upstream_ref
 
+    # A lock-file replay of a run whose base was this repository's private copy names that
+    # copy, which only the job's token can read. Every other base is read anonymously.
+    kernel_held_from = ""
+    copy_repository = ""
+    copy_creds: str | None = None
+    owner = optional_env("GITHUB_REPOSITORY_OWNER")
+    replayed_copy = (
+        held_base_repository(normalize_owner(owner)) if owner and use_input_lock else ""
+    )
+    if replayed_copy and base_image_ref.startswith((f"{replayed_copy}:", f"{replayed_copy}@")):
+        copy_creds = registry_creds_from_env()
+        if not copy_creds:
+            raise HeldBaseCopiesUnreadable(
+                f"The locked base {base_image_ref} is this repository's private held-base copy, "
+                "which needs the job's token to be read, but REGISTRY_ACTOR and REGISTRY_TOKEN "
+                "are not both set for this step."
+            )
+
+    def copy_read_options() -> dict[str, str]:
+        """The token option for a read of the private copy; nothing for any upstream read."""
+        return {"creds": copy_creds} if copy_creds else {}
+
     # Read base image metadata from registry.
     # Labels carry kernel information and stream version information.
-    base_inspect_json = skopeo_inspect_json(f"docker://{base_image_ref}")
+    base_inspect_json = skopeo_inspect_json(f"docker://{base_image_ref}", **copy_read_options())
     base_image_name = str(base_inspect_json.get("Name") or "")
     base_image_digest = str(base_inspect_json.get("Digest") or "")
     labels = base_inspect_json.get("Labels") or {}
@@ -666,29 +743,23 @@ def resolve_build_inputs() -> BuildInputResolution:
     # private copy package; `base_image_name` then names that package, so
     # everything below pins, pulls and tags the copy, and reads it with the
     # job's token (`copy_creds`). Upstream reads stay anonymous.
-    kernel_held_from = ""
-    copy_repository = ""
-    copy_creds: str | None = None
-
-    def copy_read_options() -> dict[str, str]:
-        """The token option for a read of the private copy; nothing for any upstream read."""
-        return {"creds": copy_creds} if copy_creds else {}
-
     linux_maximum = "" if use_input_lock else resolve_linux_maximum(zfs_version)
     if not use_input_lock and kernel_exceeds_maximum(label_kernel_release, linux_maximum):
         kernel_held_from = label_kernel_release
         image_org = normalize_owner(require_env("GITHUB_REPOSITORY_OWNER"))
         copy_repository = held_base_repository(image_org)
         held_creds = registry_creds_from_env()
-        held_repository, held_tag = find_held_base(
+        held_repository, held_tag, trusted_digest = find_held_base(
             base_image_name=base_image_name,
             copy_repository=copy_repository,
             fedora_version=extract_fedora_version(label_kernel_release),
             linux_maximum=linux_maximum,
             today=_utc_today(),
             list_tags=list_base_image_tags,
-            list_copy_tags=lambda repository: list_held_base_copy_tags(
-                repository, creds=held_creds
+            trusted_copy_digest=lambda: trusted_held_copy_digest(
+                image_org=image_org,
+                image_name=require_env_or_default("IMAGE_NAME"),
+                creds=held_creds,
             ),
             inspect=skopeo_inspect_json,
             inspect_copy=lambda ref: skopeo_inspect_json(ref, creds=held_creds),
@@ -700,6 +771,12 @@ def resolve_build_inputs() -> BuildInputResolution:
             f"docker://{base_image_name}:{held_tag}", **copy_read_options()
         )
         base_image_digest = str(held_inspect_json.get("Digest") or "")
+        if trusted_digest and base_image_digest != trusted_digest:
+            raise CiToolError(
+                f"The held base copy tag {base_image_name}:{held_tag} resolves to "
+                f"{base_image_digest or 'no digest'}, not {trusted_digest}, the base the signed "
+                ":latest was built on. Refusing to build on it."
+            )
         held_labels = held_inspect_json.get("Labels") or {}
         label_kernel_release = str(held_labels.get("ostree.linux") or "")
         base_image_version_label = str(held_labels.get(BASE_VERSION_LABEL) or "")

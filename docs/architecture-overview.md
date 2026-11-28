@@ -197,12 +197,12 @@ When the kernel is newer, the run does not fail. It looks at the plain dated
 tags (`44.20261110.0`) of the same Fedora release, no older than
 `KERNEL_HOLD_MAX_DAYS` (90) by their own date, and builds on the newest one
 whose kernel OpenZFS supports (`resolve_build_inputs.find_held_base`). The
-newest supported upstream tag wins while one remains. Only when none does is
-this repository's own copy of an earlier held base read, in the private
-`zfs-kinoite-complex-held-base` GHCR package, and then the newest supported copy
-wins. That order is also the newest base by date: quay.io expires dated tags
-oldest first, so while any supported upstream tag remains it is at least as new
-as every copy, and promotion's `refuse_held_base_older_than_latest` is never
+newest supported upstream tag wins while one remains, and a tag dated after today
+is ignored, upstream or copy. Only when none qualifies is this repository's own
+copy of an earlier held base used, in the private `zfs-kinoite-complex-held-base`
+GHCR package. That order is also the newest base by date: quay.io expires dated
+tags oldest first, so while any supported upstream tag remains it is at least as
+new as every copy, and promotion's `refuse_held_base_older_than_latest` is never
 tripped by the choice. It also means the first run, before the package exists,
 never reads it. If nothing qualifies, the run fails as every run did before
 holds existed. The chosen tag is then pinned by digest and its kernel read from
@@ -210,6 +210,26 @@ holds existed. The chosen tag is then pinned by digest and its kernel read from
 akmods cache must still cover that exact kernel and ZFS version, and the image
 is still signed and verified. Pull request builds resolve their inputs the same
 way, so they build on the held base too.
+
+A copy is used as a base only at a digest a signed record names. Any workflow run
+in this repository that declares `packages: write` can write the copy package,
+so what sits in it, including a newer-looking tag, is not evidence of anything.
+Resolution therefore never lists the package. It reads `:latest`, pins it by
+digest, verifies its cosign signature against the committed `cosign.pub` (the
+same check the akmods cache gets), and takes the digest from its
+`org.zfs-kinoite-complex.base-image` label. It looks the copy up by that digest,
+and it must carry a dated version label of this Fedora release inside the hold
+window and a kernel OpenZFS supports. The tag it is then pinned and tagged by must
+resolve to the same digest. This chose verifying `:latest` over signing each copy:
+making a copy needs no key, so the copy job stays free of signing material, and
+the signed `:latest` already says which base this repository shipped. If `:latest`
+is missing, unsigned or unverifiable, records no base digest, or its base has no
+copy that qualifies, the run fails and says which. One case fails by design: a
+copy exists, but `:latest` was never built on it, for example because the held
+build that made it failed before promotion and quay.io then deleted the held tag.
+That copy is not trusted, and the run fails until a build reaches `:latest`. It
+takes four weeks of held builds that never reached `:latest` to get there, because
+every scheduled run in that time builds on the upstream tag again.
 
 The copy exists because quay.io deletes a dated Kinoite tag after four weeks
 (`quay.expires-after=4w`), and a hold may last longer. Every held main build
@@ -229,13 +249,17 @@ its base is not confirmed readable, the scheduled gate builds with
 weeks without a copy.
 
 The package stays private, and nobody has to make anything public. Every read of
-a copy uses the job's own token (`REGISTRY_ACTOR` and `REGISTRY_TOKEN`): the tag
-listing, inspect and `podman pull` in resolution, buildah's `FROM` in
+a copy uses the job's own token (`REGISTRY_ACTOR` and `REGISTRY_TOKEN`): the read
+of `:latest` and the inspect and `podman pull` of the copy in resolution, buildah's `FROM` in
 `build-native-image`, the gate's existence check and pull request validation.
-Upstream reads stay anonymous. An anonymous GHCR read cannot tell a missing
+Upstream reads stay anonymous, and buildah's auth entry is keyed to the copy's
+repository, so another owner's image in the same build (`ghcr.io/ublue-os/brew`)
+is never offered the token. A lock-file replay of a run whose base was a copy
+reads it with the job's token too. An anonymous GHCR read cannot tell a missing
 package from a private one, and GHCR may answer even an authenticated read of a
 package that was never created with `denied`, so nothing depends on telling
-missing from denied. The gate treats missing, `denied`, 401 and 403 alike as "the
+missing from denied: the copy step's probe of the tag before the first copy treats
+`denied` as "no copy yet" and goes on to copy. The gate treats missing, `denied`, 401 and 403 alike as "the
 copy is not confirmed readable": it builds with `kernel-held-copy-missing`, and
 never skips or raises on it. The copy step ends by asking
 `held_base_copy_exists`, the same function the gate calls, with the same kind of

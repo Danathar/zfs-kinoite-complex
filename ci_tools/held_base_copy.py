@@ -67,6 +67,23 @@ def held_base_copy_exists(copy_ref: str, *, creds: str) -> bool:
         raise
 
 
+def _existing_copy_tag(tag_ref: str, *, creds: str) -> dict | None:
+    """
+    Return the inspect of a tag already in the copy package, or None when there is none yet.
+
+    GHCR may answer even an authenticated read of a package nobody has created with `denied`,
+    so on the first run "no such tag" and "refused" are the same answer: go on to the copy. The
+    copy, the digest check and the read-back check after it decide whether the token can really
+    write and read the package. Any other registry error still raises.
+    """
+    try:
+        return skopeo_inspect_json_optional(tag_ref, creds=creds)
+    except CiToolError as exc:
+        if is_registry_permission_error(str(exc)):
+            return None
+        raise
+
+
 def copy_held_base(
     *, base_image_name: str, base_image_digest: str, image_org: str, creds: str
 ) -> str:
@@ -115,7 +132,7 @@ def copy_held_base(
             )
 
         tag_ref = f"docker://{repository}:{version}"
-        existing = skopeo_inspect_json_optional(tag_ref, creds=creds)
+        existing = _existing_copy_tag(tag_ref, creds=creds)
         if existing is None:
             skopeo_copy(
                 source_ref,

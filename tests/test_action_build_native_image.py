@@ -460,8 +460,13 @@ class BuildActionStepTests(unittest.TestCase):
         self.assertEqual(result.argv[2], "--authfile")
         self.assertNotIn("secret-token", "\n".join(result.argv))
         auths = json.loads(result.auth)["auths"]
-        self.assertEqual(list(auths), ["ghcr.io"])
-        self.assertEqual(base64.b64decode(auths["ghcr.io"]["auth"]).decode(), "actor:secret-token")
+        # Keyed to the copy's repository, never to all of ghcr.io: buildah offers an auth entry to
+        # every stage, and `FROM ghcr.io/ublue-os/brew@...` is another owner's image.
+        held_repository = f"ghcr.io/danathar/{HELD_BASE_PACKAGE}"
+        self.assertEqual(list(auths), [held_repository])
+        self.assertEqual(
+            base64.b64decode(auths[held_repository]["auth"]).decode(), "actor:secret-token"
+        )
         self.assertEqual(result.auth_mode, "600")
         self.assertFalse(Path(result.argv[3]).exists(), "the auth file must not outlive the step")
         # The base reaches the Containerfile unchanged.
@@ -489,7 +494,15 @@ class BuildActionStepTests(unittest.TestCase):
         self.assertIn("private held-base copy", result.stderr)
 
     def test_the_copy_package_name_in_the_action_is_the_one_resolution_uses(self) -> None:
-        self.assertIn(f"/{HELD_BASE_PACKAGE}@", _step_body(BUILD_STEP))
+        self.assertIn(f'/{HELD_BASE_PACKAGE}"', _step_body(BUILD_STEP))
+
+    def test_the_credential_is_encoded_before_the_file_is_written(self) -> None:
+        # Inlined in printf's arguments, a failed encode would write an empty credential and
+        # push on; in a variable first, `set -e` stops the step. The same form as
+        # publish-native-image's.
+        body = _step_body(BUILD_STEP)
+        self.assertIn('encoded_credential="$(printf', body)
+        self.assertNotIn('"$(printf \'%s:%s\'', body)
 
     # -- the announcement step ---------------------------------------------
 

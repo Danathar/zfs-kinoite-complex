@@ -323,7 +323,10 @@ Every file in `.github/workflows/` has an entry here.
   the copy of the held base: the `zfs-kinoite-complex-held-base` package stays
   private and builds read it with their own token. If a build fails naming that
   package and the token, the copy could not be read: check that the package is
-  linked to this repository and readable by its workflows.
+  linked to this repository and readable by its workflows. A build that says it
+  cannot trust a held base copy could not verify `:latest`'s cosign signature or
+  found no copy of the base `:latest` was built on; a copy that no signed `:latest`
+  was built on is never used (see Kernel Hold in the architecture overview).
 - **Closing:** `akmods-failure-triage.yml` closes it after the first green
   build that really built and was not held. If the hold reaches 90 days the
   build fails instead, and the failure issues above take over.

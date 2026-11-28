@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import io
 import os
+import runpy
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -384,6 +385,17 @@ class PromoteStableTests(unittest.TestCase):
         self.assertIn("not a run number", str(context.exception))
         skopeo_copy.assert_not_called()
 
+    def test_running_the_module_as_a_script_calls_main(self) -> None:
+        # With no workflow env, `main()` stops at its first required variable. That it ran at
+        # all proves the `__main__` guard calls it.
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            self.assertRaises(CiToolError) as context,
+        ):
+            runpy.run_module("ci_tools.promote_stable", run_name="__main__")
+
+        self.assertIn("GITHUB_REPOSITORY_OWNER", str(context.exception))
+
 
 # The two newest audit tags on ghcr.io when #360 was filed.
 PUBLISHED = ["stable-220-e6f14f7", "stable-221-c6d1dee"]
@@ -424,6 +436,12 @@ class RefuseZfsLineOlderThanLatestTests(unittest.TestCase):
                 self.assertIn("configured line 2.4", said)
                 with self.assertRaises(CiToolError):
                     self.refuse("2.4.4", latest, configured="2.5")
+
+    def test_an_invalid_configured_line_is_refused_when_latest_has_no_readable_label(self) -> None:
+        for configured in ("", "2", "2.4.4", "latest"):
+            with self.subTest(configured=configured), self.assertRaises(CiToolError) as context:
+                self.refuse("2.4.4", {}, configured=configured)
+            self.assertIn("Invalid ZFS minor version", str(context.exception))
 
     def test_a_candidate_without_a_readable_label_is_refused(self) -> None:
         for candidate in ("", "2.4", "zfs-2.4.4"):

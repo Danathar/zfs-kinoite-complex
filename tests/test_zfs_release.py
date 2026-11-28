@@ -228,6 +228,17 @@ class FetchOpenzfsReleasesTests(unittest.TestCase):
 
         self.assertIn("Failed to fetch OpenZFS releases", str(context.exception))
 
+    def test_a_payload_that_is_not_a_list_is_a_named_error(self) -> None:
+        # GitHub answers an API problem with a JSON object, not a list of releases.
+        seen: list[Request] = []
+        with patch(
+            "ci_tools.zfs_release.urllib.request.urlopen",
+            self._fake_urlopen([{"message": "API rate limit exceeded"}], seen),
+        ), self.assertRaises(CiToolError) as context:
+            fetch_openzfs_releases()
+
+        self.assertIn("Unexpected OpenZFS releases payload", str(context.exception))
+
 
 # The META file at zfs-2.4.4, as published.
 META_2_4_4 = """Meta:          1
@@ -317,6 +328,19 @@ class ReleaseSupportsKernelTests(unittest.TestCase):
         for meta in ("", META_2_4_4.replace("Linux-Minimum: 4.18\n", "")):
             with self.subTest(meta=meta[-30:]), self.assertRaises(CiToolError):
                 self.supports("7.2.1", meta)
+
+    def test_an_invalid_release_version_raises_before_meta_is_read(self) -> None:
+        asked: list[str] = []
+
+        def fetcher(version: str) -> str:
+            asked.append(version)
+            return META_2_4_4
+
+        for version in ("2.4", "zfs-2.4.4", ""):
+            with self.subTest(version=version), self.assertRaises(CiToolError) as context:
+                release_supports_kernel(version, "7.2.1", meta_fetcher=fetcher)
+            self.assertIn("Invalid ZFS version", str(context.exception))
+        self.assertEqual(asked, [])
 
     def test_meta_is_read_once(self) -> None:
         asked: list[str] = []
@@ -464,6 +488,15 @@ class SelectZfsVersionTests(unittest.TestCase):
         selection = self.select(releases)
         self.assertEqual(selection.version, "2.4.4")
         self.assertFalse(selection.moved)
+
+    def test_tags_that_are_not_zfs_releases_are_ignored(self) -> None:
+        releases = [
+            *_published("2.4.4", "2.5.1"),
+            {"tag_name": "some-other-tag", "draft": False, "prerelease": False},
+            {"tag_name": None, "draft": False, "prerelease": False},
+        ]
+        selection = self.select(releases)
+        self.assertEqual(selection.version, "2.5.1")
 
     def test_a_prerelease_on_the_newer_line_does_not_hide_its_real_release(self) -> None:
         releases = _published("2.4.4", "2.5.1", "2.5.2", prerelease=("2.5.2",))

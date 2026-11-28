@@ -701,7 +701,7 @@ class FindShippedCommitTests(unittest.TestCase):
     def test_the_deadline_is_well_under_the_preflight_job_limit(self) -> None:
         text = (REPO_ROOT / ".github" / "workflows" / "build.yml").read_text(encoding="utf-8")
         preflight = text.split("\n  preflight:\n", 1)[1]
-        minutes = int(re.search(r"^    timeout-minutes: (\d+)$", preflight, re.M).group(1))
+        minutes = int(re.search(r"^    timeout-minutes: (\d+)$", preflight, re.MULTILINE).group(1))
         self.assertLessEqual(AUDIT_TAG_WALK_DEADLINE_SECONDS * 2, minutes * 60)
 
     def test_empty_latest_digest_is_unknown_without_registry_calls(self) -> None:

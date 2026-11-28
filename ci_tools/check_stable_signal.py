@@ -8,14 +8,26 @@ Why: Scheduled runs should only spend build time when Kinoite stable has
 advanced OR a new OpenZFS patch is available on the configured minor line --
 otherwise a patch release (including a security fix) could sit unbuilt
 indefinitely while the base image itself stayed still.
+Separately, a scheduled run builds when this repository's main branch has a
+commit that changes the image and has never shipped. Merging to main starts a
+push build, and a scheduled run that starts while that build is still running
+cancels it (`concurrency` in build.yml). Without this check the scheduled run
+would then skip, because no upstream signal moved, and the merged change would
+never reach `:latest`.
 Goal: Fail closed on unknown upstream state and skip only truly unchanged
 scheduled runs.
 """
 
 from __future__ import annotations
 
+import http.client
+import json
+import os
+import re
+import urllib.request
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
+from time import monotonic
 
 from ci_tools.common import (
     CiToolError,
@@ -29,6 +41,7 @@ from ci_tools.common import (
     write_github_outputs,
 )
 from ci_tools.held_base_copy import held_base_copy_exists, held_base_copy_ref
+from ci_tools.prune_registry import STABLE_RE
 from ci_tools.resolve_build_inputs import (
     BASE_VERSION_LABEL,
     KERNEL_HOLD_MAX_DAYS,
@@ -45,6 +58,45 @@ KERNEL_HELD_FROM_LABEL = "org.zfs-kinoite-complex.kernel-held-from"
 BASE_IMAGE_LABEL = "org.zfs-kinoite-complex.base-image"
 # BASE_VERSION_LABEL, imported above and re-read by promote_stable.py, is
 # inherited from the Kinoite base, so it names the dated base the image was built on.
+
+# A literal copy of `on.push.paths-ignore` in .github/workflows/build.yml. A
+# push that changes only these paths starts no build, so a commit that changes
+# only these paths has nothing to ship. GitHub reads that list as literal YAML,
+# so it cannot be generated from here; tests/test_check_stable_signal.py keeps
+# the two equal.
+PUSH_PATHS_IGNORE = (
+    "README.md",
+    "**/README.md",
+    "docs/**",
+    "**/*.md",
+    ".editorconfig",
+    ".gitignore",
+    "LICENSE",
+    ".claude/**",
+    ".cursor/**",
+    ".github/ISSUE_TEMPLATE/**",
+    ".github/pull_request_template.md",
+    ".github/prompts/**",
+    ".github/labeler.yml",
+)
+
+GITHUB_API_URL = "https://api.github.com"
+# The compare API returns at most this many files and silently drops the rest.
+# A file list of this length may be incomplete, so it cannot prove that every
+# change is in an ignored path.
+COMPARE_FILES_CAP = 300
+# How many `stable-*` audit tags, newest first, to inspect while looking for
+# the one that shares `:latest`'s digest. Promotion writes the audit tag just
+# before it moves `:latest`, so the newest one matches unless a promotion was
+# cancelled between the two copies or `:latest` was moved by hand.
+MAX_AUDIT_TAGS_INSPECTED = 10
+# One deadline for the whole audit-tag walk, in seconds. Each registry read may
+# take up to `REGISTRY_METADATA_TIMEOUT`, so ten slow inspects alone could
+# outlast the preflight job's `timeout-minutes`. Past this deadline the walk
+# stops and reports the shipped commit as unknown, which builds. The deadline is
+# checked before each read, so the walk ends at most one read past it, still
+# well under the job limit.
+AUDIT_TAG_WALK_DEADLINE_SECONDS = 300.0
 
 
 @dataclass(frozen=True)
@@ -115,6 +167,183 @@ def _docker_ref(image_ref: str) -> str:
     return f"docker://{image_ref}"
 
 
+def _github_glob_regex(pattern: str) -> re.Pattern[str]:
+    """
+    Translate one workflow path filter into a regular expression.
+
+    GitHub's filter syntax is not `fnmatch`: `*` stops at `/`, `**` crosses
+    it, and `**/` also matches no directory at all, so `**/*.md` matches a
+    root `CHANGELOG.md` as well as `docs/a/b.md`. `fnmatch` lets `*` cross
+    `/`, which would read `docs/*` as covering every nested file. Only the
+    syntax `PUSH_PATHS_IGNORE` uses is translated; anything else is refused
+    rather than guessed at, so adding a pattern with `[`, `!` or `+` to the
+    list fails the tests instead of matching the wrong files.
+    """
+    out: list[str] = []
+    index = 0
+    while index < len(pattern):
+        if pattern.startswith("**/", index):
+            out.append("(?:.*/)?")
+            index += 3
+        elif pattern.startswith("**", index):
+            out.append(".*")
+            index += 2
+        elif pattern[index] == "*":
+            out.append("[^/]*")
+            index += 1
+        elif pattern[index] == "?":
+            out.append("[^/]")
+            index += 1
+        elif pattern[index] in "[]!+":
+            raise CiToolError(f"Unsupported path filter syntax in {pattern!r}")
+        else:
+            out.append(re.escape(pattern[index]))
+            index += 1
+    return re.compile("".join(out) + r"\Z")
+
+
+def is_push_ignored_path(path: str) -> bool:
+    """True when a push changing only `path` would start no build.yml run."""
+    return any(_github_glob_regex(pattern).match(path) for pattern in PUSH_PATHS_IGNORE)
+
+
+def _list_repository_tags(repository_ref: str, *, creds: str) -> list[str]:
+    """
+    Return every tag in `repository_ref`, through promotion's own lister.
+
+    `ci_tools.promote_stable` imports this module for its label names, so a
+    top-level import of it here would be circular.
+    """
+    from ci_tools.promote_stable import list_repository_tags
+
+    return list_repository_tags(repository_ref, creds=creds)
+
+
+def find_shipped_commit(*, image_org: str, image_name: str, latest_digest: str, creds: str) -> str:
+    """
+    Return the short commit `:latest` was built from, or "" if it cannot be told.
+
+    Promotion writes `stable-<run>-<sha7>` with the same digest just before it
+    moves `:latest`, and `<sha7>` is the first 7 characters of that run's
+    `GITHUB_SHA`. `:latest` carries no label with this repository's commit, so
+    the audit tag is the only record of it, and it exists for every image
+    promoted before this check did.
+
+    Tags are inspected from the highest run number down, and the first one
+    whose digest is `:latest`'s wins. An empty `:latest` digest, no matching
+    tag among the newest `MAX_AUDIT_TAGS_INSPECTED`, any registry error, or
+    running past `AUDIT_TAG_WALK_DEADLINE_SECONDS` returns "", which the caller
+    turns into a build: not knowing what shipped is never read as "everything
+    shipped".
+    """
+    if not latest_digest:
+        return ""
+    repository_ref = f"docker://ghcr.io/{image_org}/{image_name}"
+    deadline = monotonic() + AUDIT_TAG_WALK_DEADLINE_SECONDS
+    try:
+        tags = _list_repository_tags(repository_ref, creds=creds)
+        audit_tags = sorted(
+            (tag for tag in tags if STABLE_RE.match(tag)),
+            key=lambda tag: int(tag.split("-")[1]),
+            reverse=True,
+        )
+        for tag in audit_tags[:MAX_AUDIT_TAGS_INSPECTED]:
+            if monotonic() >= deadline:
+                print(
+                    f"Gave up reading the audit tags of {repository_ref} after "
+                    f"{AUDIT_TAG_WALK_DEADLINE_SECONDS:.0f}s"
+                )
+                return ""
+            inspect_json = skopeo_inspect_json(f"{repository_ref}:{tag}", creds=creds)
+            if str(inspect_json.get("Digest") or "") == latest_digest:
+                return tag.split("-")[2]
+    except CiToolError as exc:
+        print(f"Could not read the audit tags of {repository_ref}: {exc}")
+    return ""
+
+
+def fetch_commit_comparison(*, repository: str, base: str, head: str) -> dict:
+    """
+    Return the GitHub compare API's view of `base...head`.
+
+    The preflight checkout is depth 1, so `git diff` would need a fetch first;
+    the API needs only the job's `GITHUB_TOKEN`, which has `contents: read`.
+    Every transport or payload failure is raised as `CiToolError`, including
+    `http.client.HTTPException` (for example `IncompleteRead` when the
+    connection drops mid-body), which is not an `OSError`.
+    """
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "zfs-kinoite-complex",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    token = os.environ.get("GITHUB_TOKEN") or ""
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    url = f"{GITHUB_API_URL}/repos/{repository}/compare/{base}...{head}"
+    request = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            payload = json.loads(response.read())
+    except (OSError, ValueError, http.client.HTTPException) as exc:
+        raise CiToolError(f"Failed to compare {base}...{head} in {repository}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise CiToolError(f"Unexpected compare payload for {base}...{head} in {repository}")
+    return payload
+
+
+def unshipped_commits_reason(
+    *, repository: str, shipped_commit: str, head_sha: str
+) -> str | None:
+    """
+    Return a build reason when main has an image change `:latest` lacks, else None.
+
+    None means `:latest` was built from `head_sha`, or every file changed
+    since is one a push would not have built for. Every case this function
+    cannot settle returns a build reason instead of raising, because a raise
+    here would fail the scheduled run and leave the change unshipped all the
+    same. Building is the safe side: promotion still refuses to move `:latest`
+    backwards.
+    """
+    if not shipped_commit:
+        return "unshipped-commits-source-unknown"
+    if head_sha.startswith(shipped_commit):
+        return None
+    try:
+        comparison = fetch_commit_comparison(
+            repository=repository, base=shipped_commit, head=head_sha
+        )
+    except CiToolError as exc:
+        # A 404 lands here too, for example after a force-push removed the
+        # shipped commit from the repository.
+        print(f"Unshipped-commit check could not compare: {exc}")
+        return "unshipped-commits-compare-failed"
+
+    status = comparison.get("status")
+    if status == "identical":
+        return None
+    if status != "ahead":
+        # `behind` or `diverged`: main no longer contains what shipped.
+        return "unshipped-commits-history-diverged"
+
+    files = comparison.get("files")
+    if not isinstance(files, list):
+        return "unshipped-commits-compare-failed"
+    for entry in files:
+        if not isinstance(entry, dict) or not isinstance(entry.get("filename"), str):
+            return "unshipped-commits-compare-failed"
+        paths = [entry["filename"]]
+        # A rename is a change on both sides: moving a file out of the image
+        # tree changes the image as much as moving one in.
+        if isinstance(entry.get("previous_filename"), str):
+            paths.append(entry["previous_filename"])
+        if any(not is_push_ignored_path(path) for path in paths):
+            return "unshipped-commits"
+    if len(files) >= COMPARE_FILES_CAP:
+        return "unshipped-commits-file-list-truncated"
+    return None
+
+
 def evaluate_stable_signal_gate(
     *,
     image_org: str,
@@ -122,6 +351,8 @@ def evaluate_stable_signal_gate(
     stable_signal_image: str,
     zfs_minor_version: str,
     creds: str,
+    repository: str,
+    head_sha: str,
     today: date | None = None,
 ) -> StableSignalDecision:
     """
@@ -137,6 +368,12 @@ def evaluate_stable_signal_gate(
 
     The repo's own `:latest` image is only a provenance source for the last
     promoted values of both signals.
+
+    Only when no other reason asks for a build does it look for a commit on
+    main (`head_sha`, in `repository`) that changes the image and has not
+    shipped. That check comes after every other build reason and before
+    either skip, so it can only add builds: every reason above still builds
+    whatever it finds, and neither skip can hide an unshipped change.
     """
     stable_signal_inspect = skopeo_inspect_json(_docker_ref(stable_signal_image))
     stable_signal_digest = str(stable_signal_inspect.get("Digest") or "")
@@ -241,31 +478,55 @@ def evaluate_stable_signal_gate(
                 stable_signal_digest=stable_signal_digest,
                 zfs_version=current_zfs_version,
             )
+    held_upstream_kernel_unsupported = False
     if previous_signal_digest != stable_signal_digest and previous_kernel_held_from:
         upstream_kernel = str((stable_signal_inspect.get("Labels") or {}).get("ostree.linux") or "")
-        if upstream_kernel and kernel_exceeds_maximum(
+        held_upstream_kernel_unsupported = bool(upstream_kernel) and kernel_exceeds_maximum(
             upstream_kernel, resolve_linux_maximum(current_zfs_version)
-        ):
-            return StableSignalDecision(
-                should_build=False,
-                reason="kernel-held-upstream-kernel-still-unsupported",
-                stable_signal_ref=stable_signal_image,
-                stable_signal_digest=stable_signal_digest,
-                zfs_version=current_zfs_version,
-            )
+        )
 
-    if previous_signal_digest == stable_signal_digest:
+    if previous_signal_digest != stable_signal_digest and not held_upstream_kernel_unsupported:
+        return StableSignalDecision(
+            should_build=True,
+            reason="stable-signal-advanced",
+            stable_signal_ref=stable_signal_image,
+            stable_signal_digest=stable_signal_digest,
+            zfs_version=current_zfs_version,
+        )
+
+    # Every build reason above has passed, and both remaining paths skip. A
+    # merged change whose own push build was cancelled (or failed) would sit
+    # behind either skip forever, so look for one first.
+    shipped_commit = find_shipped_commit(
+        image_org=image_org,
+        image_name=image_name,
+        latest_digest=str(current_latest_inspect.get("Digest") or ""),
+        creds=creds,
+    )
+    unshipped_reason = unshipped_commits_reason(
+        repository=repository, shipped_commit=shipped_commit, head_sha=head_sha
+    )
+    if unshipped_reason is not None:
+        return StableSignalDecision(
+            should_build=True,
+            reason=unshipped_reason,
+            stable_signal_ref=stable_signal_image,
+            stable_signal_digest=stable_signal_digest,
+            zfs_version=current_zfs_version,
+        )
+
+    if held_upstream_kernel_unsupported:
         return StableSignalDecision(
             should_build=False,
-            reason="stable-signal-unchanged",
+            reason="kernel-held-upstream-kernel-still-unsupported",
             stable_signal_ref=stable_signal_image,
             stable_signal_digest=stable_signal_digest,
             zfs_version=current_zfs_version,
         )
 
     return StableSignalDecision(
-        should_build=True,
-        reason="stable-signal-advanced",
+        should_build=False,
+        reason="stable-signal-unchanged",
         stable_signal_ref=stable_signal_image,
         stable_signal_digest=stable_signal_digest,
         zfs_version=current_zfs_version,
@@ -290,6 +551,8 @@ def main() -> None:
             stable_signal_image=stable_signal_image,
             zfs_minor_version=zfs_minor_version,
             creds=creds,
+            repository=require_env("GITHUB_REPOSITORY"),
+            head_sha=require_env("GITHUB_SHA"),
         )
 
     write_github_outputs(

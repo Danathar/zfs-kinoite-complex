@@ -189,6 +189,12 @@ def _held_past_window_latest_inspect() -> dict:
     return held
 
 
+# The commit the gate runs on. By default `:latest` was built from it, so the
+# unshipped-commit check falls through and every other scenario sees today's gate.
+GATE_HEAD_SHA = "0123456789abcdef0123456789abcdef01234567"
+GATE_REPOSITORY = "Danathar/zfs-kinoite-complex"
+
+
 def run_gate(
     latest,
     *,
@@ -196,6 +202,8 @@ def run_gate(
     signal_kernel: str = "",
     today: date = GATE_TODAY,
     copy: str = "readable",
+    shipped_commit: str = GATE_HEAD_SHA[:7],
+    comparison: dict | Exception | None = None,
 ):
     """
     Run the real gate against one fake registry.
@@ -208,8 +216,21 @@ def run_gate(
     "missing" (the registry's "manifest unknown"), "denied" (a refusal even
     with the token, as GHCR may answer a package that was never created) or
     "other-error" (a registry failure that is neither). A read without the
-    token fails the test: the package is private.
+    token fails the test: the package is private. `shipped_commit` is what the
+    audit-tag walk finds for `:latest` ("" for none), and `comparison` is the
+    GitHub compare API's answer (an exception to raise for it); with the
+    default `shipped_commit` the gate never calls the API, and a call with no
+    `comparison` fails the test.
     """
+
+    def compare(*, repository: str, base: str, head: str) -> dict:
+        if comparison is None:
+            raise AssertionError(f"unexpected compare call for {base}...{head}")
+        if (repository, head) != (GATE_REPOSITORY, GATE_HEAD_SHA):
+            raise AssertionError(f"compare call for {repository} at {head}")
+        if isinstance(comparison, Exception):
+            raise comparison
+        return comparison
 
     def inspect(image_ref: str, *, creds: str | None = None) -> dict:
         if image_ref == SIGNAL_REF:
@@ -239,6 +260,9 @@ def run_gate(
             return_value=CURRENT_ZFS,
         ),
         patch("ci_tools.check_stable_signal.resolve_linux_maximum", return_value="7.2"),
+        patch("ci_tools.check_stable_signal.find_shipped_commit", return_value=shipped_commit),
+        patch("ci_tools.check_stable_signal.fetch_commit_comparison", side_effect=compare),
+        contextlib.redirect_stdout(io.StringIO()),
     ):
         return evaluate_stable_signal_gate(
             image_org="danathar",
@@ -246,6 +270,8 @@ def run_gate(
             stable_signal_image=SIGNAL_IMAGE,
             zfs_minor_version="2.4",
             creds="actor:token",
+            repository=GATE_REPOSITORY,
+            head_sha=GATE_HEAD_SHA,
             today=today,
         )
 
@@ -271,6 +297,30 @@ GATE_SCENARIOS = {
     "kernel-held-upstream-kernel-still-unsupported": lambda: run_gate(
         _held_latest_inspect(), signal_kernel="7.3.5-200.fc44.x86_64"
     ),
+    "unshipped-commits": lambda: run_gate(
+        _latest_inspect(),
+        shipped_commit="fedcba9",
+        comparison={"status": "ahead", "files": [{"filename": "Containerfile"}]},
+    ),
+    "unshipped-commits-source-unknown": lambda: run_gate(_latest_inspect(), shipped_commit=""),
+    "unshipped-commits-compare-failed": lambda: run_gate(
+        _latest_inspect(),
+        shipped_commit="fedcba9",
+        comparison=CiToolError("HTTP Error 404: Not Found"),
+    ),
+    "unshipped-commits-history-diverged": lambda: run_gate(
+        _latest_inspect(),
+        shipped_commit="fedcba9",
+        comparison={"status": "diverged", "files": []},
+    ),
+    "unshipped-commits-file-list-truncated": lambda: run_gate(
+        _latest_inspect(),
+        shipped_commit="fedcba9",
+        comparison={
+            "status": "ahead",
+            "files": [{"filename": f"docs/page-{n}.md"} for n in range(300)],
+        },
+    ),
 }
 
 
@@ -291,12 +341,17 @@ class ScheduledBuildGateTableTests(unittest.TestCase):
         # Guard the guard: every assertion below iterates these rows, and an
         # empty list passes a for-loop silently.
         rows = gate_table()
-        self.assertEqual(len(rows), 11, rows)
+        self.assertEqual(len(rows), 16, rows)
         self.assertEqual(len({reason for reason, _ in rows}), len(rows))
 
     def test_the_documented_reasons_are_exactly_the_gate_source_reasons(self) -> None:
         documented = {reason for reason, _ in gate_table()}
-        implemented = set(re.findall(r'reason="([a-z0-9-]+)"', GATE_SOURCE.read_text("utf-8")))
+        source = GATE_SOURCE.read_text("utf-8")
+        # The unshipped-commit reasons are returned by `unshipped_commits_reason`
+        # and passed on as `reason=unshipped_reason`, so they are read from its returns.
+        implemented = set(re.findall(r'reason="([a-z0-9-]+)"', source)) | set(
+            re.findall(r'return "(unshipped-commits[a-z0-9-]*)"', source)
+        )
         self.assertEqual(documented, implemented)
 
     def test_every_documented_reason_has_a_scenario(self) -> None:
@@ -357,6 +412,41 @@ class ScheduledBuildGateTableTests(unittest.TestCase):
 
     def test_a_held_latest_with_a_readable_copy_skips_as_before(self) -> None:
         decision = run_gate(_held_latest_inspect(), signal_kernel="7.3.5-200.fc44.x86_64")
+        self.assertEqual(decision.reason, "kernel-held-upstream-kernel-still-unsupported")
+        self.assertFalse(decision.should_build)
+
+    def test_an_unshipped_change_builds_even_while_held(self) -> None:
+        # The check comes after both held build reasons and before the held skip,
+        # so a merged change whose push build was cancelled ships on the held base.
+        decision = run_gate(
+            _held_latest_inspect(),
+            signal_kernel="7.3.5-200.fc44.x86_64",
+            shipped_commit="fedcba9",
+            comparison={"status": "ahead", "files": [{"filename": "build_files/x.sh"}]},
+        )
+        self.assertEqual(decision.reason, "unshipped-commits")
+        self.assertTrue(decision.should_build)
+
+    def test_the_held_build_reasons_come_before_the_unshipped_check(self) -> None:
+        held = _held_latest_inspect()
+        held["Labels"][BASE_VERSION_LABEL] = "44.20260801.0"
+        for latest, copy, reason in (
+            (held, "readable", "kernel-held-past-hold-window"),
+            (_held_latest_inspect(), "missing", "kernel-held-copy-missing"),
+        ):
+            with self.subTest(reason=reason):
+                decision = run_gate(
+                    latest, signal_kernel="7.3.5-200.fc44.x86_64", copy=copy, shipped_commit=""
+                )
+                self.assertEqual(decision.reason, reason)
+
+    def test_a_held_latest_with_only_ignored_changes_still_skips(self) -> None:
+        decision = run_gate(
+            _held_latest_inspect(),
+            signal_kernel="7.3.5-200.fc44.x86_64",
+            shipped_commit="fedcba9",
+            comparison={"status": "ahead", "files": [{"filename": "docs/notes.md"}]},
+        )
         self.assertEqual(decision.reason, "kernel-held-upstream-kernel-still-unsupported")
         self.assertFalse(decision.should_build)
 
@@ -508,6 +598,8 @@ class ScheduledBuildGateTableTests(unittest.TestCase):
                 stable_signal_image=SIGNAL_IMAGE,
                 zfs_minor_version="2.4",
                 creds="actor:token",
+                repository=GATE_REPOSITORY,
+                head_sha=GATE_HEAD_SHA,
             )
 
 
@@ -533,6 +625,8 @@ def run_gate_with_signal_error(error: Exception):
             stable_signal_image=SIGNAL_IMAGE,
             zfs_minor_version="2.4",
             creds="actor:token",
+            repository=GATE_REPOSITORY,
+            head_sha=GATE_HEAD_SHA,
         )
 
 

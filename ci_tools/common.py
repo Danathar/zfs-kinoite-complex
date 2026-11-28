@@ -475,7 +475,9 @@ def registry_auth_dir(creds: str | None, *image_refs: str) -> Iterator[str]:
         yield auth_dir
 
 
-def skopeo_inspect_json(image_ref: str, *, creds: str | None = None) -> dict:
+def skopeo_inspect_json(
+    image_ref: str, *, creds: str | None = None, timeout: float | None = None
+) -> dict:
     """
     Return JSON metadata for one image reference.
 
@@ -489,13 +491,18 @@ def skopeo_inspect_json(image_ref: str, *, creds: str | None = None) -> dict:
     skopeo makes after the manifest read and fails the whole inspect on. No
     caller reads `RepoTags`, and a 503 on that list alone failed a nightly
     build at its first read (run 40069643376).
+
+    `timeout` defaults to `REGISTRY_METADATA_TIMEOUT`. A caller with its own
+    deadline passes a shorter one.
     """
     with registry_auth_dir(creds, image_ref) as auth_dir:
         command = ["skopeo", "inspect", "--no-tags"]
         if auth_dir:
             command.extend(["--authfile", registry_auth_file(auth_dir)])
         command.append(image_ref)
-        return run_json_cmd(command, timeout=REGISTRY_METADATA_TIMEOUT)
+        return run_json_cmd(
+            command, timeout=REGISTRY_METADATA_TIMEOUT if timeout is None else timeout
+        )
 
 
 def skopeo_inspect_digest(image_ref: str, *, creds: str | None = None) -> str:

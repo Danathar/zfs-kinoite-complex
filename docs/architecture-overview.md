@@ -100,9 +100,10 @@ onto `:latest`):
 - `org.zfs-kinoite-complex.kernel-held-from`: the newest base image's kernel when the build was held on an older base (see "Kernel hold" below); empty otherwise
 
 The gate compares the current upstream digest against the base-image signal
-labels, AND independently compares the newest release on the configured ZFS
-minor line (see [`ci_tools/zfs_release.py`](../ci_tools/zfs_release.py)) against
-the `zfs-version` label, so a scheduled run builds when *either* one has moved.
+labels, AND independently compares the OpenZFS release a build would select now
+(see "Choosing The OpenZFS Release" below and
+[`ci_tools/zfs_release.py`](../ci_tools/zfs_release.py)) against the
+`zfs-version` label, so a scheduled run builds when *either* one has moved.
 Without the second check, a new OpenZFS patch release -- including a security
 fix -- could sit unbuilt indefinitely as long as the Kinoite base image itself
 did not change, because the base-image digest is all the gate used to compare.
@@ -112,7 +113,7 @@ It returns one of:
 |---|---|---|
 | `stable-signal-unchanged` | current `:latest` already reflects this exact upstream digest AND ZFS version | no |
 | `stable-signal-advanced` | upstream digest moved since the last promoted image | yes |
-| `zfs-version-advanced` | a newer OpenZFS release exists on the configured minor line | yes |
+| `zfs-version-advanced` | the OpenZFS release a build would select now differs from `:latest`'s `zfs-version` label: a newer patch on the current line, or a newer line the upstream kernel needs | yes |
 | `stable-signal-image-changed` | `STABLE_SIGNAL_IMAGE` itself was reconfigured since the last promotion | yes |
 | `current-latest-missing` | no `:latest` has ever been published | yes |
 | `current-latest-missing-stable-signal-labels` | `:latest` exists but predates this gate, or was built by a non-schedule event before provenance was recorded | yes |
@@ -125,7 +126,7 @@ It returns one of:
 | `unshipped-commits-compare-failed` | the GitHub compare call failed (including a 404 after a force-push, and a connection dropped mid-response) or returned a payload the gate cannot read | yes |
 | `unshipped-commits-history-diverged` | main is behind, or has diverged from, the commit `:latest` was built from | yes |
 | `unshipped-commits-file-list-truncated` | the compare API listed its maximum of 300 files, none outside the ignored paths, so the rest are unknown | yes |
-| `kernel-held-upstream-kernel-still-unsupported` | `:latest` is held on an older base, the upstream kernel is still newer than the resolved OpenZFS release supports, the held base is inside the 90-day hold window, and its copy is readable with the job's token, so a rebuild would resolve the same held base | no |
+| `kernel-held-upstream-kernel-still-unsupported` | `:latest` is held on an older base, the upstream kernel is still newer than the selected OpenZFS release supports, the held base is inside the 90-day hold window, and its copy is readable with the job's token, so a rebuild would resolve the same held base | no |
 
 The `unshipped-commits` reasons exist because a scheduled run cancels a push
 build still in progress (the `concurrency` group in `build.yml`). Without them
@@ -192,7 +193,7 @@ The main workflow resolves and pins:
 4. Fedora major version
 5. every installed kernel found in `/lib/modules`
 6. resolved akmods source commit SHA
-7. ZFS minor version line
+7. the OpenZFS release to build and its line (see "Choosing The OpenZFS Release" below)
 
 Those values are written to a saved workflow output file named `build-inputs-<run_id>` so the same input set can be replayed later.
 
@@ -209,12 +210,53 @@ That action does six things in one place:
 5. resolve the checked or rebuilt cache tag to the digest-pinned ref passed to the final image build
 6. after a rebuild, verify that the cache at that pinned digest carries the resolved ZFS version
 
+#### Choosing The OpenZFS Release
+
+One function, `select_zfs_version` in `ci_tools/zfs_release.py`, decides which
+OpenZFS release a run builds. Input resolution and the scheduled gate both call
+it, and the kernel hold below reads the limit of the release it chose. It takes
+the configured line (`DEFAULT_ZFS_MINOR_VERSION`), the line `:latest` runs (the
+line of its `org.zfs-kinoite-complex.zfs-version` label), and the kernel of the
+newest upstream base (the `ostree.linux` label of `DEFAULT_BASE_IMAGE`, or of the
+stable-signal image in the gate). It never uses `:latest`'s own kernel, which may
+be a held one.
+
+1. The floor is the newer of the configured line and `:latest`'s line. It never
+   selects an older line than `:latest` runs. When `:latest`, its label or a
+   readable value is missing, the floor is the configured line.
+2. If the newest release on the floor line supports the kernel
+   (`Linux-Minimum` <= kernel <= `Linux-Maximum` in that release's `META`), it
+   is chosen. This is the everyday case.
+3. Otherwise newer lines are tried, oldest first. Each counts only by its newest
+   non-draft, non-prerelease release with a patch number of at least 1, so an
+   `x.y.0` is never chosen. The first one whose `META` range includes the
+   kernel is chosen.
+4. If none does, the floor line's newest release is kept, and the kernel hold
+   below applies, or the run fails once the hold window is used up.
+
+A `META` that cannot be read or parsed fails the run. It is never read as
+"supported" or "unsupported". A lock-file replay keeps its locked version and
+never moves to another line. The outputs and the build-input manifest name the
+line actually built as `zfs_minor_version`, and record `:latest`'s line before
+the build as `latest_zfs_minor_version`. Resolution reads `:latest`'s label with
+the job's token (`REGISTRY_ACTOR`/`REGISTRY_TOKEN`); without one, as in a pull
+request from a fork, the floor is the configured line.
+
+A move is the only way the kernel can be supported, and it is never a step back:
+promotion refuses a candidate on an older line than `:latest` (step 5 under
+"Promotion And Signing"). When a promoted build is on a newer line than the
+previous `:latest`, promotion writes a notice to its step summary, and
+`akmods-failure-triage.yml` opens or updates one informational issue,
+"OpenZFS moved from X to Y". Existing pools are untouched. A pool created from
+then on gets the new line's features and will not import on the previous image,
+and `zpool upgrade`, which nothing here runs, ends rollback.
+
 #### Kernel Hold
 
 Fedora can ship a kernel before OpenZFS supports it. Each OpenZFS release
 names the newest kernel line it supports in its `META` file
 (`Linux-Maximum: 7.2`), and its build refuses anything newer. Input resolution
-reads that line for the exact release it resolved
+reads that line for the release it selected
 (`ci_tools/zfs_release.py`, `resolve_linux_maximum`) and compares it with the
 newest base image's kernel label (`ostree.linux`).
 
@@ -306,10 +348,10 @@ build-input manifest and as the `org.zfs-kinoite-complex.kernel-held-from`
 image label. `akmods-failure-triage.yml` keeps a "Kernel held" issue open
 while builds are held, and the OpenZFS/kernel badge says so. The hold lifts by
 itself as soon as an OpenZFS release supports the newer kernel: that release
-triggers a scheduled build when it is a new patch on the configured line
-(`zfs-version-advanced`), the newest base qualifies again and the issue closes.
-An automatic move to a newer OpenZFS line is approved separately and is not part
-of the hold.
+triggers a scheduled build (`zfs-version-advanced`) when it is a new patch on
+the current line, or an `x.y.1` or later on a newer line that the current line
+cannot match (see "Choosing The OpenZFS Release"). The newest base then
+qualifies again and the issue closes.
 
 What a hold costs: the held base is all of Fedora as it was on that day, not
 only its kernel, so Fedora updates (security fixes included) wait until the
@@ -737,8 +779,12 @@ It:
 4. refuses a held candidate (one with a `kernel-held-from` label) built on an
    older base than `latest`, compared by the `org.opencontainers.image.version`
    both inherit from their base
-5. copies that digest to `stable-<run>-<sha>` (the immutable audit tag)
-6. copies that digest to `latest`
+5. refuses a candidate on an older OpenZFS line than `latest`, compared by the
+   line of each image's `zfs-version` label
+6. copies that digest to `stable-<run>-<sha>` (the immutable audit tag)
+7. copies that digest to `latest`
+8. when the candidate is on a newer OpenZFS line than the previous `latest`,
+   writes that notice to the run log and step summary
 
 Step 2 is deliberately redundant with the signing that already happened during
 candidate publication. Promotion runs as a separate job on a fresh runner, and
@@ -755,6 +801,15 @@ progress. Without it, a re-run of an older build would move `latest` back to an
 older image, which may not be able to import pools whose features a newer image
 enabled. A re-run of the same run is allowed; a deliberate rollback is a new
 run, which gets a higher number. If this check refuses, neither tag moves.
+
+Step 5 exists because input resolution never selects an older OpenZFS line than
+`latest` runs, but a lock-file replay keeps its locked version and a manual
+dispatch promotes by default, so a replay of an old lock could otherwise move
+users back to an older line. With no `latest` it promotes. With a `latest`
+whose `zfs-version` label is missing or unreadable, it promotes only when the
+candidate's line is not older than the configured `DEFAULT_ZFS_MINOR_VERSION`,
+and says so in the run log. A candidate without a readable `zfs-version` label
+is refused. Like step 3, a refusal moves neither tag.
 
 Audit-before-`latest` is deliberate: `build.yml` cancels an in-progress
 promotion when a newer push starts a fresh run (see the workflow's
@@ -797,6 +852,9 @@ model and the cosign v3 compatibility flags.
    - when OpenZFS configure metadata shows `ZFS_META_KVER_MAX` below the
      resolved base-image kernel, the job summary and sticky payload call out
      that this is an intentional fail-closed protection
+   - after a promoted build on a newer OpenZFS line than the previous `:latest`,
+     it opens or updates one informational `OpenZFS moved from X to Y` issue
+     (see "Choosing The OpenZFS Release" above)
 
 ## Design Principles
 

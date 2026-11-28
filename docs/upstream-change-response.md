@@ -60,8 +60,12 @@ resolution holds the build on the newest base from the last 90 days whose
 kernel OpenZFS does support, upstream or in this repository's own private copy
 of an earlier held base (quay.io deletes a dated tag after four weeks), and a
 "Kernel held" issue stays open until the hold lifts. The hold lifts by itself
-as soon as an OpenZFS release supports the newer kernel (see "Kernel Hold" in
-[`architecture-overview.md`](./architecture-overview.md)). That is the one
+as soon as an OpenZFS release supports the newer kernel, on the current line
+or, when only a newer line does, from that line's `x.y.1` on (see "Choosing The
+OpenZFS Release" and "Kernel Hold" in
+[`architecture-overview.md`](./architecture-overview.md)). An OpenZFS release
+signed by a key the akmods fork does not pin fails the build closed; the
+failure summary names the key, and trusting it is the owner's decision. That is the one
 sanctioned exception to "no fallback" in AGENTS.md section 0 rule 1: it picks
 an older, verified input and leaves every match, digest and signature check in
 place. If no such base exists, or the failure is anything else, the correct

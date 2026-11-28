@@ -154,8 +154,13 @@ Requires a human decision first — these mirror AGENTS.md section 0:
 
 - **Anything that weakens a fail-closed check.** Never, in fact, not "with
   approval": rule 1 is absolute. Bring the underlying cause instead.
-- **Changing the ZFS line, the kernel it builds against, or anything
-  pool-facing.** See the rollback hole above.
+- **Changing the configured ZFS line, the rules that choose the OpenZFS
+  line, the kernel it builds against, or anything pool-facing.** See the
+  rollback hole above. The one line change that needs no human is the
+  build's own: it moves to a newer OpenZFS line only when the current line
+  cannot support the newest upstream kernel, only from that line's `x.y.1` or
+  later, never back, and with the "OpenZFS moved" notice. A Renovate line
+  bump is never routine (`AGENTS.md` section 10).
 - **Changing what gets signed, how tags propagate, or the promotion path** —
   `build.yml`, `publish-native-image`, `sign_image.py`, `promote_stable.py`,
   `check_akmods_cache.py`, `install_zfs_from_akmods_cache.py`,

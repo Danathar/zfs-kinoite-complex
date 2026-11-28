@@ -57,6 +57,11 @@ def main() -> None:
             # Empty unless the run held the base image on an older kernel; the
             # triage workflow reads it to open or close the "Kernel held" issue.
             "kernel_held_from": optional_env("KERNEL_HELD_FROM"),
+            # The OpenZFS line `:latest` ran before this build, or empty when it
+            # could not be told. The triage workflow compares it with
+            # zfs_minor_version to open the "OpenZFS moved" notice after a
+            # promoted build moved to a newer line.
+            "latest_zfs_minor_version": optional_env("LATEST_ZFS_MINOR_VERSION"),
         },
     }
 

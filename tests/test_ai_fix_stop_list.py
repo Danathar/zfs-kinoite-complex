@@ -50,7 +50,8 @@ STOP_LIST_PHRASES: dict[str, tuple[str, tuple[str, ...]]] = {
         "prompt",
         ("Do not relax the check", "AGENTS.md section 0 rule 1"),
     ),
-    "Changing the ZFS line, the kernel it builds against, or anything pool-facing.": (
+    "Changing the configured ZFS line, the rules that choose the OpenZFS line, the kernel it "
+    "builds against, or anything pool-facing.": (
         "stop",
         ("change the ZFS line or anything pool-facing",),
     ),

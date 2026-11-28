@@ -1184,6 +1184,11 @@ class SigningRowTests(unittest.TestCase):
         self.assertIn('REPO_ROOT / "cosign.pub"', source)
 
 
+# An unheld candidate carrying the OpenZFS release label every candidate gets; there is no
+# `latest` yet, so the OpenZFS line check has nothing to compare it with.
+CANDIDATE_INSPECT = {"Labels": {"org.zfs-kinoite-complex.zfs-version": "2.4.4"}}
+
+
 class PromotionRowTests(unittest.TestCase):
     """
     "Promotion fails: keep `latest` unchanged; verify the candidate digest and signature
@@ -1211,7 +1216,8 @@ class PromotionRowTests(unittest.TestCase):
             patch.dict(os.environ, PROMOTE_ENV, clear=True),
             patch("ci_tools.promote_stable.skopeo_inspect_digest", return_value="sha256:abc"),
             patch("ci_tools.promote_stable.list_repository_tags", return_value=[]),
-            patch("ci_tools.promote_stable.skopeo_inspect_json", return_value={"Labels": {}}),
+            patch("ci_tools.promote_stable.skopeo_inspect_json", return_value=CANDIDATE_INSPECT),
+            patch("ci_tools.promote_stable.skopeo_inspect_json_optional", return_value=None),
             patch("ci_tools.promote_stable.run_cmd", side_effect=note_verify),
             patch(
                 "ci_tools.promote_stable.skopeo_copy",
@@ -1229,7 +1235,8 @@ class PromotionRowTests(unittest.TestCase):
             patch.dict(os.environ, PROMOTE_ENV, clear=True),
             patch("ci_tools.promote_stable.skopeo_inspect_digest", return_value="sha256:abc"),
             patch("ci_tools.promote_stable.list_repository_tags", return_value=[]),
-            patch("ci_tools.promote_stable.skopeo_inspect_json", return_value={"Labels": {}}),
+            patch("ci_tools.promote_stable.skopeo_inspect_json", return_value=CANDIDATE_INSPECT),
+            patch("ci_tools.promote_stable.skopeo_inspect_json_optional", return_value=None),
             patch("ci_tools.promote_stable.run_cmd"),
             patch(
                 "ci_tools.promote_stable.skopeo_copy",
@@ -1253,7 +1260,8 @@ class PromotionRowTests(unittest.TestCase):
             patch.dict(os.environ, PROMOTE_ENV, clear=True),
             patch("ci_tools.promote_stable.skopeo_inspect_digest", return_value="sha256:abc"),
             patch("ci_tools.promote_stable.list_repository_tags", return_value=[]),
-            patch("ci_tools.promote_stable.skopeo_inspect_json", return_value={"Labels": {}}),
+            patch("ci_tools.promote_stable.skopeo_inspect_json", return_value=CANDIDATE_INSPECT),
+            patch("ci_tools.promote_stable.skopeo_inspect_json_optional", return_value=None),
             patch(
                 "ci_tools.promote_stable.run_cmd",
                 side_effect=CiToolError("cosign verify failed"),
@@ -1274,7 +1282,8 @@ class PromotionRowTests(unittest.TestCase):
             ),
             patch("ci_tools.promote_stable.skopeo_inspect_digest", return_value="sha256:abc"),
             patch("ci_tools.promote_stable.list_repository_tags", return_value=[]),
-            patch("ci_tools.promote_stable.skopeo_inspect_json", return_value={"Labels": {}}),
+            patch("ci_tools.promote_stable.skopeo_inspect_json", return_value=CANDIDATE_INSPECT),
+            patch("ci_tools.promote_stable.skopeo_inspect_json_optional", return_value=None),
             patch("ci_tools.promote_stable.skopeo_copy") as skopeo_copy,
             self.assertRaisesRegex(CiToolError, "Missing required verification key file"),
         ):

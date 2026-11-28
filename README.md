@@ -29,7 +29,10 @@ OpenZFS is not hand-pinned to a patch version. Each build resolves the newest st
 a configured minor line (`ZFS_MINOR_VERSION`, `2.4` by default — see
 [`ci/defaults.json`](./ci/defaults.json)) from
 [OpenZFS's own GitHub releases](https://github.com/openzfs/zfs/releases) at build time, and that
-is the version it attempts to build and install.
+is the version it attempts to build and install. When that line cannot support the newest Fedora
+kernel and a newer line's first bug-fix release (`x.y.1`) or later can, the build moves to the
+newer line by itself, never back, and opens an informational issue saying so; see "Choosing The
+OpenZFS Release" in [`docs/architecture-overview.md`](./docs/architecture-overview.md).
 
 > [!IMPORTANT]
 > **Changing this repository is a safety-sensitive change, not a demonstration.** A bad build can

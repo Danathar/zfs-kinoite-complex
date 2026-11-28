@@ -33,8 +33,12 @@ So the bar is higher than "tests pass":
 - **"It compiled" is not evidence a ZFS module is safe.** A module that builds
   and misbehaves sits between the user and pooled data.
 - **Rollback is a data question.** An image that activates newer pool features
-  can leave the previous image unable to import those pools. Never propose a
-  ZFS line bump without saying that out loud.
+  can leave the previous image unable to import those pools. The build moves
+  to a newer OpenZFS line on its own only when the current line cannot support
+  the newest upstream kernel and a newer line can, only from its `x.y.1` or
+  later, never back, and with the visible "OpenZFS moved" notice. Never
+  propose any other ZFS line bump without saying that out loud; it is the
+  owner's decision (AGENTS.md section 10).
 
 ## Never weaken a fail-closed check
 

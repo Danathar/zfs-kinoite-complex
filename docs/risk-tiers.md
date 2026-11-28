@@ -95,6 +95,18 @@ lists these paths, and it labels a pull request that touches one
 GitHub asks for the owner's review
 ([`branch-protection.md`](./branch-protection.md#the-ruleset)).
 
+**An OpenZFS line bump is never routine.** `ci/defaults.json` is not an
+owner-merge path, and "Routine updates" in `AGENTS.md` section 10 approves
+minor dependency updates on green CI, so a Renovate bump of
+`DEFAULT_ZFS_MINOR_VERSION` could otherwise merge as one. It cannot: the
+exception in that section overrides both "Routine updates" and "Repeating an
+earlier decision". Another repository's choice is never approval here. The hive
+may merge such a pull request only when this repository's own `:latest` already
+runs exactly that line and the diff changes only `DEFAULT_ZFS_MINOR_VERSION` to
+it, which records a move the automatic selection already made ("Choosing The
+OpenZFS Release" in [`architecture-overview.md`](./architecture-overview.md)).
+Every other line bump waits for the owner.
+
 ### Tier 2 — can break the build or a published artifact indirectly
 
 The rest of the image and the decision logic: `Containerfile`,

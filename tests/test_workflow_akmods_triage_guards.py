@@ -231,6 +231,19 @@ class TriageGuardTests(unittest.TestCase):
             ],
         )
 
+    def test_the_openzfs_line_move_notice_is_considered_whenever_a_build_ran(self) -> None:
+        # The step itself asks whether promote-stable succeeded, so a run whose later job
+        # failed after promotion still announces the move it shipped.
+        self.check(
+            self.condition("Open or update the OpenZFS line-move notice"),
+            [
+                ({"conclusion": "success", "build_ran": "true"}, True),
+                ({"conclusion": "failure", "build_ran": "true"}, True),
+                ({"conclusion": "success", "build_ran": "false"}, False),
+                ({"conclusion": "success"}, False),
+            ],
+        )
+
     def test_a_sticky_issue_is_opened_only_for_a_failed_run_with_a_payload(self) -> None:
         # The step reads artifacts/akmods-failure.json; a failure in any other step has none.
         self.check(
@@ -316,6 +329,7 @@ class TriageGuardTests(unittest.TestCase):
                 "Open or update the build failure issue",
                 "Close the build failure issue on a real green build",
                 "Open, refresh or close the kernel-held issue",
+                "Open or update the OpenZFS line-move notice",
                 "Build OpenZFS/kernel badge payload",
                 "Publish badges to status branch",
             },

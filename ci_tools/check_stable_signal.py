@@ -5,9 +5,11 @@ Doing: Compares the current upstream stable-signal digest, and the current
 resolved ZFS patch version, against what is recorded on this repo's latest
 promoted image.
 Why: Scheduled runs should only spend build time when Kinoite stable has
-advanced OR a new OpenZFS patch is available on the configured minor line --
-otherwise a patch release (including a security fix) could sit unbuilt
-indefinitely while the base image itself stayed still.
+advanced OR the OpenZFS release this run would build has changed -- otherwise a
+patch release (including a security fix) could sit unbuilt indefinitely while
+the base image itself stayed still. That release comes from the same selection
+input resolution uses (`ci_tools.zfs_release.select_zfs_version`), so a newer
+OpenZFS line that the upstream kernel needs also builds here.
 Separately, a scheduled run builds when this repository's main branch has a
 commit that changes the image and has never shipped. Merging to main starts a
 push build, and a scheduled run that starts while that build is still running
@@ -30,6 +32,7 @@ from datetime import UTC, date, datetime
 from time import monotonic
 
 from ci_tools.common import (
+    REGISTRY_METADATA_TIMEOUT,
     CiToolError,
     normalize_owner,
     optional_env,
@@ -48,7 +51,7 @@ from ci_tools.resolve_build_inputs import (
     dated_base_version_key,
     kernel_exceeds_maximum,
 )
-from ci_tools.zfs_release import resolve_latest_zfs_version, resolve_linux_maximum
+from ci_tools.zfs_release import resolve_linux_maximum, select_zfs_version
 
 STABLE_SIGNAL_IMAGE_LABEL = "org.zfs-kinoite-complex.stable-signal-image"
 STABLE_SIGNAL_DIGEST_LABEL = "org.zfs-kinoite-complex.stable-signal-digest"
@@ -94,8 +97,16 @@ MAX_AUDIT_TAGS_INSPECTED = 10
 # take up to `REGISTRY_METADATA_TIMEOUT`, so ten slow inspects alone could
 # outlast the preflight job's `timeout-minutes`. Past this deadline the walk
 # stops and reports the shipped commit as unknown, which builds. The deadline is
-# checked before each read, so the walk ends at most one read past it, still
-# well under the job limit.
+# checked before each read, and each inspect is given only the time left before
+# it (never more than `REGISTRY_METADATA_TIMEOUT`), so the walk itself never
+# runs past it.
+#
+# The worst case for the whole gate is this deadline plus its other bounded
+# calls: the signal-image, `:latest`, held-copy and tag-list registry reads (each
+# at most `REGISTRY_METADATA_TIMEOUT`), and the GitHub API calls (each at most
+# 30 seconds): up to `MAX_RELEASE_PAGES` release pages, one META read per
+# OpenZFS line the selection tries plus one for the held skip, and one compare.
+# That stays under the preflight job's `timeout-minutes` in build.yml.
 AUDIT_TAG_WALK_DEADLINE_SECONDS = 300.0
 
 
@@ -104,8 +115,9 @@ class StableSignalDecision:
     """
     Resolved decision and metadata for the scheduled-build gate.
 
-    `zfs_version` is the current newest release the gate resolved on the
-    configured minor line. It is only meaningful for the schedule-event path:
+    `zfs_version` is the OpenZFS release the gate selected
+    (`ci_tools.zfs_release.select_zfs_version`). It is only meaningful for the
+    schedule-event path:
     non-schedule events leave it "" because the actual `zfs-version` image
     label is sourced from the real build's own resolution (see
     `build-zfs-akmods` in `build.yml`), not from this gate, so resolving it
@@ -248,13 +260,18 @@ def find_shipped_commit(*, image_org: str, image_name: str, latest_digest: str, 
             reverse=True,
         )
         for tag in audit_tags[:MAX_AUDIT_TAGS_INSPECTED]:
-            if monotonic() >= deadline:
+            now = monotonic()
+            if now >= deadline:
                 print(
                     f"Gave up reading the audit tags of {repository_ref} after "
                     f"{AUDIT_TAG_WALK_DEADLINE_SECONDS:.0f}s"
                 )
                 return ""
-            inspect_json = skopeo_inspect_json(f"{repository_ref}:{tag}", creds=creds)
+            inspect_json = skopeo_inspect_json(
+                f"{repository_ref}:{tag}",
+                creds=creds,
+                timeout=min(REGISTRY_METADATA_TIMEOUT, deadline - now),
+            )
             if str(inspect_json.get("Digest") or "") == latest_digest:
                 return tag.split("-")[2]
     except CiToolError as exc:
@@ -356,15 +373,21 @@ def evaluate_stable_signal_gate(
     today: date | None = None,
 ) -> StableSignalDecision:
     """
-    Compare upstream stable-signal state, AND the current resolved ZFS patch
-    version, against the last promoted image's labels.
+    Compare upstream stable-signal state, AND the OpenZFS release a build would
+    select now, against the last promoted image's labels.
 
     The upstream stable-signal image is authoritative for base-image cadence.
-    Independently, the newest release on the configured ZFS minor line is
-    authoritative for ZFS cadence: a scheduled run must build when either one
-    has moved, not just when the base image has. Without the ZFS check, a new
-    OpenZFS patch (including a security fix) could sit unbuilt indefinitely as
-    long as Kinoite stable itself did not move.
+    Independently, the selected OpenZFS release is authoritative for ZFS
+    cadence: a scheduled run must build when either one has moved, not just
+    when the base image has. Without the ZFS check, a new OpenZFS patch
+    (including a security fix) could sit unbuilt indefinitely as long as
+    Kinoite stable itself did not move.
+
+    The selection is made before any comparison, from the configured line,
+    the line `:latest` runs, and the kernel of the upstream signal image (never
+    `:latest`'s own kernel, which may be held). So a newer OpenZFS line that
+    the upstream kernel needs builds on `zfs-version-advanced`, and once it has
+    shipped the label equals the selection, so there is no nightly rebuild.
 
     The repo's own `:latest` image is only a provenance source for the last
     promoted values of both signals.
@@ -382,10 +405,26 @@ def evaluate_stable_signal_gate(
             f"Missing digest in skopeo inspect output for {_docker_ref(stable_signal_image)}"
         )
 
-    current_zfs_version = resolve_latest_zfs_version(zfs_minor_version)
+    # The newest upstream base's kernel. The signal image stands in for the
+    # base image: both are the same Kinoite tag in ci/defaults.json.
+    upstream_kernel = str((stable_signal_inspect.get("Labels") or {}).get("ostree.linux") or "")
 
     current_latest = f"ghcr.io/{image_org}/{image_name}:latest"
     current_latest_inspect = skopeo_inspect_json_optional(_docker_ref(current_latest), creds=creds)
+    selection = select_zfs_version(
+        configured_line=zfs_minor_version,
+        latest_zfs_version=str(
+            ((current_latest_inspect or {}).get("Labels") or {}).get(ZFS_VERSION_LABEL) or ""
+        ),
+        kernel_release=upstream_kernel,
+    )
+    current_zfs_version = selection.version
+    if selection.moved:
+        print(
+            f"OpenZFS {selection.floor_line} does not support the upstream kernel "
+            f"{upstream_kernel}; selected OpenZFS {current_zfs_version} on the newer "
+            f"{selection.line} line."
+        )
     if current_latest_inspect is None:
         return StableSignalDecision(
             should_build=True,
@@ -440,9 +479,9 @@ def evaluate_stable_signal_gate(
     # build for, so a rebuild would resolve the same held base again. Skip
     # until the upstream kernel is supported (the hold then lifts) or the held
     # base passes the hold window (the build then runs and fails, as it did
-    # before holds existed). This reads the stable-signal image's kernel, which
-    # stands in for the base image's because both are the same Kinoite tag in
-    # ci/defaults.json.
+    # before holds existed). It asks whether the *selected* release supports the
+    # upstream kernel. A newer line that does was already selected above and
+    # built on `zfs-version-advanced`; this is the second guard.
     #
     # A held `:latest` past the window builds whether or not upstream moved,
     # so the run fails and says so instead of the gate skipping forever.
@@ -480,7 +519,6 @@ def evaluate_stable_signal_gate(
             )
     held_upstream_kernel_unsupported = False
     if previous_signal_digest != stable_signal_digest and previous_kernel_held_from:
-        upstream_kernel = str((stable_signal_inspect.get("Labels") or {}).get("ostree.linux") or "")
         held_upstream_kernel_unsupported = bool(upstream_kernel) and kernel_exceeds_maximum(
             upstream_kernel, resolve_linux_maximum(current_zfs_version)
         )

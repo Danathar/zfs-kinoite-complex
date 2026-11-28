@@ -139,6 +139,7 @@ RESOLVE_OUTPUTS = {
     "use_input_lock": "false",
     "lock_file_path": "ci/build-inputs.lock.json",
     "kernel_held_from": "7.3.4-200.fc42.x86_64",
+    "latest_zfs_minor_version": "2.3",
 }
 
 STEP_OUTPUTS = {

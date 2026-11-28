@@ -342,7 +342,7 @@ class ScheduledBuildTests(unittest.TestCase):
             'STABLE_SIGNAL_DIGEST_LABEL = "org.zfs-kinoite-complex.stable-signal-digest"', source
         )
         self.assertIn('ZFS_VERSION_LABEL = "org.zfs-kinoite-complex.zfs-version"', source)
-        self.assertIn("resolve_latest_zfs_version", source)
+        self.assertIn("select_zfs_version", source)
 
     @unittest.skipIf(yaml is None, "PyYAML not installed")
     def test_only_scheduled_runs_consult_the_gate(self) -> None:

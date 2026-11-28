@@ -364,6 +364,13 @@ class CommonTests(unittest.TestCase):
         ):
             skopeo_inspect_json_optional("ghcr.io/example/image:tag")
 
+    def test_skopeo_inspect_json_takes_a_shorter_timeout_from_a_caller_with_a_deadline(
+        self,
+    ) -> None:
+        with patch("ci_tools.common.run_cmd", return_value='{"Digest": "sha256:x"}') as run:
+            skopeo_inspect_json("docker://ghcr.io/example/image:tag", timeout=7.5)
+        self.assertEqual(run.call_args.kwargs["timeout"], 7.5)
+
     def test_registry_and_signing_helpers_bound_their_calls(self) -> None:
         # Each helper that talks to a registry, a git remote, or a signature
         # store passes a ceiling. Asserting the constant rather than a literal

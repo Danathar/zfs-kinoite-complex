@@ -28,7 +28,7 @@
     },
     {
       "customType": "regex",
-      "description": "Track the OpenZFS minor release line so a new line (for example 2.4 -> 2.5) surfaces as a reviewable PR instead of having to be noticed by hand. Patch releases inside the configured line are already picked up automatically at build time by the akmods resolver, so only the line itself needs tracking here. This deliberately does not resolve the newest release across all lines: OpenZFS ships maintenance releases for several lines in one batch, and a resolver that took the most recently published tag could move the image backwards onto an older line. Renovate compares versions semantically, so it can only ever propose moving forward.",
+      "description": "Track the OpenZFS minor release line so a new line (for example 2.4 -> 2.5) surfaces as a reviewable PR instead of having to be noticed by hand. Patch releases inside the configured line are already picked up automatically at build time by the akmods resolver, so only the line itself needs tracking here. The build also moves to a newer line on its own, but only when the configured line cannot support the newest Fedora kernel, only from that line's x.y.1 on, and never back (select_zfs_version in ci_tools/zfs_release.py); this PR is how a move that is not needed for the kernel gets proposed, and after an automatic move it records the line :latest already runs. This deliberately does not resolve the newest release across all lines: OpenZFS ships maintenance releases for several lines in one batch, and a resolver that took the most recently published tag could move the image backwards onto an older line. Renovate compares versions semantically, so it can only ever propose moving forward.",
       "managerFilePatterns": [
         "/^ci/defaults\\.json$/"
       ],
@@ -115,7 +115,7 @@
       "matchManagers": ["dockerfile"]
     },
     {
-      "description": "Never automerge an OpenZFS minor-line bump. A new minor line can introduce new on-disk pool feature flags, and once those are activated on a pool the previous image can no longer import it -- which would break this repo's rollback-to-previous-image recovery path. Adopting a new line must stay a deliberate decision.",
+      "description": "Never automerge an OpenZFS minor-line bump. A new minor line can introduce new on-disk pool feature flags, and once those are activated on a pool the previous image can no longer import it -- which would break this repo's rollback-to-previous-image recovery path. Adopting a new line must stay a deliberate decision. The only automatic move is the build's own, when the kernel needs it. AGENTS.md section 10 says a line bump is never a routine update: the hive may merge this PR only when :latest already runs exactly that line and the diff changes only DEFAULT_ZFS_MINOR_VERSION; otherwise it waits for the owner.",
       "automerge": false,
       "matchPackageNames": ["openzfs/zfs"]
     },

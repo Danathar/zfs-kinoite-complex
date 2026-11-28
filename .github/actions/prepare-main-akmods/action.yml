@@ -150,8 +150,10 @@ runs:
         # fail for reasons unrelated to this repository.
         GITHUB_TOKEN: ${{ inputs.registry_token }}
         # Read this repository's private held-base copy package, which
-        # resolution consults only when no supported upstream base is left.
-        # Upstream bases are read anonymously.
+        # resolution consults only when no supported upstream base is left,
+        # and the zfs-version label of this repository's :latest, the OpenZFS
+        # line the selection never goes below. Upstream bases are read
+        # anonymously.
         REGISTRY_ACTOR: ${{ inputs.registry_actor }}
         REGISTRY_TOKEN: ${{ inputs.registry_token }}
       run: |
@@ -211,6 +213,7 @@ runs:
         ZFS_VERSION: ${{ steps.resolve.outputs.zfs_version }}
         AKMODS_UPSTREAM_REF: ${{ steps.resolve.outputs.akmods_upstream_ref }}
         KERNEL_HELD_FROM: ${{ steps.resolve.outputs.kernel_held_from }}
+        LATEST_ZFS_MINOR_VERSION: ${{ steps.resolve.outputs.latest_zfs_minor_version }}
       run: |
         python3 -m ci_tools.cli write-build-inputs-manifest
 

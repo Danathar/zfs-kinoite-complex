@@ -60,7 +60,14 @@ guidance in sections 1–7 below when they conflict:
 5. **Data-loss awareness for ZFS changes.** Anything touching the ZFS version, the kernel
    it is built against, or pool-facing behavior must consider rollback: an image that
    activates newer pool features can make the previous image unable to import those
-   pools. Surface that risk explicitly. Never quietly bump a ZFS line.
+   pools. Surface that risk explicitly. The build moves to a newer OpenZFS line
+   on its own only when needed: only when the current line cannot support the
+   newest upstream kernel and a newer line can, only from that line's `x.y.1` or
+   later, never back to an older line than `:latest` runs, and always with the
+   visible "OpenZFS moved" notice ("Choosing The OpenZFS Release" in
+   `docs/architecture-overview.md`). Every other line change, including a
+   Renovate bump of `DEFAULT_ZFS_MINOR_VERSION`, is the owner's decision (see
+   section 10). Nothing here runs `zpool upgrade` or creates pools.
 6. **Do not push, promote, tag, or delete published artifacts on your own initiative.**
    Registry tags and git history here are outward-facing. Propose; let the maintainer
    decide.
@@ -255,6 +262,15 @@ still apply to the pull request; this section only removes the question.
   runs the same version (the same release, or the same pinned SHA) on its
   default branch with green CI and this repository's CI is green on it.
   Name that repository and file in the pull request.
+- **OpenZFS line bumps are never routine.** This overrides "Routine updates"
+  and "Repeating an earlier decision" above. A change to
+  `DEFAULT_ZFS_MINOR_VERSION` is never a routine update, and another
+  repository's choice never counts as approval here. The hive may merge a
+  Renovate OpenZFS line-bump pull request only when this repository's own
+  `:latest` already runs exactly that line (its
+  `org.zfs-kinoite-complex.zfs-version` label), and the diff changes only
+  `DEFAULT_ZFS_MINOR_VERSION` to that line. That merge only records a move
+  the automatic selection already made. Otherwise it waits for the owner.
 - **Fixing a red scheduled run.** When a scheduled or nightly run fails and
   the cause is in this repository (a script, a test, a pin, a timeout), fix
   it. File for the owner only when the fix needs something in the list below.

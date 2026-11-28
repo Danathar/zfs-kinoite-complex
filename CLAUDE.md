@@ -65,8 +65,13 @@ So the bar for changes here is higher than "tests pass."
 5. **Data-loss awareness for ZFS changes.** Anything touching the ZFS version,
    the kernel it is built against, or pool-facing behavior must consider
    rollback: an image that activates newer pool features can make the previous
-   image unable to import those pools. Surface that risk explicitly; never
-   quietly bump a ZFS line.
+   image unable to import those pools. Surface that risk explicitly. The build
+   moves to a newer OpenZFS line on its own only when needed: only when the
+   current line cannot support the newest upstream kernel and a newer line can,
+   only from that line's `x.y.1` or later, never back to an older line than
+   `:latest` runs, and always with the visible "OpenZFS moved" notice. Every
+   other line change, a Renovate bump included, is the owner's decision
+   (AGENTS.md section 10). Nothing here runs `zpool upgrade`.
 
 6. **Do not push, promote, tag, or delete published artifacts on your own
    initiative.** Registry tags and git history here are outward-facing. Propose;

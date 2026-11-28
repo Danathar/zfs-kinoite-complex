@@ -429,6 +429,102 @@ jobs:
               }
             }
 
+      # A promoted build on a newer OpenZFS line than the previous `:latest`
+      # opens, or updates, one informational issue. Input resolution moves to a
+      # newer line only when the current one cannot support the newest Fedora
+      # kernel (ci_tools/zfs_release.py, select_zfs_version), so this asks for
+      # no action; it says what a line move means for pools. The trigger is
+      # exact: the manifest records the selected line (zfs_minor_version) and
+      # the line `:latest` ran before this build (latest_zfs_minor_version), and
+      # the notice fires only when the selected line is newer AND this run's
+      # promote-stable job succeeded. A build-inputs artifact also exists for a
+      # run that did not promote. Matched by title and author, like the other
+      # issues here. Reads jobs with `actions: read`, which this job already has.
+      - name: Open or update the OpenZFS line-move notice
+        if: steps.download.outputs.build_ran == 'true'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const fs = require('fs');
+            const run = context.payload.workflow_run;
+            const manifest = 'artifacts/build-inputs/build-inputs.json';
+            if (!fs.existsSync(manifest)) {
+              core.info('No build inputs manifest; no OpenZFS line-move notice.');
+              return;
+            }
+            const inputs = JSON.parse(fs.readFileSync(manifest, 'utf8')).inputs || {};
+            const line = value => {
+              const match = /^(\d+)\.(\d+)$/.exec(String(value || ''));
+              return match ? [Number(match[1]), Number(match[2])] : null;
+            };
+            const selected = line(inputs.zfs_minor_version);
+            const previous = line(inputs.latest_zfs_minor_version);
+            if (!selected || !previous) {
+              core.info('The manifest does not name both OpenZFS lines; no notice.');
+              return;
+            }
+            const newer = selected[0] > previous[0] ||
+              (selected[0] === previous[0] && selected[1] > previous[1]);
+            if (!newer) {
+              core.info('This build stayed on the OpenZFS line :latest ran; no notice.');
+              return;
+            }
+            const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: run.id,
+              filter: 'latest',
+              per_page: 100,
+            });
+            const promoted = jobs.some(
+              j => j.name === 'Promote Candidate To Stable' && j.conclusion === 'success');
+            if (!promoted) {
+              core.info('This run did not promote; :latest is still on the previous OpenZFS line.');
+              return;
+            }
+            const from = previous.join('.');
+            const to = selected.join('.');
+            const title = `OpenZFS moved from ${from} to ${to}`;
+            // A manifest value: keep it to one plain line inside a code span.
+            const plain = v => String(v || '').replace(/[`\r\n]/g, '');
+            const body = [
+              `\`:latest\` now runs OpenZFS \`${plain(inputs.zfs_version)}\`, on the ${to} line. It ran the ${from} line before.`,
+              '',
+              `The build kernel is \`${plain(inputs.kernel_release)}\`. A build moves to a newer OpenZFS line on its own only when the current line cannot support the newest Fedora kernel, only from the newer line's first bug-fix release (x.y.1), and never back. A move the owner made in ci/defaults.json opens this notice too.`,
+              '',
+              'This is informational. Nothing needs doing.',
+              '',
+              '- Existing pools are untouched.',
+              '- Do not run `zpool upgrade` while you want to be able to roll back. Nothing here runs it.',
+              `- A pool created from now on gets the ${to} line's features and will not import on the previous image.`,
+              '',
+              `Promoted by ${run.html_url} on ${run.head_sha}.`,
+            ].join('\n');
+            const open = (await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              per_page: 100,
+            })).filter(i => !i.pull_request && i.title === title && i.user.login === 'github-actions[bot]');
+            if (open.length > 0) {
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: open[0].number,
+                body: body,
+              });
+              core.info(`Updated OpenZFS line-move issue #${open[0].number}`);
+            } else {
+              const created = await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: title,
+                body: body,
+              });
+              core.info(`Opened OpenZFS line-move issue #${created.data.number}`);
+            }
+            await core.summary.addHeading(title, 2).addRaw(body).write();
+
       # Only two conclusions tell us anything new about OpenZFS/kernel compat:
       # a classified upstream-compat failure (has_payload is only 'true' when
       # the akmods build step actually ran and failed) or a clean success. Any

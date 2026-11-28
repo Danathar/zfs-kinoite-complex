@@ -44,6 +44,16 @@ ZFS_META_KVER_MAX_RE = re.compile(rf"ZFS_META_KVER_MAX='({ZFS_META_VALUE})'")
 KERNEL_MAJOR_MINOR_RE = re.compile(r"^(\d+)\.(\d+)")
 ZFS_MAX_KERNEL_MISMATCH_PATTERN = "OpenZFS max supported kernel is below resolved kernel"
 
+# The akmods fork's `build-kmod-zfs.sh` checks each OpenZFS release against the
+# OpenZFS signing keys it pins, and stops with one of these lines when the
+# check fails. gpg names the signing key on a `using <algo> key <id>` line and
+# reports `No public key` when that key is not among the pinned ones. A newer
+# OpenZFS line may be signed by a key this build has never pinned, so the
+# summary names the key and says whose decision trusting it is. The key ID is
+# hex only, so nothing else from the log reaches the issue body.
+OPENZFS_SIGNATURE_FAILED_RE = re.compile(r"(?:ZFS tarball|Checksum) signature verification FAILED")
+GPG_SIGNING_KEY_RE = re.compile(r"using [A-Za-z0-9]{1,16} key ([0-9A-Fa-f]{16,40})\b")
+
 
 UPSTREAM_COMPAT_PATTERNS: tuple[re.Pattern[str], ...] = (
     # Kernel API drift: kmod source calls a symbol the current kernel no longer provides
@@ -107,8 +117,29 @@ def zfs_max_kernel_is_below_resolved_kernel(log_text: str, kernel_release: str) 
     return resolved > supported_max
 
 
+def unpinned_openzfs_signing_key(log_text: str) -> str | None:
+    """
+    Return the key an OpenZFS release was signed with when it is not a pinned one, else None.
+
+    "" when the signature check failed for a missing key but gpg named none.
+    """
+    if not OPENZFS_SIGNATURE_FAILED_RE.search(log_text) or "No public key" not in log_text:
+        return None
+    match = GPG_SIGNING_KEY_RE.search(log_text)
+    return match.group(1).upper() if match else ""
+
+
 def build_failure_summary(*, failure_kind: str, kernel_release: str, log_text: str) -> str:
     """Build the human-readable reason shown in artifacts and job summaries."""
+    signing_key = unpinned_openzfs_signing_key(log_text)
+    if signing_key is not None:
+        return (
+            f"The OpenZFS release is signed by key {signing_key or '(gpg named no key)'}, "
+            "which is not one of the pinned OpenZFS signing keys, so the build failed closed "
+            "and image promotion was skipped. Trusting a new OpenZFS signing key is the "
+            "owner's decision: check it against the OpenZFS signing keys page before pinning "
+            "it in the akmods fork. Nothing adds a key automatically."
+        )
     zfs_version, max_kernel = zfs_metadata_from_log(log_text)
     if (
         failure_kind == FAILURE_KIND_UPSTREAM_COMPAT

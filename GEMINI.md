@@ -36,7 +36,10 @@ point real hardware with real ZFS pools at it. The bar for changes here is highe
 - **ZFS changes carry data-loss risk.** Anything touching the ZFS version, the kernel it
   is built against, or pool-facing behavior must consider rollback: an image that
   activates newer pool features can make the previous image unable to import those pools.
-  Surface that risk; never quietly bump a ZFS line.
+  Surface that risk. The build moves to a newer OpenZFS line on its own only when the
+  current line cannot support the newest upstream kernel and a newer line can, only from
+  its `x.y.1` or later, never back, and with the visible "OpenZFS moved" notice. Every
+  other line change is the owner's decision (AGENTS.md section 10).
 - **Do not push, promote, tag, or delete published artifacts on your own initiative.**
   Registry tags and git history here are outward-facing. Propose; let the maintainer decide.
 - **When unsure whether something is risky, stop and ask.** An interrupted task is cheap

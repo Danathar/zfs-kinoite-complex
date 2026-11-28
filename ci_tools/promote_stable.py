@@ -1,8 +1,9 @@
 """
 Script: ci_tools/promote_stable.py
 What: Promotes the tested candidate tag to stable tags in the same image repository.
-Doing: Refuses when a newer run already promoted, then copies the candidate digest to one
-immutable audit tag, then to `latest`.
+Doing: Refuses when a newer run already promoted, when a held candidate is on an older base,
+or when the candidate is on an older OpenZFS line than `latest`, then copies the candidate
+digest to one immutable audit tag, then to `latest`.
 Why: Candidate-first promotion keeps broken builds from advancing the normal user-facing tag.
 Goal: Update stable tags without rebuilding the image a second time.
 """
@@ -11,17 +12,23 @@ from __future__ import annotations
 
 import os
 
-from ci_tools.check_stable_signal import BASE_VERSION_LABEL, KERNEL_HELD_FROM_LABEL
+from ci_tools.check_stable_signal import (
+    BASE_VERSION_LABEL,
+    KERNEL_HELD_FROM_LABEL,
+    ZFS_VERSION_LABEL,
+)
 from ci_tools.common import (
     COSIGN_TIMEOUT,
     REGISTRY_METADATA_TIMEOUT,
     REPO_ROOT,
     CiToolError,
     normalize_owner,
+    optional_env,
     registry_auth_dir,
     registry_auth_file,
     registry_creds_from_env,
     require_env,
+    require_env_or_default,
     run_cmd,
     run_json_cmd,
     skopeo_copy,
@@ -32,6 +39,7 @@ from ci_tools.common import (
 from ci_tools.prune_registry import STABLE_RE
 from ci_tools.resolve_build_inputs import dated_base_version_key
 from ci_tools.tagging_context import build_candidate_tag
+from ci_tools.zfs_release import zfs_line_key, zfs_line_of
 
 
 def list_repository_tags(repository_ref: str, *, creds: str | None) -> list[str]:
@@ -121,19 +129,117 @@ def refuse_held_base_older_than_latest(*, candidate_labels: dict, latest_labels:
         )
 
 
-def refuse_held_candidate_older_than_latest(*, candidate_ref: str, latest_ref: str, creds: str) -> None:
+def read_promotion_labels(
+    *, candidate_ref: str, latest_ref: str, creds: str
+) -> tuple[dict, dict | None]:
     """
-    Read the candidate's labels and, only for a held candidate, `latest`'s, then
-    apply `refuse_held_base_older_than_latest`.
+    Return the candidate's labels and `latest`'s, or None for `latest` when it does not exist.
+
+    Any other registry failure raises, so a check below never reads "could not tell" as
+    "there is no `latest`".
     """
     candidate_labels = skopeo_inspect_json(candidate_ref, creds=creds).get("Labels") or {}
-    if not candidate_labels.get(KERNEL_HELD_FROM_LABEL):
-        return
     latest_inspect = skopeo_inspect_json_optional(latest_ref, creds=creds)
-    refuse_held_base_older_than_latest(
-        candidate_labels=candidate_labels,
-        latest_labels=None if latest_inspect is None else latest_inspect.get("Labels") or {},
+    latest_labels = None if latest_inspect is None else latest_inspect.get("Labels") or {}
+    return candidate_labels, latest_labels
+
+
+def refuse_zfs_line_older_than_latest(
+    *, candidate_labels: dict, latest_labels: dict | None, configured_line: str
+) -> None:
+    """
+    Refuse to promote a candidate on an older OpenZFS line than `latest` runs.
+
+    Input resolution never selects a line older than `latest`'s, but a
+    lock-file replay keeps its locked version, and a manual dispatch promotes
+    by default. Without this a replay of an old 2.4 lock would move users back
+    from 2.5, and an older OpenZFS cannot import pools whose newer features
+    were enabled.
+
+    - No `latest`: promote.
+    - `latest` without a readable `zfs-version` label (no image this pipeline
+      builds lacks one): promote only when the candidate's line is not older
+      than the configured line, and say so in the run log.
+    - Otherwise refuse a candidate on an older line than `latest`'s.
+
+    A candidate without a readable `zfs-version` label is refused: this
+    pipeline always writes it, so its absence means the candidate is not one
+    of this pipeline's images.
+    """
+    candidate_version = str(candidate_labels.get(ZFS_VERSION_LABEL) or "")
+    candidate_line = zfs_line_of(candidate_version)
+    if not candidate_line:
+        raise CiToolError(
+            f"Refusing to promote: the candidate's {ZFS_VERSION_LABEL} label "
+            f"{candidate_version!r} is not an OpenZFS release, so its OpenZFS line "
+            "cannot be compared with latest's."
+        )
+    if latest_labels is None:
+        return
+    latest_version = str(latest_labels.get(ZFS_VERSION_LABEL) or "")
+    latest_line = zfs_line_of(latest_version)
+    if not latest_line:
+        configured_key = zfs_line_key(configured_line)
+        if configured_key is None:
+            raise CiToolError(f"Invalid ZFS minor version: {configured_line!r}")
+        if zfs_line_key(candidate_line) < configured_key:
+            raise CiToolError(
+                f"Refusing to promote OpenZFS {candidate_version}: latest has no readable "
+                f"{ZFS_VERSION_LABEL} label ({latest_version!r}), and the candidate's line "
+                f"{candidate_line} is older than the configured line {configured_line}."
+            )
+        print(
+            f"latest has no readable {ZFS_VERSION_LABEL} label ({latest_version!r}); "
+            f"promoting OpenZFS {candidate_version} because its line {candidate_line} is not "
+            f"older than the configured line {configured_line}."
+        )
+        return
+    if zfs_line_key(candidate_line) < zfs_line_key(latest_line):
+        raise CiToolError(
+            f"Refusing to promote OpenZFS {candidate_version}: latest already runs OpenZFS "
+            f"{latest_version}, on the newer {latest_line} line. Promoting it would move users "
+            "back to an older OpenZFS line, which may not import pools whose newer features "
+            "were enabled."
+        )
+
+
+def report_zfs_line_move(*, candidate_labels: dict, latest_labels: dict | None) -> None:
+    """
+    Say in the run log and the step summary when this promotion moved to a newer OpenZFS line.
+
+    The informational issue is opened by the triage workflow; this is the same
+    notice in the run itself. Nothing here changes a pool.
+    """
+    if latest_labels is None:
+        return
+    candidate_version = str(candidate_labels.get(ZFS_VERSION_LABEL) or "")
+    latest_version = str(latest_labels.get(ZFS_VERSION_LABEL) or "")
+    candidate_line = zfs_line_of(candidate_version)
+    latest_line = zfs_line_of(latest_version)
+    if not candidate_line or not latest_line:
+        return
+    if zfs_line_key(candidate_line) <= zfs_line_key(latest_line):
+        return
+    notice = "\n".join(
+        [
+            f"## OpenZFS moved from {latest_line} to {candidate_line}",
+            "",
+            f"`latest` now runs OpenZFS {candidate_version} (it ran {latest_version}).",
+            "",
+            "- Existing pools are untouched.",
+            "- Do not run `zpool upgrade` while you want to be able to roll back.",
+            (
+                "- A pool created from now on gets the new line's features and will not import "
+                "on the previous image."
+            ),
+            "",
+        ]
     )
+    print(notice)
+    summary_path = optional_env("GITHUB_STEP_SUMMARY")
+    if summary_path:
+        with open(summary_path, "a", encoding="utf-8") as handle:
+            handle.write(notice + "\n")
 
 
 def verify_candidate_signature(*, image_org: str, image_name: str, candidate_digest: str) -> None:
@@ -222,11 +328,22 @@ def main() -> None:
     )
 
     stable_ref = f"docker://ghcr.io/{image_org}/{image_name}:latest"
+    candidate_labels, latest_labels = read_promotion_labels(
+        candidate_ref=candidate_ref, latest_ref=stable_ref, creds=creds
+    )
 
     # Fail closed before any tag moves: a held candidate never takes `latest`
-    # back to an older base. `latest` is read only for a held candidate.
-    refuse_held_candidate_older_than_latest(
-        candidate_ref=candidate_ref, latest_ref=stable_ref, creds=creds
+    # back to an older base.
+    refuse_held_base_older_than_latest(
+        candidate_labels=candidate_labels, latest_labels=latest_labels
+    )
+
+    # Fail closed before any tag moves: no candidate takes `latest` back to an
+    # older OpenZFS line, a lock-file replay included.
+    refuse_zfs_line_older_than_latest(
+        candidate_labels=candidate_labels,
+        latest_labels=latest_labels,
+        configured_line=require_env_or_default("DEFAULT_ZFS_MINOR_VERSION"),
     )
     audit_ref = f"docker://ghcr.io/{image_org}/{image_name}:stable-{run_number}-{sha_short}"
 
@@ -240,6 +357,8 @@ def main() -> None:
     _copy_and_verify_digest(
         source_digest=candidate_digest, source_ref=candidate_ref, destination_ref=stable_ref, creds=creds
     )
+
+    report_zfs_line_move(candidate_labels=candidate_labels, latest_labels=latest_labels)
 
     print(f"Resolved candidate source {candidate_by_tag} -> {candidate_ref}")
     print(f"Published audit tag {audit_ref}")

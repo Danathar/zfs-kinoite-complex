@@ -115,8 +115,15 @@ class ProducerTagContract(unittest.TestCase):
             mock.patch.object(promote_stable, "skopeo_copy") as skopeo_copy,
             mock.patch.object(promote_stable, "run_cmd"),
             mock.patch.object(promote_stable, "list_repository_tags", return_value=[]),
-            # An unheld candidate: `latest` is never read.
-            mock.patch.object(promote_stable, "skopeo_inspect_json", return_value={"Labels": {}}),
+            # An unheld candidate with no `latest` yet: no line or base comparison
+            # applies, so promotion goes through. The candidate still needs the
+            # `zfs-version` label every image this pipeline builds carries.
+            mock.patch.object(
+                promote_stable,
+                "skopeo_inspect_json",
+                return_value={"Labels": {promote_stable.ZFS_VERSION_LABEL: "2.4.3"}},
+            ),
+            mock.patch.object(promote_stable, "skopeo_inspect_json_optional", return_value=None),
             redirect_stdout(io.StringIO()),
         ):
             promote_stable.main()

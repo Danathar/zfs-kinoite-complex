@@ -23,6 +23,14 @@ The configured minor line is not an independent promise: Fedora's existing
 userspace packages constrain what can be installed in the final image. Test
 the complete image composition after changing it.
 
+The build can also move to a newer OpenZFS line by itself, but only when the
+current line cannot support the newest Kinoite kernel, only from the newer
+line's `x.y.1`, and never back. Watch for the informational
+`OpenZFS moved from X to Y` issue: it means `:latest` now runs the newer line,
+and a Renovate pull request bumping `DEFAULT_ZFS_MINOR_VERSION` to exactly that
+line may then merge (`AGENTS.md` section 10). Any other line bump waits for the
+owner.
+
 ## Akmods fork
 
 The normal mode follows `Danathar/akmods` `main`, resolves that ref to one SHA,

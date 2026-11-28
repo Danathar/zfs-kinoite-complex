@@ -9,8 +9,13 @@ Goal: Keep the promotion contract explicit while the workflow evolves.
 
 from __future__ import annotations
 
+import io
 import os
+import runpy
+import tempfile
 import unittest
+from contextlib import redirect_stdout
+from pathlib import Path
 from unittest.mock import patch
 
 from ci_tools.common import COSIGN_TIMEOUT, CiToolError
@@ -19,7 +24,11 @@ from ci_tools.promote_stable import (
     main,
     refuse_held_base_older_than_latest,
     refuse_older_than_published,
+    refuse_zfs_line_older_than_latest,
+    report_zfs_line_move,
 )
+
+ZFS = "org.zfs-kinoite-complex.zfs-version"
 
 
 def _env() -> dict[str, str]:
@@ -43,10 +52,16 @@ class PromoteStableTests(unittest.TestCase):
         )
         self.list_tags = tags.start()
         self.addCleanup(tags.stop)
-        # The candidate is not held unless a test says so; then `latest` is read.
+        # The candidate is not held unless a test says so. There is no `latest` unless a test
+        # says so.
         candidate = patch(
             "ci_tools.promote_stable.skopeo_inspect_json",
-            return_value={"Labels": {"org.opencontainers.image.version": "43.20261110.0"}},
+            return_value={
+                "Labels": {
+                    "org.opencontainers.image.version": "43.20261110.0",
+                    ZFS: "2.4.4",
+                }
+            },
         )
         self.inspect_candidate = candidate.start()
         self.addCleanup(candidate.stop)
@@ -256,7 +271,7 @@ class PromoteStableTests(unittest.TestCase):
 
         skopeo_copy.assert_not_called()
 
-    def test_an_unheld_candidate_never_reads_latest(self) -> None:
+    def test_the_candidate_and_latest_are_each_read_once(self) -> None:
         with (
             patch.dict(os.environ, _env(), clear=True),
             patch("ci_tools.promote_stable.skopeo_inspect_digest", return_value="sha256:abc"),
@@ -268,7 +283,9 @@ class PromoteStableTests(unittest.TestCase):
         self.inspect_candidate.assert_called_once_with(
             "docker://ghcr.io/danathar/zfs-kinoite-complex@sha256:abc", creds="actor:token"
         )
-        self.inspect_latest.assert_not_called()
+        self.inspect_latest.assert_called_once_with(
+            "docker://ghcr.io/danathar/zfs-kinoite-complex:latest", creds="actor:token"
+        )
         self.assertEqual(skopeo_copy.call_count, 2)
 
     def test_a_held_candidate_on_an_older_base_never_moves_any_tag(self) -> None:
@@ -276,6 +293,7 @@ class PromoteStableTests(unittest.TestCase):
             "Labels": {
                 "org.zfs-kinoite-complex.kernel-held-from": "7.3.4-200.fc43.x86_64",
                 "org.opencontainers.image.version": "43.20261110.0",
+                ZFS: "2.4.4",
             }
         }
         self.inspect_latest.return_value = {
@@ -301,6 +319,7 @@ class PromoteStableTests(unittest.TestCase):
             "Labels": {
                 "org.zfs-kinoite-complex.kernel-held-from": "7.3.4-200.fc43.x86_64",
                 "org.opencontainers.image.version": "43.20261110.0",
+                ZFS: "2.4.4",
             }
         }
         self.inspect_latest.return_value = {
@@ -316,6 +335,42 @@ class PromoteStableTests(unittest.TestCase):
 
         self.assertEqual(skopeo_copy.call_count, 2)
 
+    def test_a_candidate_on_an_older_zfs_line_than_latest_never_moves_any_tag(self) -> None:
+        # A lock-file replay of an old 2.4 lock, promoted by default, while latest runs 2.5.
+        self.inspect_latest.return_value = {
+            "Labels": {"org.opencontainers.image.version": "43.20261110.0", ZFS: "2.5.1"}
+        }
+        with (
+            patch.dict(os.environ, _env(), clear=True),
+            patch("ci_tools.promote_stable.skopeo_inspect_digest", return_value="sha256:abc"),
+            patch("ci_tools.promote_stable.skopeo_copy") as skopeo_copy,
+            patch("ci_tools.promote_stable.run_cmd"),
+            self.assertRaises(CiToolError) as context,
+        ):
+            main()
+
+        self.assertIn("2.5.1", str(context.exception))
+        skopeo_copy.assert_not_called()
+
+    def test_a_move_to_a_newer_line_promotes_and_writes_the_notice(self) -> None:
+        self.inspect_candidate.return_value = {"Labels": {ZFS: "2.5.1"}}
+        self.inspect_latest.return_value = {"Labels": {ZFS: "2.4.4"}}
+        with tempfile.TemporaryDirectory() as temp_dir:
+            summary = Path(temp_dir) / "summary.md"
+            with (
+                patch.dict(os.environ, _env() | {"GITHUB_STEP_SUMMARY": str(summary)}, clear=True),
+                patch("ci_tools.promote_stable.skopeo_inspect_digest", return_value="sha256:abc"),
+                patch("ci_tools.promote_stable.skopeo_copy") as skopeo_copy,
+                patch("ci_tools.promote_stable.run_cmd"),
+                redirect_stdout(io.StringIO()),
+            ):
+                main()
+            text = summary.read_text(encoding="utf-8")
+
+        self.assertEqual(skopeo_copy.call_count, 2)
+        self.assertIn("OpenZFS moved from 2.4 to 2.5", text)
+        self.assertIn("zpool upgrade", text)
+
     def test_non_numeric_run_number_is_refused(self) -> None:
         env = _env() | {"GITHUB_RUN_NUMBER": "12a"}
         with (
@@ -330,9 +385,100 @@ class PromoteStableTests(unittest.TestCase):
         self.assertIn("not a run number", str(context.exception))
         skopeo_copy.assert_not_called()
 
+    def test_running_the_module_as_a_script_calls_main(self) -> None:
+        # With no workflow env, `main()` stops at its first required variable. That it ran at
+        # all proves the `__main__` guard calls it.
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            self.assertRaises(CiToolError) as context,
+        ):
+            runpy.run_module("ci_tools.promote_stable", run_name="__main__")
+
+        self.assertIn("GITHUB_REPOSITORY_OWNER", str(context.exception))
+
 
 # The two newest audit tags on ghcr.io when #360 was filed.
 PUBLISHED = ["stable-220-e6f14f7", "stable-221-c6d1dee"]
+
+
+class RefuseZfsLineOlderThanLatestTests(unittest.TestCase):
+    def refuse(self, candidate: str, latest: dict | None, configured: str = "2.4") -> str:
+        out = io.StringIO()
+        with redirect_stdout(out):
+            refuse_zfs_line_older_than_latest(
+                candidate_labels={ZFS: candidate} if candidate else {},
+                latest_labels=latest,
+                configured_line=configured,
+            )
+        return out.getvalue()
+
+    def test_promotes_when_there_is_no_latest(self) -> None:
+        self.refuse("2.4.4", None)
+
+    def test_promotes_the_same_or_a_newer_line(self) -> None:
+        for candidate in ("2.5.1", "2.5.2", "2.6.1"):
+            with self.subTest(candidate=candidate):
+                self.refuse(candidate, {ZFS: "2.5.1"})
+
+    def test_refuses_an_older_line_than_latest(self) -> None:
+        with self.assertRaises(CiToolError) as context:
+            self.refuse("2.4.9", {ZFS: "2.5.1"})
+        self.assertIn("older OpenZFS line", str(context.exception))
+
+    def test_lines_compare_numerically(self) -> None:
+        with self.assertRaises(CiToolError):
+            self.refuse("2.9.1", {ZFS: "2.10.1"})
+
+    def test_a_latest_without_a_readable_label_is_judged_against_the_configured_line(self) -> None:
+        for latest in ({}, {ZFS: ""}, {ZFS: "2.5"}, {ZFS: "latest"}):
+            with self.subTest(latest=latest):
+                said = self.refuse("2.4.4", latest, configured="2.4")
+                self.assertIn("configured line 2.4", said)
+                with self.assertRaises(CiToolError):
+                    self.refuse("2.4.4", latest, configured="2.5")
+
+    def test_an_invalid_configured_line_is_refused_when_latest_has_no_readable_label(self) -> None:
+        for configured in ("", "2", "2.4.4", "latest"):
+            with self.subTest(configured=configured), self.assertRaises(CiToolError) as context:
+                self.refuse("2.4.4", {}, configured=configured)
+            self.assertIn("Invalid ZFS minor version", str(context.exception))
+
+    def test_a_candidate_without_a_readable_label_is_refused(self) -> None:
+        for candidate in ("", "2.4", "zfs-2.4.4"):
+            with self.subTest(candidate=candidate), self.assertRaises(CiToolError):
+                self.refuse(candidate, None)
+
+
+class ReportZfsLineMoveTests(unittest.TestCase):
+    def report(self, candidate: str, latest: dict | None) -> tuple[str, str]:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            summary = Path(temp_dir) / "summary.md"
+            out = io.StringIO()
+            with (
+                patch.dict(os.environ, {"GITHUB_STEP_SUMMARY": str(summary)}),
+                redirect_stdout(out),
+            ):
+                report_zfs_line_move(candidate_labels={ZFS: candidate}, latest_labels=latest)
+            written = summary.read_text(encoding="utf-8") if summary.exists() else ""
+        return out.getvalue(), written
+
+    def test_a_newer_line_is_reported_with_the_rollback_warnings(self) -> None:
+        said, written = self.report("2.5.1", {ZFS: "2.4.4"})
+        self.assertEqual(said.strip(), written.strip())
+        self.assertIn("OpenZFS moved from 2.4 to 2.5", written)
+        self.assertIn("Existing pools are untouched.", written)
+        self.assertIn("zpool upgrade", written)
+        self.assertIn("will not import on the previous image", written)
+
+    def test_nothing_is_reported_without_a_line_move(self) -> None:
+        for candidate, latest in (
+            ("2.4.5", {ZFS: "2.4.4"}),
+            ("2.5.1", None),
+            ("2.5.1", {}),
+            ("2.4.4", {ZFS: "2.5.1"}),
+        ):
+            with self.subTest(candidate=candidate, latest=latest):
+                self.assertEqual(self.report(candidate, latest), ("", ""))
 
 
 class RefuseOlderThanPublishedTests(unittest.TestCase):

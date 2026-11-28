@@ -17,6 +17,7 @@ import unittest
 from contextlib import redirect_stdout
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from typing import ClassVar
 from unittest.mock import patch
 
 from ci_tools.common import (
@@ -42,12 +43,14 @@ from ci_tools.resolve_build_inputs import (
     find_held_base,
     held_base_repository,
     kernel_exceeds_maximum,
+    latest_zfs_version_label,
     list_base_image_tags,
     main,
     resolve_build_inputs,
     resolve_configured_inputs,
     trusted_held_copy_digest,
 )
+from ci_tools.zfs_release import ZfsSelection
 
 
 class ChooseBaseImageTagTests(unittest.TestCase):
@@ -792,9 +795,12 @@ class ResolveBuildInputsRegistryGuardTests(unittest.TestCase):
                 return_value="6.16.4-200.fc43.x86_64\n6.16.10-200.fc43.x86_64\n",
             ),
             patch(
-                "ci_tools.resolve_build_inputs.resolve_latest_zfs_version",
-                return_value="2.4.1",
+                "ci_tools.resolve_build_inputs.select_zfs_version",
+                return_value=ZfsSelection(
+                    version="2.4.1", line="2.4", floor_line="2.4", latest_line=""
+                ),
             ),
+            patch("ci_tools.resolve_build_inputs.latest_zfs_version_label", return_value=""),
             # 6.16 is inside this limit, so these cases never hold the base.
             patch("ci_tools.resolve_build_inputs.resolve_linux_maximum", return_value="6.17"),
         ):
@@ -1655,6 +1661,8 @@ class ResolveBuildInputsKernelHoldTests(unittest.TestCase):
         installed: str = "7.2.15-200.fc44.x86_64\n",
         env: dict | None = None,
         token: bool = True,
+        selected: str = "2.4.4",
+        latest_zfs_version: str = "2.4.4",
     ):
         """
         `copies` is the private package, tag -> (kernel, version, digest). `trusted` is the
@@ -1740,6 +1748,17 @@ class ResolveBuildInputsKernelHoldTests(unittest.TestCase):
                 raise CiToolError(f"manifest unknown: {ref}")
             return tags[tag][2]
 
+        def select(**kwargs) -> ZfsSelection:
+            # The selection is asked about the newest base's kernel, never a held one.
+            self.assertEqual(kwargs["kernel_release"], tags[self.BASE_REF.rsplit(":", 1)[1]][0])
+            self.assertEqual(kwargs["latest_zfs_version"], latest_zfs_version)
+            return ZfsSelection(
+                version=selected,
+                line=selected.rsplit(".", 1)[0],
+                floor_line="2.4",
+                latest_line=latest_zfs_version.rsplit(".", 1)[0],
+            )
+
         def list_tags(name: str) -> list[str]:
             self.assertNotEqual(name, self.COPIES, "the copy package is never listed")
             self.listed += 1
@@ -1783,6 +1802,13 @@ class ResolveBuildInputsKernelHoldTests(unittest.TestCase):
             patch("ci_tools.resolve_build_inputs.list_base_image_tags", side_effect=list_tags),
             patch("ci_tools.resolve_build_inputs.run_cmd_with_retries", side_effect=pull),
             patch("ci_tools.resolve_build_inputs.run_cmd", return_value=installed),
+            patch(
+                "ci_tools.resolve_build_inputs.select_zfs_version", side_effect=select
+            ) as self.select,
+            patch(
+                "ci_tools.resolve_build_inputs.latest_zfs_version_label",
+                return_value=latest_zfs_version,
+            ),
             patch(
                 "ci_tools.resolve_build_inputs.resolve_latest_zfs_version", return_value="2.4.4"
             ),
@@ -2067,6 +2093,85 @@ class ResolveBuildInputsKernelHoldTests(unittest.TestCase):
             write_outputs.call_args.args[0]["kernel_held_from"], "7.3.4-200.fc44.x86_64"
         )
         self.assertIn("Kernel held: the newest base image has kernel 7.3.4", stdout.getvalue())
+
+    def test_a_newer_line_that_supports_the_newest_kernel_lifts_the_hold(self) -> None:
+        # OpenZFS 2.4 stops at 7.2, 2.5.1 supports 7.3: the selection moves, so the newest base
+        # is built and nothing is held. The hold's limit is read for the selected release.
+        resolution = self._resolve(
+            selected="2.5.1", linux_maximum="7.3", installed="7.3.4-200.fc44.x86_64\n"
+        )
+        inputs = resolution.inputs
+        self.assertEqual(inputs.kernel_held_from, "")
+        self.assertEqual(inputs.base_image_pinned, f"{self.NAME}@{self.NEWEST_DIGEST}")
+        self.assertEqual(inputs.zfs_version, "2.5.1")
+        self.assertEqual(inputs.zfs_minor_version, "2.5")
+        self.assertEqual(inputs.latest_zfs_minor_version, "2.4")
+        self.linux_maximum.assert_called_once_with("2.5.1")
+        self.select.assert_called_once()
+        self.assertEqual(self.select.call_args.kwargs["configured_line"], "2.4")
+
+    def test_a_lock_file_replay_keeps_its_locked_version_and_never_selects(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            lock_path = Path(temp_dir) / "inputs.lock.json"
+            lock_path.write_text(json.dumps(self._replay_lock(self.BASE_REF)), encoding="utf-8")
+            resolution = self._resolve(
+                env={"USE_INPUT_LOCK": "true", "LOCK_FILE": str(lock_path)},
+                installed="7.3.4-200.fc44.x86_64\n",
+                selected="2.5.1",
+                latest_zfs_version="2.5.1",
+            )
+        self.select.assert_not_called()
+        self.assertEqual(resolution.inputs.zfs_version, "2.4.4")
+        self.assertEqual(resolution.inputs.zfs_minor_version, "2.4")
+        # The manifest still records which line `:latest` ran, for the line-move notice.
+        self.assertEqual(resolution.inputs.latest_zfs_minor_version, "2.5")
+
+
+class LatestZfsVersionLabelTests(unittest.TestCase):
+    """`:latest`'s `zfs-version` label, the floor `select_zfs_version` never goes below."""
+
+    ENV: ClassVar[dict[str, str]] = {
+        "GITHUB_REPOSITORY_OWNER": "Danathar",
+        "REGISTRY_ACTOR": "actor",
+        "REGISTRY_TOKEN": "secret-token",
+        "IMAGE_NAME": "zfs-kinoite-complex",
+    }
+    LATEST = "docker://ghcr.io/danathar/zfs-kinoite-complex:latest"
+
+    def _read(self, *, env: dict, latest) -> tuple[str, object]:
+        with (
+            patch.dict(os.environ, env, clear=False),
+            patch(
+                "ci_tools.resolve_build_inputs.skopeo_inspect_json_optional",
+                side_effect=latest if isinstance(latest, Exception) else None,
+                return_value=latest,
+            ) as inspect,
+            redirect_stdout(io.StringIO()),
+        ):
+            return latest_zfs_version_label(), inspect
+
+    def test_reads_the_label_of_latest_with_the_token(self) -> None:
+        label, inspect = self._read(
+            env=self.ENV, latest={"Labels": {"org.zfs-kinoite-complex.zfs-version": "2.5.1"}}
+        )
+        self.assertEqual(label, "2.5.1")
+        inspect.assert_called_once_with(self.LATEST, creds="actor:secret-token")
+
+    def test_a_missing_latest_or_label_is_empty(self) -> None:
+        for latest in (None, {"Labels": {}}, {"Labels": None}, {}):
+            with self.subTest(latest=latest):
+                self.assertEqual(self._read(env=self.ENV, latest=latest)[0], "")
+
+    def test_without_a_token_nothing_is_read(self) -> None:
+        label, inspect = self._read(
+            env=self.ENV | {"REGISTRY_TOKEN": ""}, latest=AssertionError("read without a token")
+        )
+        self.assertEqual(label, "")
+        inspect.assert_not_called()
+
+    def test_any_other_registry_failure_raises(self) -> None:
+        with self.assertRaises(CiToolError):
+            self._read(env=self.ENV, latest=CiToolError("unauthorized: authentication required"))
 
 
 if __name__ == "__main__":

@@ -281,6 +281,43 @@ class FailureSummaryTests(unittest.TestCase):
         self.assertIn("known upstream ZFS/kernel compatibility pattern", summary)
 
 
+    def test_an_unpinned_openzfs_signing_key_is_named_and_left_to_the_owner(self) -> None:
+        log = (
+            "Verifying tar.gz signature\n"
+            "gpg: Signature made Tue 01 Dec 2026 10:00:00 UTC\n"
+            "gpg:                using RSA key 0123456789abcdef0123456789abcdef01234567\n"
+            "gpg: Can't check signature: No public key\n"
+            "ZFS tarball signature verification FAILED! See README.md for OpenZFS key updates.\n"
+        )
+        summary = build_failure_summary(
+            failure_kind=FAILURE_KIND_UNKNOWN, kernel_release="7.3.4", log_text=log
+        )
+        self.assertIn("0123456789ABCDEF0123456789ABCDEF01234567", summary)
+        self.assertIn("owner's decision", summary)
+        self.assertIn("Nothing adds a key automatically.", summary)
+
+    def test_a_signature_failure_without_a_named_key_still_says_so(self) -> None:
+        log = (
+            "gpg: Can't check signature: No public key\n"
+            "Checksum signature verification FAILED! See README.md for OpenZFS key updates.\n"
+        )
+        summary = build_failure_summary(
+            failure_kind=FAILURE_KIND_UNKNOWN, kernel_release="7.3.4", log_text=log
+        )
+        self.assertIn("(gpg named no key)", summary)
+        self.assertIn("owner's decision", summary)
+
+    def test_a_bad_signature_from_a_pinned_key_is_not_called_an_unpinned_key(self) -> None:
+        log = (
+            "gpg:                using RSA key 0123456789ABCDEF0123456789ABCDEF01234567\n"
+            'gpg: BAD signature from "OpenZFS"\n'
+            "ZFS tarball signature verification FAILED! See README.md for OpenZFS key updates.\n"
+        )
+        summary = build_failure_summary(
+            failure_kind=FAILURE_KIND_UNKNOWN, kernel_release="7.3.4", log_text=log
+        )
+        self.assertNotIn("owner's decision", summary)
+
     def test_transient_network_summary_says_it_is_not_a_compat_problem(self) -> None:
         summary = build_failure_summary(
             failure_kind=FAILURE_KIND_TRANSIENT_NETWORK,

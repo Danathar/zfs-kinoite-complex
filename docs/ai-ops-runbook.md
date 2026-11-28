@@ -186,7 +186,9 @@ Every file in `.github/workflows/` has an entry here.
   issues themselves. After a green build that really built, it also opens,
   refreshes or closes the `Kernel held: waiting for OpenZFS to support the
   newest Fedora kernel` issue, from the run's build-inputs manifest (see "The
-  kernel-held issue" below). When that job closes a sticky issue, or a green build
+  kernel-held issue" below). After a promoted build on a newer OpenZFS line
+  than the previous `:latest`, it opens or updates one `OpenZFS moved from X to
+  Y` issue (see "The OpenZFS line-move notice" below). When that job closes a sticky issue, or a green build
   follows a failed one (the sticky issue may already have been closed by hand
   or by a merged pull request), a second job, "Re-run pull request builds
   stopped by the cleared failure", re-runs the failed jobs
@@ -332,6 +334,23 @@ Every file in `.github/workflows/` has an entry here.
   build fails instead, and the failure issues above take over.
 - **Detail:** "Kernel Hold" in
   [`architecture-overview.md`](./architecture-overview.md).
+
+## The OpenZFS line-move notice
+
+- **What it looks like:** author `app/github-actions`, no label, title
+  `OpenZFS moved from X to Y`.
+- **Means:** a promoted build runs a newer OpenZFS line than the previous
+  `:latest`. The build moves on its own only when the old line cannot support
+  the newest Fedora kernel, only from the new line's `x.y.1` on, and never back
+  (see Choosing The OpenZFS Release in the architecture overview). It is
+  informational and asks for nothing. Existing pools are untouched. A pool
+  created from now on gets the new line's features and will not import on the
+  previous image, and `zpool upgrade` ends rollback.
+- **First:** nothing to fix. Do not run `zpool upgrade`, and do not revert the
+  line: promotion refuses an older line than `:latest` anyway. A Renovate pull
+  request that bumps `DEFAULT_ZFS_MINOR_VERSION` to exactly this line, and
+  changes nothing else, may merge (`AGENTS.md` section 10).
+- **Closing:** nothing closes it automatically. The owner closes it once read.
 
 ## The gate hook refuses a command
 

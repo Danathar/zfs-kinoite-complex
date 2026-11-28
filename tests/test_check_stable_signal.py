@@ -20,6 +20,7 @@ import urllib.error
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from ci_tools import zfs_release
 from ci_tools.check_stable_signal import (
     AUDIT_TAG_WALK_DEADLINE_SECONDS,
     COMPARE_FILES_CAP,
@@ -38,7 +39,7 @@ from ci_tools.check_stable_signal import (
     main,
     unshipped_commits_reason,
 )
-from ci_tools.common import CiToolError
+from ci_tools.common import REGISTRY_METADATA_TIMEOUT, CiToolError
 from tests.test_common import parse_github_file
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -132,8 +133,8 @@ class EvaluateStableSignalGateTests(unittest.TestCase):
             raise AssertionError(image_ref)
 
         with _patched_registry_inspect(inspect), patch(
-            "ci_tools.check_stable_signal.resolve_latest_zfs_version",
-            return_value="2.4.3",
+            "ci_tools.zfs_release.fetch_openzfs_releases",
+            return_value=[{"tag_name": "zfs-2.4.3"}],
         ), _patched_unshipped_check(shipped_commit=HEAD_SHA[:7]) as (find, _):
             decision = evaluate_stable_signal_gate(
                 image_org="danathar",
@@ -174,8 +175,8 @@ class EvaluateStableSignalGateTests(unittest.TestCase):
             raise AssertionError(image_ref)
 
         with _patched_registry_inspect(inspect), patch(
-            "ci_tools.check_stable_signal.resolve_latest_zfs_version",
-            return_value="2.4.3",
+            "ci_tools.zfs_release.fetch_openzfs_releases",
+            return_value=[{"tag_name": "zfs-2.4.3"}],
         ):
             decision = evaluate_stable_signal_gate(
                 image_org="danathar",
@@ -206,8 +207,8 @@ class EvaluateStableSignalGateTests(unittest.TestCase):
             raise AssertionError(image_ref)
 
         with _patched_registry_inspect(inspect), patch(
-            "ci_tools.check_stable_signal.resolve_latest_zfs_version",
-            return_value="2.4.4",
+            "ci_tools.zfs_release.fetch_openzfs_releases",
+            return_value=[{"tag_name": "zfs-2.4.4"}],
         ), _patched_unshipped_check(shipped_commit="") as (find, _):
             decision = evaluate_stable_signal_gate(
                 image_org="danathar",
@@ -243,8 +244,8 @@ class EvaluateStableSignalGateTests(unittest.TestCase):
             raise AssertionError(image_ref)
 
         with _patched_registry_inspect(inspect), patch(
-            "ci_tools.check_stable_signal.resolve_latest_zfs_version",
-            return_value="2.4.3",
+            "ci_tools.zfs_release.fetch_openzfs_releases",
+            return_value=[{"tag_name": "zfs-2.4.3"}],
         ):
             decision = evaluate_stable_signal_gate(
                 image_org="danathar",
@@ -270,8 +271,8 @@ class EvaluateStableSignalGateTests(unittest.TestCase):
             raise AssertionError(image_ref)
 
         with _patched_registry_inspect(inspect), patch(
-            "ci_tools.check_stable_signal.resolve_latest_zfs_version",
-            return_value="2.4.3",
+            "ci_tools.zfs_release.fetch_openzfs_releases",
+            return_value=[{"tag_name": "zfs-2.4.3"}],
         ):
             decision = evaluate_stable_signal_gate(
                 image_org="danathar",
@@ -300,8 +301,8 @@ class EvaluateStableSignalGateTests(unittest.TestCase):
             raise AssertionError(image_ref)
 
         with _patched_registry_inspect(inspect), patch(
-            "ci_tools.check_stable_signal.resolve_latest_zfs_version",
-            return_value="2.4.3",
+            "ci_tools.zfs_release.fetch_openzfs_releases",
+            return_value=[{"tag_name": "zfs-2.4.3"}],
         ):
             decision = evaluate_stable_signal_gate(
                 image_org="danathar",
@@ -329,8 +330,8 @@ class EvaluateStableSignalGateTests(unittest.TestCase):
             raise AssertionError(image_ref)
 
         with _patched_registry_inspect(inspect), patch(
-            "ci_tools.check_stable_signal.resolve_latest_zfs_version",
-            return_value="2.4.3",
+            "ci_tools.zfs_release.fetch_openzfs_releases",
+            return_value=[{"tag_name": "zfs-2.4.3"}],
         ), self.assertRaises(CiToolError) as context:
             evaluate_stable_signal_gate(
                 image_org="danathar",
@@ -350,8 +351,8 @@ class EvaluateStableSignalGateTests(unittest.TestCase):
             raise CiToolError("upstream inspect failed")
 
         with _patched_registry_inspect(inspect), patch(
-            "ci_tools.check_stable_signal.resolve_latest_zfs_version",
-            return_value="2.4.3",
+            "ci_tools.zfs_release.fetch_openzfs_releases",
+            return_value=[{"tag_name": "zfs-2.4.3"}],
         ), self.assertRaises(CiToolError) as context:
             evaluate_stable_signal_gate(
                 image_org="danathar",
@@ -388,8 +389,8 @@ class UnshippedCommitsGateTests(unittest.TestCase):
 
     def evaluate(self, *, shipped_commit: str, comparison: dict | None = None):
         with _patched_registry_inspect(_same_signal_inspect), patch(
-            "ci_tools.check_stable_signal.resolve_latest_zfs_version",
-            return_value="2.4.3",
+            "ci_tools.zfs_release.fetch_openzfs_releases",
+            return_value=[{"tag_name": "zfs-2.4.3"}],
         ), _patched_unshipped_check(shipped_commit=shipped_commit, comparison=comparison) as (
             _,
             fetch,
@@ -503,8 +504,8 @@ class UnshippedCommitsGateTests(unittest.TestCase):
 
     def test_compare_failure_builds_instead_of_raising(self) -> None:
         with _patched_registry_inspect(_same_signal_inspect), patch(
-            "ci_tools.check_stable_signal.resolve_latest_zfs_version",
-            return_value="2.4.3",
+            "ci_tools.zfs_release.fetch_openzfs_releases",
+            return_value=[{"tag_name": "zfs-2.4.3"}],
         ), patch(
             "ci_tools.check_stable_signal.find_shipped_commit", return_value=SHIPPED_SHA7
         ), patch(
@@ -528,8 +529,8 @@ class UnshippedCommitsGateTests(unittest.TestCase):
         handle = MagicMock()
         handle.__enter__.return_value.read.side_effect = http.client.IncompleteRead(b"{")
         with _patched_registry_inspect(_same_signal_inspect), patch(
-            "ci_tools.check_stable_signal.resolve_latest_zfs_version",
-            return_value="2.4.3",
+            "ci_tools.zfs_release.fetch_openzfs_releases",
+            return_value=[{"tag_name": "zfs-2.4.3"}],
         ), patch(
             "ci_tools.check_stable_signal.find_shipped_commit", return_value=SHIPPED_SHA7
         ), patch(
@@ -567,8 +568,8 @@ class UnshippedCommitsGateTests(unittest.TestCase):
             return _same_signal_inspect(image_ref)
 
         with _patched_registry_inspect(inspect), patch(
-            "ci_tools.check_stable_signal.resolve_latest_zfs_version",
-            return_value="2.4.3",
+            "ci_tools.zfs_release.fetch_openzfs_releases",
+            return_value=[{"tag_name": "zfs-2.4.3"}],
         ), _patched_unshipped_check(shipped_commit="") as (find, _):
             decision = evaluate_stable_signal_gate(
                 image_org="danathar",
@@ -603,10 +604,14 @@ class FindShippedCommitTests(unittest.TestCase):
         self, *, tags, digests, latest_digest="sha256:latest", list_error=None, clock=None
     ):
         inspected: list[str] = []
+        self.timeouts: list[float | None] = []
 
-        def inspect(image_ref: str, *, creds: str | None = None) -> dict:
+        def inspect(
+            image_ref: str, *, creds: str | None = None, timeout: float | None = None
+        ) -> dict:
             self.assertEqual(creds, "actor:token")
             inspected.append(image_ref)
+            self.timeouts.append(timeout)
             digest = digests[image_ref.rsplit(":", 1)[1]]
             if isinstance(digest, Exception):
                 raise digest
@@ -697,6 +702,20 @@ class FindShippedCommitTests(unittest.TestCase):
             clock=lambda: next(times),
         )
         self.assertEqual(found, "aaaaaaa")
+
+    def test_each_inspect_gets_only_the_time_left_before_the_deadline(self) -> None:
+        # The first inspect starts at 1s, the second 10s before the deadline: neither may
+        # run past it, and neither gets more than the usual registry ceiling.
+        times = iter([0.0, 1.0, AUDIT_TAG_WALK_DEADLINE_SECONDS - 10.0])
+        self.run_find(
+            tags=["stable-10-bbbbbbb", "stable-9-aaaaaaa"],
+            digests={"stable-10-bbbbbbb": "sha256:other", "stable-9-aaaaaaa": "sha256:latest"},
+            clock=lambda: next(times),
+        )
+        self.assertEqual(
+            self.timeouts,
+            [min(REGISTRY_METADATA_TIMEOUT, AUDIT_TAG_WALK_DEADLINE_SECONDS - 1.0), 10.0],
+        )
 
     def test_the_deadline_is_well_under_the_preflight_job_limit(self) -> None:
         text = (REPO_ROOT / ".github" / "workflows" / "build.yml").read_text(encoding="utf-8")
@@ -948,6 +967,141 @@ class CheckStableSignalMainTests(unittest.TestCase):
             )
 
 
+# META ranges for the line-move scenarios: OpenZFS 2.4 stops at 7.2, 2.5.1 and later
+# 2.4 patches reach 7.3, 2.6.1 needs at least 7.4.
+LINE_MOVE_METAS = {
+    "2.4.4": "Linux-Maximum: 7.2\nLinux-Minimum: 4.18\n",
+    "2.4.5": "Linux-Maximum: 7.3\nLinux-Minimum: 4.18\n",
+    "2.5.1": "Linux-Maximum: 7.3\nLinux-Minimum: 5.10\n",
+}
+UPSTREAM_KERNEL = "7.3.5-200.fc44.x86_64"
+
+
+def _releases(*versions: str) -> list[dict]:
+    return [
+        {"tag_name": f"zfs-{version}", "draft": False, "prerelease": False}
+        for version in versions
+    ]
+
+
+def _line_move_meta(version: str) -> str:
+    """The META fetcher, failing as the real one does for a release it cannot read."""
+    if version not in LINE_MOVE_METAS:
+        raise CiToolError(f"Failed to fetch OpenZFS META for {version}: HTTP Error 404")
+    return LINE_MOVE_METAS[version]
+
+
+class ZfsLineSelectionGateTests(unittest.TestCase):
+    """
+    The gate with the real `select_zfs_version`, fed a release list and META files.
+
+    The upstream signal image carries `UPSTREAM_KERNEL`. `:latest` carries the kernel of the
+    base it was built on, which a held image keeps at 7.2; the gate must never select for it.
+    """
+
+    def evaluate(
+        self,
+        *,
+        latest_zfs_version: str,
+        releases: list[dict],
+        signal_digest: str = "sha256:same",
+        held: bool = False,
+    ) -> StableSignalDecision:
+        def inspect(image_ref: str, *, creds: str | None = None) -> dict:
+            del creds
+            if image_ref == "docker://quay.io/fedora-ostree-desktops/kinoite:44":
+                signal = _stable_signal_inspect(signal_digest)
+                signal["Labels"] = {"ostree.linux": UPSTREAM_KERNEL}
+                return signal
+            if image_ref == "docker://ghcr.io/danathar/zfs-kinoite-complex:latest":
+                latest = _current_latest_inspect(
+                    signal_image="quay.io/fedora-ostree-desktops/kinoite:44",
+                    signal_digest="sha256:same",
+                    zfs_version=latest_zfs_version,
+                )
+                latest["Labels"]["ostree.linux"] = "7.2.15-200.fc44.x86_64"
+                if held:
+                    latest["Labels"]["org.zfs-kinoite-complex.kernel-held-from"] = UPSTREAM_KERNEL
+                return latest
+            raise AssertionError(image_ref)
+
+        with (
+            _patched_registry_inspect(inspect),
+            patch("ci_tools.zfs_release.fetch_openzfs_releases", return_value=releases),
+            patch("ci_tools.zfs_release.fetch_openzfs_meta", side_effect=_line_move_meta),
+            _patched_unshipped_check(shipped_commit=HEAD_SHA[:7]),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            return evaluate_stable_signal_gate(
+                image_org="danathar",
+                image_name="zfs-kinoite-complex",
+                stable_signal_image="quay.io/fedora-ostree-desktops/kinoite:44",
+                zfs_minor_version="2.4",
+                creds="actor:token",
+                repository="Danathar/zfs-kinoite-complex",
+                head_sha=HEAD_SHA,
+            )
+
+    def test_a_newly_eligible_line_builds(self) -> None:
+        decision = self.evaluate(
+            latest_zfs_version="2.4.4", releases=_releases("2.4.4", "2.5.0", "2.5.1")
+        )
+        self.assertEqual(decision.reason, "zfs-version-advanced")
+        self.assertTrue(decision.should_build)
+        self.assertEqual(decision.zfs_version, "2.5.1")
+
+    def test_after_the_move_there_is_no_rebuild(self) -> None:
+        # `:latest` now runs 2.5.1. A later 2.4 patch that supports the kernel too does not
+        # pull the selection back to 2.4, so the label equals the selection and nothing builds.
+        decision = self.evaluate(
+            latest_zfs_version="2.5.1", releases=_releases("2.4.4", "2.4.5", "2.5.0", "2.5.1")
+        )
+        self.assertEqual(decision.reason, "stable-signal-unchanged")
+        self.assertFalse(decision.should_build)
+        self.assertEqual(decision.zfs_version, "2.5.1")
+
+    def test_a_patch_on_the_current_line_still_builds_first(self) -> None:
+        # 2.4.5 supports the kernel, so the floor line keeps it and 2.5.1 is never chosen.
+        decision = self.evaluate(
+            latest_zfs_version="2.4.4", releases=_releases("2.4.4", "2.4.5", "2.5.1")
+        )
+        self.assertEqual(decision.reason, "zfs-version-advanced")
+        self.assertEqual(decision.zfs_version, "2.4.5")
+
+    def test_a_newer_line_x_y_0_alone_does_not_build(self) -> None:
+        decision = self.evaluate(latest_zfs_version="2.4.4", releases=_releases("2.4.4", "2.5.0"))
+        self.assertEqual(decision.reason, "stable-signal-unchanged")
+        self.assertEqual(decision.zfs_version, "2.4.4")
+
+    def test_the_selection_uses_the_upstream_kernel_not_latests(self) -> None:
+        # `:latest`'s own 7.2 kernel is supported by 2.4.4; selecting for it would build nothing.
+        with patch(
+            "ci_tools.check_stable_signal.select_zfs_version",
+            wraps=zfs_release.select_zfs_version,
+        ) as select:
+            decision = self.evaluate(
+                latest_zfs_version="2.4.4", releases=_releases("2.4.4", "2.5.1")
+            )
+        self.assertEqual(select.call_args.kwargs["kernel_release"], UPSTREAM_KERNEL)
+        self.assertEqual(select.call_args.kwargs["latest_zfs_version"], "2.4.4")
+        self.assertEqual(decision.zfs_version, "2.5.1")
+
+    def test_while_held_a_newly_eligible_line_lifts_the_hold(self) -> None:
+        decision = self.evaluate(
+            latest_zfs_version="2.4.4",
+            releases=_releases("2.4.4", "2.5.1"),
+            signal_digest="sha256:moved",
+            held=True,
+        )
+        self.assertEqual(decision.reason, "zfs-version-advanced")
+        self.assertTrue(decision.should_build)
+        self.assertEqual(decision.zfs_version, "2.5.1")
+
+    def test_unreadable_meta_fails_the_gate(self) -> None:
+        with self.assertRaises(CiToolError):
+            self.evaluate(latest_zfs_version="2.4.4", releases=_releases("2.4.4", "2.6.1"))
+
+
 class BypassDecisionTests(unittest.TestCase):
     def test_fills_stable_signal_digest_from_registry(self) -> None:
         with patch(
@@ -993,7 +1147,7 @@ class BypassDecisionTests(unittest.TestCase):
             "ci_tools.check_stable_signal.skopeo_inspect_json_optional",
             return_value={"Digest": "sha256:push-time"},
         ), patch(
-            "ci_tools.check_stable_signal.resolve_latest_zfs_version"
+            "ci_tools.check_stable_signal.select_zfs_version"
         ) as resolve_zfs:
             _bypass_decision("quay.io/fedora-ostree-desktops/kinoite:44")
 

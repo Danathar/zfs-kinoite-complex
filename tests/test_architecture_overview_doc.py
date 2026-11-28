@@ -255,9 +255,15 @@ def run_gate(
     with (
         patch("ci_tools.check_stable_signal.skopeo_inspect_json", side_effect=inspect),
         patch("ci_tools.common.skopeo_inspect_json", side_effect=inspect),
+        # The real OpenZFS selection, over one release on the configured line whose META
+        # stops at 7.2, the limit the held skip below is given too.
         patch(
-            "ci_tools.check_stable_signal.resolve_latest_zfs_version",
-            return_value=CURRENT_ZFS,
+            "ci_tools.zfs_release.fetch_openzfs_releases",
+            return_value=[{"tag_name": f"zfs-{CURRENT_ZFS}"}],
+        ),
+        patch(
+            "ci_tools.zfs_release.fetch_openzfs_meta",
+            return_value="Linux-Maximum: 7.2\nLinux-Minimum: 4.18\n",
         ),
         patch("ci_tools.check_stable_signal.resolve_linux_maximum", return_value="7.2"),
         patch("ci_tools.check_stable_signal.find_shipped_commit", return_value=shipped_commit),
@@ -373,6 +379,13 @@ class ScheduledBuildGateTableTests(unittest.TestCase):
         self.assertEqual(
             skipping, ["stable-signal-unchanged", "kernel-held-upstream-kernel-still-unsupported"]
         )
+
+    def test_the_documented_audit_tag_deadline_is_the_constant(self) -> None:
+        from ci_tools.check_stable_signal import AUDIT_TAG_WALK_DEADLINE_SECONDS
+
+        seconds = AUDIT_TAG_WALK_DEADLINE_SECONDS
+        self.assertEqual(seconds, int(seconds), "the table states whole seconds")
+        self.assertIn(f"passed its {int(seconds)}-second deadline", doc())
 
     def test_a_held_latest_builds_once_the_upstream_kernel_is_supported(self) -> None:
         decision = run_gate(_held_latest_inspect(), signal_kernel="7.2.20-200.fc44.x86_64")
@@ -587,7 +600,7 @@ class ScheduledBuildGateTableTests(unittest.TestCase):
             patch("ci_tools.check_stable_signal.skopeo_inspect_json", side_effect=inspect),
             patch("ci_tools.common.skopeo_inspect_json", side_effect=inspect),
             patch(
-                "ci_tools.check_stable_signal.resolve_latest_zfs_version",
+                "ci_tools.zfs_release.fetch_openzfs_releases",
                 side_effect=CiToolError("releases API unreachable"),
             ),
             self.assertRaises(CiToolError),
@@ -615,8 +628,8 @@ def run_gate_with_signal_error(error: Exception):
         patch("ci_tools.check_stable_signal.skopeo_inspect_json", side_effect=inspect),
         patch("ci_tools.common.skopeo_inspect_json", side_effect=inspect),
         patch(
-            "ci_tools.check_stable_signal.resolve_latest_zfs_version",
-            return_value=CURRENT_ZFS,
+            "ci_tools.zfs_release.fetch_openzfs_releases",
+            return_value=[{"tag_name": f"zfs-{CURRENT_ZFS}"}],
         ),
     ):
         return evaluate_stable_signal_gate(
@@ -751,8 +764,12 @@ class PublishedTagShapeTests(unittest.TestCase):
             patch("ci_tools.promote_stable.skopeo_inspect_digest", side_effect=fake_digest),
             patch("ci_tools.promote_stable.verify_candidate_signature"),
             patch("ci_tools.promote_stable.list_repository_tags", return_value=[]),
-            # An unheld candidate: `latest` is never read.
-            patch("ci_tools.promote_stable.skopeo_inspect_json", return_value={"Labels": {}}),
+            # An unheld candidate, and no `latest` yet.
+            patch(
+                "ci_tools.promote_stable.skopeo_inspect_json",
+                return_value={"Labels": {ZFS_VERSION_LABEL: CURRENT_ZFS}},
+            ),
+            patch("ci_tools.promote_stable.skopeo_inspect_json_optional", return_value=None),
             # `<run>` is the doc's placeholder, not a number the guard can compare.
             patch("ci_tools.promote_stable.refuse_older_than_published"),
         ):
@@ -1064,9 +1081,11 @@ class RechunkBandTests(unittest.TestCase):
 PROMOTION_STEP_PHRASES = [
     ("verify_candidate_signature", "re-verifies that digest's cosign signature"),
     ("refuse_older_than_published", "higher run number than this run's"),
-    ("refuse_held_candidate_older_than_latest", "older base than `latest`"),
+    ("refuse_held_base_older_than_latest", "older base than `latest`"),
+    ("refuse_zfs_line_older_than_latest", "older OpenZFS line than `latest`"),
     ("_copy_and_verify_digest:audit_ref", "copies that digest to `stable-<run>-<sha>`"),
     ("_copy_and_verify_digest:stable_ref", "copies that digest to `latest`"),
+    ("report_zfs_line_move", "newer OpenZFS line"),
 ]
 
 

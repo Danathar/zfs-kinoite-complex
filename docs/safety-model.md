@@ -61,6 +61,16 @@ alone does not prove that the final image's package transaction will succeed.
 Do not change the ZFS line casually. When changing it, validate both the
 akmods cache build and the final image composition before promoting anything.
 
+The build changes the line on its own in one case only: the newest release on
+the current line (the newer of `DEFAULT_ZFS_MINOR_VERSION` and the line
+`:latest` runs) does not support the newest Kinoite kernel, and a newer line's
+`x.y.1` or later release does. It never picks a newer line's `x.y.0`, never goes
+back to an older line than `:latest` runs (promotion refuses that too), and
+opens an informational "OpenZFS moved" issue when such a build is promoted. A
+line change for any other reason, a Renovate bump included, is the owner's
+decision. See "Choosing The OpenZFS Release" in
+[`architecture-overview.md`](./architecture-overview.md).
+
 The image supports the newest detected kernel as its primary kernel. Older
 kernels that happen to remain in the base image are not promised to have a
 matching ZFS module; image rollback is the supported recovery path.
@@ -71,7 +81,10 @@ Do not run `zpool upgrade` merely because `zpool status` reports that newer
 features are available. Importing a pool does not enable those features, but
 `zpool upgrade` is a one-way compatibility decision. Keep the previous image
 available as a rollback target until the new ZFS line and image have been
-trusted on the machine.
+trusted on the machine. Nothing in this repository runs `zpool upgrade` or
+creates pools. After a move to a newer OpenZFS line, existing pools are
+untouched, but a pool created from then on gets the new line's features and
+will not import on the previous image.
 
 If the new deployment is bad:
 

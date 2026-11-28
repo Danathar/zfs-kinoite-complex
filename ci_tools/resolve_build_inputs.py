@@ -44,7 +44,12 @@ from ci_tools.common import (
     sort_kernel_releases,
     write_github_outputs,
 )
-from ci_tools.zfs_release import resolve_latest_zfs_version, resolve_linux_maximum
+from ci_tools.zfs_release import (
+    resolve_latest_zfs_version,
+    resolve_linux_maximum,
+    select_zfs_version,
+    zfs_line_of,
+)
 
 TAG_FROM_REF_RE = re.compile(r"^[^@]+:([^/:@]+)$")
 GIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -79,6 +84,10 @@ HELD_BASE_PACKAGE = "zfs-kinoite-complex-held-base"
 BASE_VERSION_LABEL = "org.opencontainers.image.version"
 # The digest-pinned base an image was built on, written by `build-native-image`.
 BASE_IMAGE_LABEL = "org.zfs-kinoite-complex.base-image"
+# The exact OpenZFS release an image carries, written by `build-native-image`.
+# `ci_tools.check_stable_signal.ZFS_VERSION_LABEL` is the same name; that module
+# imports this one, so it cannot be imported from there.
+ZFS_VERSION_LABEL = "org.zfs-kinoite-complex.zfs-version"
 
 
 class HeldBaseCopiesUnreadable(CiToolError):
@@ -103,11 +112,15 @@ class ResolvedBuildInputs:
     Important policy note:
     - `detected_kernel_releases` records every detected kernel directory in the base image
     - `kernel_release` is the supported primary kernel this repo builds and validates against
-    - `zfs_minor_version` is the configured line (for example `2.4`); `zfs_version` is the
-      exact patch resolved on that line right now (for example `2.4.3`). The cache-reuse
-      check and the scheduled-build gate compare on `zfs_version`, not the line, so a new
-      OpenZFS patch on an unchanged line still forces a rebuild instead of being masked by
-      a cache that only matches the line.
+    - `zfs_version` is the exact OpenZFS release this run builds (for example `2.4.3`),
+      chosen by `ci_tools.zfs_release.select_zfs_version`, and `zfs_minor_version` is its
+      line (for example `2.4`). After a move to a newer line the line is the selected one,
+      not the configured one. The cache-reuse check and the scheduled-build gate compare
+      on `zfs_version`, not the line, so a new OpenZFS patch on an unchanged line still
+      forces a rebuild instead of being masked by a cache that only matches the line.
+    - `latest_zfs_minor_version` is the line `:latest` ran before this build, or "" when it
+      could not be told. The triage workflow compares it with `zfs_minor_version` to say
+      when a promoted build moved to a newer OpenZFS line.
     """
 
     version: str
@@ -132,6 +145,7 @@ class ResolvedBuildInputs:
     # The newest base image's kernel when this run held the base back because
     # OpenZFS does not support that kernel yet; "" when it did not.
     kernel_held_from: str = ""
+    latest_zfs_minor_version: str = ""
 
 
 @dataclass(frozen=True)
@@ -478,6 +492,30 @@ def find_held_base(
     return copy_repository, version, trusted_digest
 
 
+def latest_zfs_version_label() -> str:
+    """
+    Return the `zfs-version` label of this repository's `:latest`, or "" if it cannot be told.
+
+    "" when `:latest` does not exist, has no such label, or this step has no
+    owner or token to read it with (a pull request from a fork). The selection
+    then uses the configured line as its floor, and promotion still refuses to
+    move `:latest` to an older OpenZFS line. Any other registry failure raises.
+    """
+    owner = optional_env("GITHUB_REPOSITORY_OWNER")
+    creds = registry_creds_from_env()
+    if not owner or not creds:
+        print(
+            "Cannot read :latest's OpenZFS line without GITHUB_REPOSITORY_OWNER, "
+            "REGISTRY_ACTOR and REGISTRY_TOKEN; using the configured line as the floor."
+        )
+        return ""
+    latest_ref = (
+        f"docker://ghcr.io/{normalize_owner(owner)}/{require_env_or_default('IMAGE_NAME')}:latest"
+    )
+    latest = skopeo_inspect_json_optional(latest_ref, creds=creds)
+    return str(((latest or {}).get("Labels") or {}).get(ZFS_VERSION_LABEL) or "")
+
+
 def _load_lock_file(lock_file_path: str) -> dict:
     # Lock file is a plain JSON object saved from a previous run.
     lock_path = Path(lock_file_path)
@@ -570,6 +608,7 @@ def write_resolved_build_outputs(inputs: ResolvedBuildInputs) -> None:
             "use_input_lock": "true" if inputs.use_input_lock else "false",
             "lock_file_path": inputs.lock_file_path,
             "kernel_held_from": inputs.kernel_held_from,
+            "latest_zfs_minor_version": inputs.latest_zfs_minor_version,
         }
     )
 
@@ -693,11 +732,6 @@ def resolve_build_inputs() -> BuildInputResolution:
     build_container_ref = configured.build_container_ref
     base_image_ref = configured.base_image_ref
     zfs_minor_version = configured.zfs_minor_version
-    # A lock file replay must reuse the exact patch version the locked run
-    # built. Re-resolving it live would make replay non-reproducible: the cache
-    # check requires an exact match, so a replay of an older run would reject
-    # the cache, rebuild, and ship a newer ZFS than the run being reproduced.
-    zfs_version = configured.locked_zfs_version or resolve_latest_zfs_version(zfs_minor_version)
     akmods_upstream_ref = configured.akmods_upstream_ref
 
     # A base that is this repository's private copy, such as a lock-file replay of a run that
@@ -734,6 +768,35 @@ def resolve_build_inputs() -> BuildInputResolution:
         raise CiToolError(f"Failed to resolve base image digest for {base_image_ref}")
     if not label_kernel_release:
         raise CiToolError(f"Failed to read ostree.linux label from {base_image_ref}")
+
+    # Which OpenZFS release to build. A lock file replay must reuse the exact
+    # patch version the locked run built, and never moves to another line.
+    # Re-resolving it live would make replay non-reproducible: the cache check
+    # requires an exact match, so a replay of an older run would reject the
+    # cache, rebuild, and ship a newer ZFS than the run being reproduced.
+    # Every other run selects against the newest base's kernel (read above,
+    # before any hold), with `:latest`'s line as the floor; see
+    # `select_zfs_version`.
+    latest_zfs_version = latest_zfs_version_label()
+    if use_input_lock:
+        zfs_version = configured.locked_zfs_version or resolve_latest_zfs_version(
+            zfs_minor_version
+        )
+    else:
+        selection = select_zfs_version(
+            configured_line=zfs_minor_version,
+            latest_zfs_version=latest_zfs_version,
+            kernel_release=label_kernel_release,
+        )
+        zfs_version = selection.version
+        if selection.moved:
+            print(
+                f"OpenZFS {selection.floor_line} does not support the newest base's kernel "
+                f"{label_kernel_release}; building OpenZFS {zfs_version} from the newer "
+                f"{selection.line} line instead."
+            )
+    # The outputs and the manifest name the line actually built, not the configured one.
+    zfs_minor_version = zfs_line_of(zfs_version) or zfs_minor_version
 
     # Hold the base on the newest image whose kernel this OpenZFS release
     # supports, instead of building on one it cannot (the ZFS build would fail
@@ -864,6 +927,7 @@ def resolve_build_inputs() -> BuildInputResolution:
             use_input_lock=use_input_lock,
             lock_file_path=lock_file_path,
             kernel_held_from=kernel_held_from,
+            latest_zfs_minor_version=zfs_line_of(latest_zfs_version),
         ),
         label_kernel_release=label_kernel_release,
         candidate_tags=tuple(candidate_tags),
@@ -893,6 +957,10 @@ def main() -> None:
     )
     print(f"Fedora version: {inputs.version}")
     print(f"ZFS minor version: {inputs.zfs_minor_version}")
+    print(
+        "OpenZFS line of :latest before this build: "
+        f"{inputs.latest_zfs_minor_version or 'unknown'}"
+    )
     print(f"Resolved ZFS version: {inputs.zfs_version}")
     if inputs.kernel_held_from:
         print(

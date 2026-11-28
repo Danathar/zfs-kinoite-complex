@@ -50,6 +50,12 @@ The repo then makes one explicit policy choice:
 3. require ZFS support only for that supported kernel
 4. use image rollback, not an older bundled kernel inside the same image, as the recovery path
 
+The OpenZFS release is chosen against the newest base's kernel: the newest
+release on the current line, or, only when that line cannot support the
+kernel, the `x.y.1` or later of the oldest newer line that can. It never moves
+back to an older line than `:latest` runs. See "Choosing The OpenZFS Release"
+in [`architecture-overview.md`](./architecture-overview.md).
+
 The kernel-release ordering is implemented in one shared helper at
 [`shared/kernel_release.py`](../shared/kernel_release.py), and both CI input
 resolution and the in-image ZFS install helper use it. This keeps the
@@ -172,6 +178,9 @@ Promotion only copies the tested candidate digest to:
 
 1. `latest`
 2. `stable-<run>-<sha>`
+
+Before either copy it refuses a candidate on an older OpenZFS line than
+`latest`, so a lock-file replay cannot move users back a line.
 
 The candidate signature carries over because both promoted tags resolve to the
 same digest. The signer uses legacy cosign attachment storage so bootc's current

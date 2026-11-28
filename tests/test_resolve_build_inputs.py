@@ -25,8 +25,10 @@ from ci_tools.common import (
     sort_kernel_releases,
 )
 from ci_tools.resolve_build_inputs import (
-    KERNEL_HOLD_LOOKBACK_DAYS,
+    HELD_BASE_PACKAGE,
+    KERNEL_HOLD_MAX_DAYS,
     BuildInputResolution,
+    HeldBaseCopiesNotPublic,
     ResolvedBuildInputs,
     _load_lock_file,
     _resolve_default_akmods_ref,
@@ -36,9 +38,11 @@ from ci_tools.resolve_build_inputs import (
     dated_base_version_key,
     detect_base_image_kernel_releases,
     extract_source_tag,
-    find_held_base_tag,
+    find_held_base,
+    held_base_repository,
     kernel_exceeds_maximum,
     list_base_image_tags,
+    list_held_base_copy_tags,
     main,
     resolve_build_inputs,
     resolve_configured_inputs,
@@ -1138,23 +1142,43 @@ class UtcTodayTests(unittest.TestCase):
 class FindHeldBaseTagTests(unittest.TestCase):
     TODAY = date(2026, 11, 18)
     NAME = "quay.io/fedora-ostree-desktops/kinoite"
+    COPIES = "ghcr.io/danathar/zfs-kinoite-complex-held-base"
 
-    def _find(self, kernels: dict[str, str], linux_maximum: str = "7.2") -> tuple[str, list[str]]:
+    def _find_in(
+        self,
+        kernels: dict[str, str],
+        copies: dict[str, str] | Exception | None = None,
+        linux_maximum: str = "7.2",
+    ) -> tuple[tuple[str, str], list[str]]:
         inspected: list[str] = []
 
         def inspect(ref: str) -> dict:
             inspected.append(ref)
-            tag = ref.rsplit(":", 1)[1]
-            return {"Labels": {"ostree.linux": kernels[tag]} if kernels[tag] else {}}
+            repository, tag = ref.removeprefix("docker://").rsplit(":", 1)
+            kernel = (kernels if repository == self.NAME else copies)[tag]
+            return {"Labels": {"ostree.linux": kernel} if kernel else {}}
 
-        tag = find_held_base_tag(
+        def list_copy_tags(name: str) -> list[str]:
+            self.assertEqual(name, self.COPIES)
+            if isinstance(copies, Exception):
+                raise copies
+            return list(copies or {})
+
+        found = find_held_base(
             base_image_name=self.NAME,
+            copy_repository=self.COPIES,
             fedora_version="44",
             linux_maximum=linux_maximum,
             today=self.TODAY,
             list_tags=lambda name: ["44", *kernels],
+            list_copy_tags=list_copy_tags,
             inspect=inspect,
         )
+        return found, inspected
+
+    def _find(self, kernels: dict[str, str], linux_maximum: str = "7.2") -> tuple[str, list[str]]:
+        (repository, tag), inspected = self._find_in(kernels, linux_maximum=linux_maximum)
+        self.assertEqual(repository, self.NAME)
         return tag, inspected
 
     def test_returns_the_newest_tag_whose_kernel_openzfs_supports(self) -> None:
@@ -1179,8 +1203,135 @@ class FindHeldBaseTagTests(unittest.TestCase):
     def test_no_supported_base_in_the_window_raises(self) -> None:
         with self.assertRaises(CiToolError) as caught:
             self._find(KINOITE_44_KERNELS, linux_maximum="7.1")
-        self.assertIn(f"last {KERNEL_HOLD_LOOKBACK_DAYS} days", str(caught.exception))
-        self.assertIn("Linux-Maximum 7.1", str(caught.exception))
+        message = str(caught.exception)
+        self.assertIn(f"last {KERNEL_HOLD_MAX_DAYS} days", message)
+        self.assertIn(f"in {self.NAME} or in this repository's copies at {self.COPIES}", message)
+        self.assertIn("Linux-Maximum 7.1", message)
+        self.assertIn("no base to hold the build on", message)
+
+    def test_the_hold_limit_is_ninety_days(self) -> None:
+        # The owner's decision (#628). The gate reads the same constant; see
+        # tests/test_check_stable_signal.py.
+        self.assertEqual(KERNEL_HOLD_MAX_DAYS, 90)
+
+    def test_a_newer_copy_wins_over_an_older_upstream_tag(self) -> None:
+        # quay.io deleted the held tag; an older upstream tag that still qualifies must not be
+        # picked over it, or promotion would refuse the older base.
+        upstream = {
+            "44.20261118.0": "7.3.4-200.fc44.x86_64",
+            "44.20261020.0": "7.2.9-200.fc44.x86_64",
+        }
+        copies = {"44.20261110.0": "7.2.15-200.fc44.x86_64"}
+        found, inspected = self._find_in(upstream, copies)
+        self.assertEqual(found, (self.COPIES, "44.20261110.0"))
+        self.assertEqual(
+            inspected,
+            [f"docker://{self.NAME}:44.20261118.0", f"docker://{self.COPIES}:44.20261110.0"],
+        )
+
+    def test_a_newer_upstream_tag_wins_over_an_older_copy(self) -> None:
+        copies = {"44.20261001.0": "7.2.1-200.fc44.x86_64"}
+        found, _ = self._find_in(KINOITE_44_KERNELS, copies)
+        self.assertEqual(found, (self.NAME, "44.20261110.0"))
+
+    def test_a_tag_in_both_is_read_from_upstream(self) -> None:
+        copies = {"44.20261110.0": "7.2.15-200.fc44.x86_64"}
+        found, inspected = self._find_in(KINOITE_44_KERNELS, copies)
+        self.assertEqual(found, (self.NAME, "44.20261110.0"))
+        self.assertNotIn(f"docker://{self.COPIES}:44.20261110.0", inspected)
+
+    def test_a_copy_older_than_the_hold_limit_is_never_used(self) -> None:
+        # 2026-08-19 is 91 days before 2026-11-18; 2026-08-20 is exactly 90.
+        upstream = {"44.20261118.0": "7.3.4-200.fc44.x86_64"}
+        with self.assertRaises(CiToolError):
+            self._find_in(upstream, {"44.20260819.0": "7.2.1-200.fc44.x86_64"})
+        found, _ = self._find_in(upstream, {"44.20260820.0": "7.2.1-200.fc44.x86_64"})
+        self.assertEqual(found, (self.COPIES, "44.20260820.0"))
+
+    def test_the_fedora_filter_applies_to_copies(self) -> None:
+        upstream = {"44.20261118.0": "7.3.4-200.fc44.x86_64"}
+        copies = {
+            "43.20261110.0": "7.2.15-200.fc43.x86_64",
+            "45.20261110.0": "7.2.15-200.fc45.x86_64",
+        }
+        with self.assertRaises(CiToolError) as caught:
+            self._find_in(upstream, copies)
+        self.assertIn("no base to hold the build on", str(caught.exception))
+
+    def test_refused_copies_do_not_matter_while_an_upstream_tag_qualifies(self) -> None:
+        refused = HeldBaseCopiesNotPublic(f"{self.COPIES} refused an anonymous read")
+        found, _ = self._find_in(KINOITE_44_KERNELS, refused)
+        self.assertEqual(found, (self.NAME, "44.20261110.0"))
+
+    def test_refused_copies_are_reported_as_not_public_never_as_missing(self) -> None:
+        upstream = {"44.20261118.0": "7.3.4-200.fc44.x86_64"}
+        refused = HeldBaseCopiesNotPublic(f"{self.COPIES} refused an anonymous read")
+        with self.assertRaises(CiToolError) as caught:
+            self._find_in(upstream, refused)
+        message = str(caught.exception)
+        self.assertIn("could not be read", message)
+        self.assertIn(f"Make the {HELD_BASE_PACKAGE} package public", message)
+        self.assertNotIn("or in this repository's copies at", message)
+
+    def test_the_copy_repository_is_the_owners_held_base_package(self) -> None:
+        self.assertEqual(held_base_repository("danathar"), self.COPIES)
+
+    def test_listing_copies_tells_missing_from_refused(self) -> None:
+        cases = {
+            "manifest unknown": [],
+            "name unknown: repository name not known to registry": [],
+        }
+        for message, expected in cases.items():
+            with (
+                self.subTest(message=message),
+                patch(
+                    "ci_tools.resolve_build_inputs.run_json_cmd", side_effect=CiToolError(message)
+                ),
+            ):
+                self.assertEqual(list_held_base_copy_tags(self.COPIES), expected)
+        for message in ("unauthorized: authentication required", "403 Forbidden"):
+            with (
+                self.subTest(message=message),
+                patch(
+                    "ci_tools.resolve_build_inputs.run_json_cmd", side_effect=CiToolError(message)
+                ),
+                self.assertRaises(HeldBaseCopiesNotPublic) as caught,
+            ):
+                list_held_base_copy_tags(self.COPIES)
+            self.assertIn("not public", str(caught.exception))
+        with (
+            patch(
+                "ci_tools.resolve_build_inputs.run_json_cmd",
+                side_effect=CiToolError("connection reset by peer"),
+            ),
+            self.assertRaises(CiToolError) as caught,
+        ):
+            list_held_base_copy_tags(self.COPIES)
+        self.assertNotIsInstance(caught.exception, HeldBaseCopiesNotPublic)
+
+    def test_listing_copies_returns_the_tags(self) -> None:
+        with patch(
+            "ci_tools.resolve_build_inputs.run_json_cmd",
+            return_value={"Repository": self.COPIES, "Tags": ["44.20261110.0"]},
+        ) as run_json_cmd:
+            self.assertEqual(list_held_base_copy_tags(self.COPIES), ["44.20261110.0"])
+        self.assertEqual(
+            run_json_cmd.call_args.args[0], ["skopeo", "list-tags", f"docker://{self.COPIES}"]
+        )
+
+    def test_a_copy_tag_maps_through_choose_base_image_tag(self) -> None:
+        # The copy is tagged with the version label exactly, which is the first candidate the
+        # held path tries in the copy repository.
+        digest = "sha256:" + "2" * 64
+        tag, checked = choose_base_image_tag(
+            source_tag="44",
+            version_label="44.20261110.0",
+            fedora_version="44",
+            expected_digest=digest,
+            digest_lookup=lambda candidate: digest if candidate == "44.20261110.0" else "",
+        )
+        self.assertEqual(tag, "44.20261110.0")
+        self.assertEqual(checked[0], "44.20261110.0")
 
     def test_lists_the_base_repository_tags_with_skopeo(self) -> None:
         with patch(
@@ -1226,15 +1377,20 @@ class ResolveBuildInputsKernelHoldTests(unittest.TestCase):
     NEWEST_DIGEST = HOLD_NEWEST_DIGEST
     HELD_DIGEST = HOLD_HELD_DIGEST
 
+    COPIES = "ghcr.io/danathar/zfs-kinoite-complex-held-base"
+
     def _resolve(
         self,
         *,
         tags: dict | None = None,
+        copies: dict | None = None,
+        copy_digest_error: Exception | None = None,
         linux_maximum: str = "7.2",
         installed: str = "7.2.15-200.fc44.x86_64\n",
         env: dict | None = None,
     ):
         tags = HOLD_TAGS if tags is None else tags
+        copies = {} if copies is None else copies
         self.pulled: list[str] = []
         self.listed = 0
 
@@ -1243,20 +1399,31 @@ class ResolveBuildInputsKernelHoldTests(unittest.TestCase):
                 return {"Name": "ghcr.io/example/build", "Digest": "sha256:cafef00d"}
             if "brew" in ref:
                 return {"Name": "ghcr.io/example/brew", "Digest": "sha256:beefcafe"}
-            kernel, version, digest = tags[ref.rsplit(":", 1)[1]]
+            repository, tag = ref.removeprefix("docker://").rsplit(":", 1)
+            kernel, version, digest = (copies if repository == self.COPIES else tags)[tag]
             return {
-                "Name": self.NAME,
+                "Name": repository,
                 "Digest": digest,
                 "Labels": {"ostree.linux": kernel, "org.opencontainers.image.version": version},
             }
 
         def inspect_digest(ref: str) -> str:
-            tag = ref.rsplit(":", 1)[1]
-            return tags[tag][2] if tag in tags else ""
+            repository, tag = ref.removeprefix("docker://").rsplit(":", 1)
+            if repository == self.COPIES:
+                if copy_digest_error is not None:
+                    raise copy_digest_error
+                return copies[tag][2]
+            if tag not in tags:
+                raise CiToolError(f"manifest unknown: {ref}")
+            return tags[tag][2]
 
         def list_tags(name: str) -> list[str]:
             self.listed += 1
             return list(tags)
+
+        def list_copy_tags(name: str) -> list[str]:
+            self.assertEqual(name, self.COPIES)
+            return list(copies)
 
         def pull(args, **kwargs) -> str:
             self.pulled.append(args[-1])
@@ -1270,6 +1437,7 @@ class ResolveBuildInputsKernelHoldTests(unittest.TestCase):
             "DEFAULT_ZFS_MINOR_VERSION": "2.4",
             "DEFAULT_AKMODS_REF": "a" * 40,
             "DEFAULT_BREW_IMAGE": "ghcr.io/example/brew@sha256:beefcafe",
+            "GITHUB_REPOSITORY_OWNER": "Danathar",
         }
         with (
             patch.dict(os.environ, base_env | (env or {}), clear=False),
@@ -1278,6 +1446,10 @@ class ResolveBuildInputsKernelHoldTests(unittest.TestCase):
                 "ci_tools.resolve_build_inputs.skopeo_inspect_digest", side_effect=inspect_digest
             ),
             patch("ci_tools.resolve_build_inputs.list_base_image_tags", side_effect=list_tags),
+            patch(
+                "ci_tools.resolve_build_inputs.list_held_base_copy_tags",
+                side_effect=list_copy_tags,
+            ),
             patch("ci_tools.resolve_build_inputs.run_cmd_with_retries", side_effect=pull),
             patch("ci_tools.resolve_build_inputs.run_cmd", return_value=installed),
             patch(
@@ -1332,6 +1504,44 @@ class ResolveBuildInputsKernelHoldTests(unittest.TestCase):
             f"Failed to resolve base image digest for {self.NAME}:44.20261110.0",
         )
         self.assertEqual(self.pulled, [])
+
+    def test_a_held_base_only_this_repository_still_has_is_built_from_the_copy(self) -> None:
+        # quay.io deleted 44.20261110.0; the copy keeps its digest and its version-label tag.
+        tags = {tag: value for tag, value in HOLD_TAGS.items() if tag != "44.20261110.0"}
+        copies = {"44.20261110.0": HOLD_TAGS["44.20261110.0"]}
+        inputs = self._resolve(tags=tags, copies=copies).inputs
+        self.assertEqual(inputs.kernel_held_from, "7.3.4-200.fc44.x86_64")
+        self.assertEqual(inputs.base_image_name, self.COPIES)
+        self.assertEqual(inputs.base_image_pinned, f"{self.COPIES}@{self.HELD_DIGEST}")
+        self.assertEqual(inputs.base_image_tag, "44.20261110.0")
+        self.assertEqual(inputs.kernel_release, "7.2.15-200.fc44.x86_64")
+        self.assertEqual(self.pulled, [f"{self.COPIES}@{self.HELD_DIGEST}"])
+
+    def test_a_copy_that_cannot_be_read_says_why_instead_of_failing_to_map(self) -> None:
+        tags = {tag: value for tag, value in HOLD_TAGS.items() if tag != "44.20261110.0"}
+        copies = {"44.20261110.0": HOLD_TAGS["44.20261110.0"]}
+        cases = {
+            "unauthorized: authentication required": "is not public",
+            "connection reset by peer": "registry read failed",
+        }
+        for error, expected in cases.items():
+            with self.subTest(error=error), self.assertRaises(CiToolError) as caught:
+                self._resolve(tags=tags, copies=copies, copy_digest_error=CiToolError(error))
+            message = str(caught.exception)
+            self.assertIn(f"held base copy docker://{self.COPIES}:44.20261110.0", message)
+            self.assertIn(expected, message)
+            self.assertIn(error, message)
+            self.assertNotIn("Failed to map digest", message)
+
+    def test_an_upstream_candidate_tag_that_cannot_be_read_is_only_a_miss(self) -> None:
+        # Outside the copy, a candidate shape the registry does not have is skipped and the
+        # next shape is tried, as before copies existed.
+        tags = {tag: value for tag, value in HOLD_TAGS.items() if tag != "44.20261118.0"}
+        tags["latest-20261118.0"] = HOLD_TAGS["44.20261118.0"]
+        inputs = self._resolve(
+            tags=tags, linux_maximum="7.3", installed="7.3.4-200.fc44.x86_64\n"
+        ).inputs
+        self.assertEqual(inputs.base_image_tag, "latest-20261118.0")
 
     def test_an_unreadable_openzfs_limit_fails_the_run(self) -> None:
         with self.assertRaises(CiToolError):

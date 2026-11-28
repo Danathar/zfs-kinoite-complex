@@ -206,6 +206,31 @@ jobs:
           registry_actor: ${{ github.actor }}
           registry_token: ${{ github.token }}
 
+      # A held build keeps this repository's own copy of the held base in the
+      # zfs-kinoite-complex-held-base package. quay.io deletes a dated Kinoite
+      # tag after four weeks, and a hold may last up to KERNEL_HOLD_MAX_DAYS
+      # (ci_tools/resolve_build_inputs.py); later runs resolve the held base
+      # from the copy once the original is gone. Only this job copies: it is
+      # the main-only job with a package-write token, while the gate reads
+      # only and pull request validation has no token to write with.
+      #
+      # A failed copy fails the run rather than warning. Scheduled runs force
+      # an akmods rebuild, so a run that went on without the copy would
+      # rebuild and publish a new :latest every night while the copy never
+      # landed. The next run retries, and the gate's kernel-held-copy-missing
+      # reason makes sure there is a next run.
+      - name: Keep a copy of the held base image
+        if: steps.prepare.outputs.kernel_held_from != ''
+        shell: bash
+        env:
+          KERNEL_HELD_FROM: ${{ steps.prepare.outputs.kernel_held_from }}
+          BASE_IMAGE_NAME: ${{ steps.prepare.outputs.base_image_name }}
+          BASE_IMAGE_DIGEST: ${{ steps.prepare.outputs.base_image_digest }}
+          REGISTRY_ACTOR: ${{ github.actor }}
+          REGISTRY_TOKEN: ${{ github.token }}
+        run: |
+          python3 -m ci_tools.cli copy-held-base
+
   sign-akmods-cache:
     name: Sign Shared ZFS Akmods Cache
     # cosign sign + verify against one digest; observed under 1m. Runs with

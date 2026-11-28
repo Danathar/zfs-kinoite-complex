@@ -28,8 +28,15 @@ from ci_tools.common import (
     skopeo_inspect_json_optional,
     write_github_outputs,
 )
+from ci_tools.held_base_copy import (
+    COPY_MISSING,
+    held_base_copy_ref,
+    held_base_copy_state,
+    report_copy_state,
+)
 from ci_tools.resolve_build_inputs import (
-    KERNEL_HOLD_LOOKBACK_DAYS,
+    BASE_VERSION_LABEL,
+    KERNEL_HOLD_MAX_DAYS,
     dated_base_version_key,
     kernel_exceeds_maximum,
 )
@@ -39,8 +46,10 @@ STABLE_SIGNAL_IMAGE_LABEL = "org.zfs-kinoite-complex.stable-signal-image"
 STABLE_SIGNAL_DIGEST_LABEL = "org.zfs-kinoite-complex.stable-signal-digest"
 ZFS_VERSION_LABEL = "org.zfs-kinoite-complex.zfs-version"
 KERNEL_HELD_FROM_LABEL = "org.zfs-kinoite-complex.kernel-held-from"
-# Inherited from the Kinoite base, so it names the dated base the image was built on.
-BASE_VERSION_LABEL = "org.opencontainers.image.version"
+# The digest-pinned base the image was built on. A held image's copy keeps that digest.
+BASE_IMAGE_LABEL = "org.zfs-kinoite-complex.base-image"
+# BASE_VERSION_LABEL, imported above and re-read by promote_stable.py, is
+# inherited from the Kinoite base, so it names the dated base the image was built on.
 
 
 @dataclass(frozen=True)
@@ -91,7 +100,7 @@ def _bypass_decision(stable_signal_image: str) -> StableSignalDecision:
     )
 
 
-def _held_base_within_lookback(base_version: str, today: date) -> bool:
+def _held_base_within_hold_window(base_version: str, today: date) -> bool:
     """
     True when a held image's base (`44.20261110.0`) is still inside the hold window.
 
@@ -101,7 +110,7 @@ def _held_base_within_lookback(base_version: str, today: date) -> bool:
     key = dated_base_version_key(base_version)
     if key is None:
         return False
-    return (today - key[1]).days <= KERNEL_HOLD_LOOKBACK_DAYS
+    return (today - key[1]).days <= KERNEL_HOLD_MAX_DAYS
 
 
 def _docker_ref(image_ref: str) -> str:
@@ -205,10 +214,20 @@ def evaluate_stable_signal_gate(
     #
     # A held `:latest` past the window builds whether or not upstream moved,
     # so the run fails and says so instead of the gate skipping forever.
+    #
+    # A held `:latest` whose base has no copy in this repository's held-base
+    # package builds too, and that build makes the copy
+    # (`ci_tools/held_base_copy.py`). Without this, a hold that began while
+    # the copy could not be made would skip every night below and never get
+    # one, and would fail once quay.io deletes the held tag after four weeks.
+    # Existence is asked with this job's token; a copy that exists but is not
+    # public is reported here and does not build.
     previous_kernel_held_from = str(labels.get(KERNEL_HELD_FROM_LABEL) or "")
     if previous_kernel_held_from:
         held_base_version = str(labels.get(BASE_VERSION_LABEL) or "")
-        if not _held_base_within_lookback(held_base_version, today or datetime.now(UTC).date()):
+        if not _held_base_within_hold_window(
+            held_base_version, today or datetime.now(UTC).date()
+        ):
             return StableSignalDecision(
                 should_build=True,
                 reason="kernel-held-past-hold-window",
@@ -216,6 +235,17 @@ def evaluate_stable_signal_gate(
                 stable_signal_digest=stable_signal_digest,
                 zfs_version=current_zfs_version,
             )
+        copy_ref = held_base_copy_ref(image_org, str(labels.get(BASE_IMAGE_LABEL) or ""))
+        copy_state = held_base_copy_state(copy_ref, creds=creds) if copy_ref else COPY_MISSING
+        if copy_state == COPY_MISSING:
+            return StableSignalDecision(
+                should_build=True,
+                reason="kernel-held-copy-missing",
+                stable_signal_ref=stable_signal_image,
+                stable_signal_digest=stable_signal_digest,
+                zfs_version=current_zfs_version,
+            )
+        report_copy_state(copy_ref, copy_state)
     if previous_signal_digest != stable_signal_digest and previous_kernel_held_from:
         upstream_kernel = str((stable_signal_inspect.get("Labels") or {}).get("ostree.linux") or "")
         if upstream_kernel and kernel_exceeds_maximum(

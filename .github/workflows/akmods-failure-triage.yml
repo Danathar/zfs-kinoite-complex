@@ -352,11 +352,31 @@ jobs:
       # This issue keeps the hold visible for as long as it lasts: opened or
       # refreshed by every real green build that held, closed by the first one
       # that did not. Matched by title and author, like the build failure issue.
+      #
+      # The step before it asks whether this repository's copy of the held
+      # base exists and is public (ci_tools/held_base_copy.py), so the issue
+      # can say so: a held build needs that copy once Fedora's registry
+      # deletes the held tag, and it reads the copy anonymously.
+      - name: Check this repository's copy of the held base
+        id: held_copy
+        if: >-
+          github.event.workflow_run.conclusion == 'success' &&
+          steps.download.outputs.build_ran == 'true'
+        shell: bash
+        env:
+          BUILD_INPUTS_MANIFEST: artifacts/build-inputs/build-inputs.json
+          REGISTRY_ACTOR: ${{ github.actor }}
+          REGISTRY_TOKEN: ${{ github.token }}
+        run: |
+          python3 -m ci_tools.cli held-base-copy-status
+
       - name: Open, refresh or close the kernel-held issue
         if: >-
           github.event.workflow_run.conclusion == 'success' &&
           steps.download.outputs.build_ran == 'true'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          HELD_BASE_COPY_STATE: ${{ steps.held_copy.outputs.state }}
         with:
           script: |
             const fs = require('fs');
@@ -384,15 +404,32 @@ jobs:
               per_page: 100,
             })).filter(i => !i.pull_request && i.title === title && i.user.login === 'github-actions[bot]');
             if (heldFrom) {
+              // This repository's copy of the held base: quay.io deletes a
+              // dated tag after four weeks, and a longer hold builds on the copy.
+              const copyPackage = `ghcr.io/${context.repo.owner.toLowerCase()}/zfs-kinoite-complex-held-base`;
+              const copyState = process.env.HELD_BASE_COPY_STATE || '';
+              const copyLines = [];
+              if (copyState === 'not-public') {
+                copyLines.push(
+                  '',
+                  `**Action needed:** this repository's copy of the held base, \`${copyPackage}\`, exists but is not public. Builds read it without a credential, so once Fedora's registry deletes the held tag the hold cannot use it. On GitHub, open your profile, then Packages, then zfs-kinoite-complex-held-base, then Package settings, then Change visibility, and choose Public.`,
+                );
+              } else if (copyState === 'missing') {
+                copyLines.push(
+                  '',
+                  `This repository's copy of the held base, \`${copyPackage}\`, does not exist yet. The next scheduled build makes it (gate reason \`kernel-held-copy-missing\`).`,
+                );
+              }
               const body = [
                 `The newest Kinoite base image has kernel \`${heldFrom}\`, which OpenZFS \`${plain(inputs.zfs_version)}\` does not support yet.`,
                 `Builds are held on \`${plain(inputs.base_image_name)}:${plain(inputs.base_image_tag)}\` (kernel \`${plain(inputs.kernel_release)}\`), the newest base whose kernel it does support.`,
                 '',
                 'Everything in that base, not only the kernel, stays as Fedora shipped it on that day until the hold lifts. This repository\'s own layers keep updating.',
+                ...copyLines,
                 '',
                 `Last refreshed by ${run.html_url} on ${run.head_sha}.`,
                 '',
-                'The hold lifts by itself: the first build whose newest base has a supported kernel closes this issue. If no base from the last 28 days has one, the build fails instead (docs/upstream-change-response.md).',
+                'The hold lifts by itself when an OpenZFS patch release on the configured minor line (`DEFAULT_ZFS_MINOR_VERSION` in ci/defaults.json) supports the newer kernel: the first build whose newest base has a supported kernel closes this issue. A new OpenZFS minor line is an owner-merged Renovate pull request, never automatic. If no base from the last 90 days, upstream or in this repository\'s copy, has a supported kernel, the build fails instead (docs/upstream-change-response.md).',
               ].join('\n');
               if (open.length > 0) {
                 await github.rest.issues.update({

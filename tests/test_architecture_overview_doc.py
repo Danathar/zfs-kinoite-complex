@@ -43,6 +43,7 @@ from datetime import date
 from unittest.mock import patch
 
 from ci_tools.check_stable_signal import (
+    BASE_IMAGE_LABEL,
     BASE_VERSION_LABEL,
     KERNEL_HELD_FROM_LABEL,
     STABLE_SIGNAL_DIGEST_LABEL,
@@ -163,6 +164,8 @@ def _latest_inspect(
 # The day the held-base scenario is evaluated on; its base is a week older.
 GATE_TODAY = date(2026, 11, 18)
 HELD_BASE_VERSION = "44.20261110.0"
+HELD_BASE_DIGEST = "sha256:" + "2" * 64
+HELD_BASE_COPY_REF = f"docker://ghcr.io/danathar/zfs-kinoite-complex-held-base@{HELD_BASE_DIGEST}"
 
 
 def _held_latest_inspect() -> dict:
@@ -171,6 +174,7 @@ def _held_latest_inspect() -> dict:
     held["Labels"] |= {
         KERNEL_HELD_FROM_LABEL: "7.3.4-200.fc44.x86_64",
         BASE_VERSION_LABEL: HELD_BASE_VERSION,
+        BASE_IMAGE_LABEL: f"quay.io/fedora-ostree-desktops/kinoite@{HELD_BASE_DIGEST}",
     }
     return held
 
@@ -179,7 +183,7 @@ def _held_past_window_latest_inspect() -> dict:
     """A held `:latest` whose base left the window while upstream did not move at all."""
     held = _held_latest_inspect()
     held["Labels"][STABLE_SIGNAL_DIGEST_LABEL] = CURRENT_DIGEST
-    held["Labels"][BASE_VERSION_LABEL] = "44.20261017.0"
+    held["Labels"][BASE_VERSION_LABEL] = "44.20260801.0"
     return held
 
 
@@ -189,6 +193,7 @@ def run_gate(
     signal_digest: str = CURRENT_DIGEST,
     signal_kernel: str = "",
     today: date = GATE_TODAY,
+    copy: str = "public",
 ):
     """
     Run the real gate against one fake registry.
@@ -196,7 +201,9 @@ def run_gate(
     `latest` is the inspect payload for this repo's own `:latest`, or an
     exception to raise for it. The upstream signal image always answers with
     `signal_digest`, so a scenario only has to say what is different about the
-    promoted image it is compared against.
+    promoted image it is compared against. `copy` is this repository's copy of
+    the held base: "public", "not-public" (refused without a credential) or
+    "missing".
     """
 
     def inspect(image_ref: str, *, creds: str | None = None) -> dict:
@@ -207,6 +214,12 @@ def run_gate(
             if isinstance(latest, Exception):
                 raise latest
             return latest
+        if image_ref == HELD_BASE_COPY_REF:
+            if copy == "missing" or (copy == "not-public" and creds is None):
+                raise CiToolError(
+                    "manifest unknown" if creds else "unauthorized: authentication required"
+                )
+            return {"Digest": HELD_BASE_DIGEST}
         raise AssertionError(f"unexpected inspect of {image_ref}")
 
     with (
@@ -243,6 +256,9 @@ GATE_SCENARIOS = {
     "current-latest-missing-zfs-version-label": lambda: run_gate(_latest_inspect(zfs_version="")),
     "not-schedule-event": lambda: _bypass_decision_offline(),
     "kernel-held-past-hold-window": lambda: run_gate(_held_past_window_latest_inspect()),
+    "kernel-held-copy-missing": lambda: run_gate(
+        _held_latest_inspect(), signal_kernel="7.3.5-200.fc44.x86_64", copy="missing"
+    ),
     "kernel-held-upstream-kernel-still-unsupported": lambda: run_gate(
         _held_latest_inspect(), signal_kernel="7.3.5-200.fc44.x86_64"
     ),
@@ -266,7 +282,7 @@ class ScheduledBuildGateTableTests(unittest.TestCase):
         # Guard the guard: every assertion below iterates these rows, and an
         # empty list passes a for-loop silently.
         rows = gate_table()
-        self.assertEqual(len(rows), 10, rows)
+        self.assertEqual(len(rows), 11, rows)
         self.assertEqual(len({reason for reason, _ in rows}), len(rows))
 
     def test_the_documented_reasons_are_exactly_the_gate_source_reasons(self) -> None:
@@ -301,7 +317,7 @@ class ScheduledBuildGateTableTests(unittest.TestCase):
 
     def test_a_held_latest_builds_once_its_base_is_past_the_hold_window(self) -> None:
         held = _held_latest_inspect()
-        held["Labels"][BASE_VERSION_LABEL] = "44.20261017.0"
+        held["Labels"][BASE_VERSION_LABEL] = "44.20260801.0"
         decision = run_gate(held, signal_kernel="7.3.5-200.fc44.x86_64")
         self.assertEqual(decision.reason, "kernel-held-past-hold-window")
         self.assertTrue(decision.should_build)
@@ -329,6 +345,52 @@ class ScheduledBuildGateTableTests(unittest.TestCase):
         decision = run_gate(held, signal_kernel="7.3.5-200.fc44.x86_64")
         self.assertEqual(decision.reason, "kernel-held-past-hold-window")
         self.assertTrue(decision.should_build)
+
+    def test_a_held_latest_with_a_copy_that_is_not_public_still_skips(self) -> None:
+        # Not public is reported, not rebuilt: a rebuild cannot change a package's visibility.
+        decision = run_gate(
+            _held_latest_inspect(), signal_kernel="7.3.5-200.fc44.x86_64", copy="not-public"
+        )
+        self.assertEqual(decision.reason, "kernel-held-upstream-kernel-still-unsupported")
+        self.assertFalse(decision.should_build)
+
+    def test_a_held_latest_with_no_copy_builds_even_when_nothing_moved(self) -> None:
+        held = _held_latest_inspect()
+        held["Labels"][STABLE_SIGNAL_DIGEST_LABEL] = CURRENT_DIGEST
+        decision = run_gate(held, copy="missing")
+        self.assertEqual(decision.reason, "kernel-held-copy-missing")
+        self.assertTrue(decision.should_build)
+
+    def test_a_held_latest_without_a_pinned_base_label_counts_as_no_copy(self) -> None:
+        held = _held_latest_inspect()
+        del held["Labels"][BASE_IMAGE_LABEL]
+        decision = run_gate(held, signal_kernel="7.3.5-200.fc44.x86_64")
+        self.assertEqual(decision.reason, "kernel-held-copy-missing")
+        self.assertTrue(decision.should_build)
+
+    def test_a_zfs_patch_move_still_builds_first_while_held(self) -> None:
+        held = _held_latest_inspect()
+        held["Labels"][ZFS_VERSION_LABEL] = "2.4.2"
+        decision = run_gate(held, signal_kernel="7.3.5-200.fc44.x86_64", copy="missing")
+        self.assertEqual(decision.reason, "zfs-version-advanced")
+        self.assertTrue(decision.should_build)
+
+    def test_the_gate_window_is_the_resolution_hold_limit(self) -> None:
+        from ci_tools import check_stable_signal, resolve_build_inputs
+
+        self.assertIs(
+            check_stable_signal.KERNEL_HOLD_MAX_DAYS, resolve_build_inputs.KERNEL_HOLD_MAX_DAYS
+        )
+        # 2026-08-20 is exactly 90 days before GATE_TODAY, 2026-08-19 one more.
+        for version, reason in (
+            ("44.20260820.0", "kernel-held-upstream-kernel-still-unsupported"),
+            ("44.20260819.0", "kernel-held-past-hold-window"),
+        ):
+            held = _held_latest_inspect()
+            held["Labels"][BASE_VERSION_LABEL] = version
+            with self.subTest(version=version):
+                decision = run_gate(held, signal_kernel="7.3.5-200.fc44.x86_64")
+                self.assertEqual(decision.reason, reason)
 
     def test_a_held_latest_builds_when_the_upstream_kernel_is_unknown(self) -> None:
         decision = run_gate(_held_latest_inspect())

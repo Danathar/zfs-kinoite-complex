@@ -143,6 +143,7 @@ This page defines terms used across this repository's docs and workflow comments
 - `LOCK_FILE`: input-lock path passed into the resolver.
 - `LOCK_FILE_PATH`: input-lock path recorded in the build-inputs manifest.
 - `KERNEL_HELD_FROM`: the newest base image's kernel when input resolution held the run on an older base because OpenZFS does not support that kernel yet; empty otherwise. Recorded in the build-inputs manifest as `kernel_held_from` and on the image as the `org.zfs-kinoite-complex.kernel-held-from` label (see "Kernel Hold" in [`architecture-overview.md`](./architecture-overview.md)).
+- `BUILD_INPUTS_MANIFEST`: path of the downloaded build-inputs manifest that `held-base-copy-status` reads in `akmods-failure-triage.yml`, to say in the "Kernel held" issue whether this repository's copy of the held base exists and is public.
 - `AKMODS_FAILURE_LOG`: path to the captured akmods build log used for failure classification.
 - `AKMODS_FAILURE_PAYLOAD_PATH`: path where the failure classifier writes the sticky-issue payload.
 - `REQUIRE_MATCH`: when `true`, `check-akmods-cache` runs in strict mode after a rebuild, where a cache that does not carry the resolved `ZFS_VERSION` is a failure rather than a "rebuild needed" answer.

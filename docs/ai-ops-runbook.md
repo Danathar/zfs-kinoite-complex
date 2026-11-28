@@ -299,7 +299,7 @@ Every file in `.github/workflows/` has an entry here.
   OpenZFS does not support yet no longer turns the build red on its own: the
   build holds on an older base (see "The kernel-held issue" below). An issue
   here therefore means the hold could not help, for example no supported base
-  in the last 28 days, or a different failure. The correct short-term result
+  in the last 90 days, or a different failure. The correct short-term result
   then is a red candidate and an unchanged stable image.
 - **Closing:** the workflow closes the issue itself with a comment after the
   next green `build.yml` run that really built. A skipped scheduled run does
@@ -318,10 +318,16 @@ Every file in `.github/workflows/` has an entry here.
   that kernel, the OpenZFS version, and the held base and its kernel. Fedora
   updates in that base, security fixes included, wait until the hold lifts.
 - **First:** nothing to fix. Do not pin, patch or relabel anything to end the
-  hold. Check whether OpenZFS has a release whose `Linux-Maximum` covers the
-  newer kernel; until it does, the hold is correct.
+  hold. Check whether OpenZFS has a patch release on the configured minor line
+  (`DEFAULT_ZFS_MINOR_VERSION`) whose `Linux-Maximum` covers the newer kernel;
+  until it does, the hold is correct. A new minor line is an owner-merged
+  Renovate pull request, never automatic. If the body says this repository's
+  copy of the held base is not public, that is the owner's one manual step:
+  make the `zfs-kinoite-complex-held-base` package public (GitHub profile,
+  Packages, the package, Package settings, Change visibility, Public). Builds
+  need that copy once quay.io deletes the held tag after four weeks.
 - **Closing:** `akmods-failure-triage.yml` closes it after the first green
-  build that really built and was not held. If the hold reaches 28 days the
+  build that really built and was not held. If the hold reaches 90 days the
   build fails instead, and the failure issues above take over.
 - **Detail:** "Kernel Hold" in
   [`architecture-overview.md`](./architecture-overview.md).

@@ -23,7 +23,10 @@ from ci_tools.common import (
     CiToolError,
     extract_fedora_version,
     git_ls_remote_resolve,
+    is_missing_image_error,
+    is_registry_permission_error,
     load_repo_defaults,
+    normalize_owner,
     optional_env,
     require_env,
     require_env_or_default,
@@ -48,14 +51,36 @@ PREFIXED_VERSION_LABEL_RE = re.compile(
 # (`44.20261110.0-x86_64`) deliberately do not match: the plain tag is the one
 # the rest of this module pins and records.
 DATED_BASE_TAG_RE = re.compile(r"^(?P<fedora>[0-9]+)\.(?P<day>[0-9]{8})\.(?P<respin>[0-9]+)$")
-# How far back a held build may reach for a base image whose kernel OpenZFS
-# supports. Past this the run fails as it did before the hold existed: a held
-# base is all of Fedora frozen on that day, security updates included, not
-# only the kernel. 28 days, not more, because Kinoite labels its images
-# `quay.expires-after=4w`: quay.io deletes a dated tag after four weeks, so an
-# older base could not be pulled anyway, and a longer window here would let the
-# scheduled gate keep skipping after the real build would already fail.
-KERNEL_HOLD_LOOKBACK_DAYS = 28
+# How old, by its own date, a base a held build stands on may be. Past this the
+# run fails as it did before the hold existed: a held base is all of Fedora
+# frozen on that day, security updates included, not only the kernel. The owner
+# set 90 days (#628), because OpenZFS can take a couple of months to release
+# support for a new kernel line. Input resolution and the scheduled gate
+# (`ci_tools/check_stable_signal.py`) both read this one constant, so the gate
+# can never keep skipping after the real build would already fail.
+#
+# Kinoite labels its images `quay.expires-after=4w`: quay.io deletes a dated
+# tag after four weeks. A hold longer than that stands on this repository's own
+# copy of the held base (`HELD_BASE_PACKAGE`), which the main build keeps with
+# `ci_tools/held_base_copy.py`.
+KERNEL_HOLD_MAX_DAYS = 90
+# The GHCR package, under this repository's owner, that holds the copies of
+# held bases. Each copy is the same digest as the base it was copied from and
+# is tagged with that base's `org.opencontainers.image.version` exactly
+# (`44.20261110.0`), the tag `choose_base_image_tag` tries first.
+HELD_BASE_PACKAGE = "zfs-kinoite-complex-held-base"
+# Inherited from the Kinoite base, so it names the dated base an image was built on.
+BASE_VERSION_LABEL = "org.opencontainers.image.version"
+
+
+class HeldBaseCopiesNotPublic(CiToolError):
+    """
+    The held-base copy package refused an anonymous read.
+
+    GHCR gives an anonymous caller the same bearer-token 403 for a private
+    package as for one that does not exist yet, so this never means "there
+    are no copies". It means "not readable without a credential".
+    """
 
 
 @dataclass(frozen=True)
@@ -294,37 +319,100 @@ def list_base_image_tags(base_image_name: str) -> list[str]:
     return [str(tag) for tag in tags]
 
 
-def find_held_base_tag(
+def held_base_repository(image_org: str) -> str:
+    """Return this repository's held-base copy package, `ghcr.io/<owner>/<package>`."""
+    return f"ghcr.io/{image_org}/{HELD_BASE_PACKAGE}"
+
+
+def list_held_base_copy_tags(repository: str) -> list[str]:
+    """
+    Return every tag in the held-base copy package, read anonymously.
+
+    Anonymous like every other base read here: pull request validation calls
+    this too and has no package token. A package that does not exist yet has
+    no copies. A refusal raises `HeldBaseCopiesNotPublic` instead of reading
+    as "no copies", and the caller decides whether it matters.
+    """
+    try:
+        return list_base_image_tags(repository)
+    except CiToolError as exc:
+        message = str(exc)
+        if is_missing_image_error(message):
+            return []
+        if is_registry_permission_error(message):
+            raise HeldBaseCopiesNotPublic(
+                f"{repository} refused an anonymous read, so it either does not exist yet or "
+                f"is not public ({message.strip()})"
+            ) from exc
+        raise
+
+
+def find_held_base(
     *,
     base_image_name: str,
+    copy_repository: str,
     fedora_version: str,
     linux_maximum: str,
     today: date,
     list_tags: Callable[[str], list[str]] = list_base_image_tags,
+    list_copy_tags: Callable[[str], list[str]] = list_held_base_copy_tags,
     inspect: Callable[[str], dict] = skopeo_inspect_json,
-) -> str:
+) -> tuple[str, str]:
     """
-    Return the newest dated base tag whose kernel label OpenZFS supports.
+    Return `(repository, tag)` of the newest dated base whose kernel label OpenZFS supports.
+
+    The candidates are the upstream repository's dated tags and this
+    repository's copies of earlier held bases, both of one Fedora release and
+    both no older than `KERNEL_HOLD_MAX_DAYS` by their own date. They are
+    tried newest first by that date, whichever repository holds them.
+    Preferring upstream would pick an older upstream tag over a newer copy,
+    and promotion's `refuse_held_base_older_than_latest` would then refuse
+    the candidate. A tag in both is read from upstream; it is the same image.
+
+    A copy package that refuses an anonymous read is not "no copies". It only
+    matters when no upstream tag qualifies: quay.io keeps every dated tag for
+    four weeks, so every upstream tag is newer than any copy whose upstream tag
+    is gone, and a qualifying upstream tag would win anyway. With none, the
+    run fails and names the refusal.
 
     The label only chooses the tag. The caller still pins the tag's digest and
     reads the real kernel from `/lib/modules` before building on it.
     """
-    for tag in dated_base_tags_newest_first(
-        list_tags(base_image_name),
-        fedora_version=fedora_version,
-        today=today,
-        lookback_days=KERNEL_HOLD_LOOKBACK_DAYS,
-    ):
-        labels = inspect(f"docker://{base_image_name}:{tag}").get("Labels") or {}
+    window = {
+        "fedora_version": fedora_version,
+        "today": today,
+        "lookback_days": KERNEL_HOLD_MAX_DAYS,
+    }
+    upstream_tags = dated_base_tags_newest_first(list_tags(base_image_name), **window)
+    copies_refused: HeldBaseCopiesNotPublic | None = None
+    try:
+        copy_tags = dated_base_tags_newest_first(list_copy_tags(copy_repository), **window)
+    except HeldBaseCopiesNotPublic as exc:
+        copies_refused = exc
+        copy_tags = []
+    candidates = [(base_image_name, tag) for tag in upstream_tags]
+    candidates += [(copy_repository, tag) for tag in copy_tags if tag not in upstream_tags]
+    candidates.sort(key=lambda candidate: dated_base_version_key(candidate[1]), reverse=True)
+    for repository, tag in candidates:
+        labels = inspect(f"docker://{repository}:{tag}").get("Labels") or {}
         kernel_label = str(labels.get("ostree.linux") or "")
         if kernel_major_minor(kernel_label) is None:
             continue
         if not kernel_exceeds_maximum(kernel_label, linux_maximum):
-            return tag
+            return repository, tag
+    if copies_refused is not None:
+        raise CiToolError(
+            f"No {base_image_name} Fedora {fedora_version} base image from the last "
+            f"{KERNEL_HOLD_MAX_DAYS} days has a kernel OpenZFS supports (Linux-Maximum "
+            f"{linux_maximum}), and this repository's copies of held bases could not be read: "
+            f"{copies_refused}. Make the {HELD_BASE_PACKAGE} package public (see \"Kernel Hold\" "
+            "in docs/architecture-overview.md); until then there is no base to hold the build on."
+        )
     raise CiToolError(
-        f"No {base_image_name} Fedora {fedora_version} base image from the last "
-        f"{KERNEL_HOLD_LOOKBACK_DAYS} days has a kernel OpenZFS supports (Linux-Maximum "
-        f"{linux_maximum}), so there is no base to hold the build on."
+        f"No Fedora {fedora_version} base image from the last {KERNEL_HOLD_MAX_DAYS} days, in "
+        f"{base_image_name} or in this repository's copies at {copy_repository}, has a kernel "
+        f"OpenZFS supports (Linux-Maximum {linux_maximum}), so there is no base to hold the "
+        "build on."
     )
 
 
@@ -556,7 +644,7 @@ def resolve_build_inputs() -> BuildInputResolution:
     base_image_digest = str(base_inspect_json.get("Digest") or "")
     labels = base_inspect_json.get("Labels") or {}
     label_kernel_release = str(labels.get("ostree.linux") or "")
-    base_image_version_label = str(labels.get("org.opencontainers.image.version") or "")
+    base_image_version_label = str(labels.get(BASE_VERSION_LABEL) or "")
 
     if not base_image_name or not base_image_digest:
         raise CiToolError(f"Failed to resolve base image digest for {base_image_ref}")
@@ -566,24 +654,32 @@ def resolve_build_inputs() -> BuildInputResolution:
     # Hold the base on the newest image whose kernel this OpenZFS release
     # supports, instead of building on one it cannot (the ZFS build would fail
     # there anyway). A lock-file replay is never held: it must rebuild exactly
-    # the base it names.
+    # the base it names. The held base may come from this repository's own
+    # copy package; `base_image_name` then names that package, so everything
+    # below pins, pulls and tags the copy.
     kernel_held_from = ""
+    copy_repository = ""
     linux_maximum = "" if use_input_lock else resolve_linux_maximum(zfs_version)
     if not use_input_lock and kernel_exceeds_maximum(label_kernel_release, linux_maximum):
         kernel_held_from = label_kernel_release
-        held_tag = find_held_base_tag(
+        image_org = normalize_owner(require_env("GITHUB_REPOSITORY_OWNER"))
+        copy_repository = held_base_repository(image_org)
+        held_repository, held_tag = find_held_base(
             base_image_name=base_image_name,
+            copy_repository=copy_repository,
             fedora_version=extract_fedora_version(label_kernel_release),
             linux_maximum=linux_maximum,
             today=_utc_today(),
             list_tags=list_base_image_tags,
+            list_copy_tags=list_held_base_copy_tags,
             inspect=skopeo_inspect_json,
         )
+        base_image_name = held_repository
         held_inspect_json = skopeo_inspect_json(f"docker://{base_image_name}:{held_tag}")
         base_image_digest = str(held_inspect_json.get("Digest") or "")
         held_labels = held_inspect_json.get("Labels") or {}
         label_kernel_release = str(held_labels.get("ostree.linux") or "")
-        base_image_version_label = str(held_labels.get("org.opencontainers.image.version") or "")
+        base_image_version_label = str(held_labels.get(BASE_VERSION_LABEL) or "")
         if not base_image_digest:
             raise CiToolError(f"Failed to resolve base image digest for {base_image_name}:{held_tag}")
 
@@ -595,13 +691,26 @@ def resolve_build_inputs() -> BuildInputResolution:
 
     # Helper function:
     # input tag -> lookup digest in registry.
-    # Return empty string when lookup fails so tag selection can continue.
+    # Return empty string when an upstream lookup fails so tag selection can
+    # continue. A copy is tagged with its version label exactly, the first
+    # candidate, so an error reading the copy is the answer rather than a
+    # miss: report it, instead of the vague "Failed to map digest" it would
+    # otherwise end in.
     def lookup_digest(candidate_tag: str) -> str:
         candidate_ref = f"docker://{base_image_name}:{candidate_tag}"
         try:
             return skopeo_inspect_digest(candidate_ref)
-        except CiToolError:
-            return ""
+        except CiToolError as exc:
+            if base_image_name != copy_repository:
+                return ""
+            reason = (
+                f"the package is not public; make the {HELD_BASE_PACKAGE} package public"
+                if is_registry_permission_error(str(exc))
+                else "the registry read failed"
+            )
+            raise CiToolError(
+                f"Could not read this repository's held base copy {candidate_ref}: {reason} ({exc})"
+            ) from exc
 
     base_image_tag, candidate_tags = choose_base_image_tag(
         source_tag=source_tag,

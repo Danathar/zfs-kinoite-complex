@@ -57,12 +57,10 @@ selection.
 Do not weaken fail-closed checks to make a build green. When the newest base
 image's kernel is ahead of OpenZFS support, no check is relaxed: input
 resolution holds the build on the newest base from the last 90 days whose
-kernel OpenZFS does support, upstream or in this repository's own copy of an
-earlier held base (quay.io deletes a dated tag after four weeks), and a
+kernel OpenZFS does support, upstream or in this repository's own private copy
+of an earlier held base (quay.io deletes a dated tag after four weeks), and a
 "Kernel held" issue stays open until the hold lifts. The hold lifts by itself
-only when a patch release on the configured OpenZFS minor line
-(`DEFAULT_ZFS_MINOR_VERSION`) supports the newer kernel; a new minor line is
-an owner-merged Renovate pull request (see "Kernel Hold" in
+as soon as an OpenZFS release supports the newer kernel (see "Kernel Hold" in
 [`architecture-overview.md`](./architecture-overview.md)). That is the one
 sanctioned exception to "no fallback" in AGENTS.md section 0 rule 1: it picks
 an older, verified input and leaves every match, digest and signature check in

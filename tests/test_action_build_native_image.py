@@ -32,6 +32,8 @@ with nothing installed, matching tests/test_action_publish_native_image.py.
 
 from __future__ import annotations
 
+import base64
+import json
 import re
 import subprocess
 import tempfile
@@ -42,6 +44,8 @@ try:
     import yaml
 except ImportError:  # pragma: no cover - exercised only where PyYAML is absent
     yaml = None
+
+from ci_tools.resolve_build_inputs import HELD_BASE_PACKAGE
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ACTION_PATH = REPO_ROOT / ".github" / "actions" / "build-native-image" / "action.yml"
@@ -82,14 +86,24 @@ FULL_INPUTS = {
     "kernel_held_from": KERNEL_HELD_FROM,
     "image_repo": IMAGE_REPO,
     "signing_key_filename": SIGNING_KEY_FILENAME,
+    # Not passed by a caller whose base is an upstream image; empty is the action's default.
+    "registry_username": "",
+    "registry_password": "",
 }
 
 # Records argv one argument per line so an empty-valued flag is visible as an empty element
 # rather than vanishing into a joined string, then exits with $STUB_EXIT so a build failure
 # can be modelled.
 STUB = r"""#!/bin/sh
+previous=""
 for arg in "$@"; do
   printf '%s\n' "${arg}" >> "${STUB_ARGV}"
+  if [ "${previous}" = "--authfile" ]; then
+    # The step deletes its auth file when it exits, so keep what buildah would have read.
+    cp "${arg}" "${STUB_ARGV}.auth"
+    stat -c '%a' "${arg}" > "${STUB_ARGV}.mode"
+  fi
+  previous="${arg}"
 done
 exit "${STUB_EXIT:-0}"
 """
@@ -161,7 +175,15 @@ def _step_env(name: str, inputs: dict[str, str]) -> dict[str, str]:
 class Result:
     """What a step leaves behind: its exit status, its output, and buildah's exact argv."""
 
-    def __init__(self, completed: subprocess.CompletedProcess, argv: list[str]):
+    def __init__(
+        self,
+        completed: subprocess.CompletedProcess,
+        argv: list[str],
+        auth: str | None = None,
+        auth_mode: str | None = None,
+    ):
+        self.auth = auth
+        self.auth_mode = auth_mode
         self.returncode = completed.returncode
         self.stdout = completed.stdout
         self.stderr = completed.stderr
@@ -227,7 +249,14 @@ class BuildActionStepTests(unittest.TestCase):
             # A trailing newline from the last recorded argument, not an empty argument.
             if recorded and recorded[-1] == "":
                 recorded.pop()
-            return Result(completed, recorded)
+            auth_file = Path(f"{argv_log}.auth")
+            mode_file = Path(f"{argv_log}.mode")
+            return Result(
+                completed,
+                recorded,
+                auth_file.read_text(encoding="utf-8") if auth_file.exists() else None,
+                mode_file.read_text(encoding="utf-8").strip() if mode_file.exists() else None,
+            )
 
     # -- the build contract ------------------------------------------------
 
@@ -405,6 +434,62 @@ class BuildActionStepTests(unittest.TestCase):
         # The command substitution reached buildah as text. Had the shell run it, the tag
         # would have been split at the `;` into a truncated `-t` value and a second command.
         self.assertNotIn("pwned", result.stdout + result.stderr)
+
+    # -- the private held-base copy ----------------------------------------
+
+    HELD_BASE = f"ghcr.io/danathar/{HELD_BASE_PACKAGE}@sha256:" + "6" * 64
+
+    def test_a_base_that_is_the_private_copy_is_read_with_an_auth_file(self) -> None:
+        """
+        The copy package is private, so buildah's `FROM` needs the token, as a file.
+
+        The file is for ghcr.io only, readable by its owner alone, and the token never appears
+        in buildah's argv. The step removes the file when it exits.
+        """
+
+        result = self._run(
+            BUILD_STEP,
+            inputs={
+                "base_image": self.HELD_BASE,
+                "registry_username": "actor",
+                "registry_password": "secret-token",
+            },
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.argv[:2], ["build", "--tls-verify=true"])
+        self.assertEqual(result.argv[2], "--authfile")
+        self.assertNotIn("secret-token", "\n".join(result.argv))
+        auths = json.loads(result.auth)["auths"]
+        self.assertEqual(list(auths), ["ghcr.io"])
+        self.assertEqual(base64.b64decode(auths["ghcr.io"]["auth"]).decode(), "actor:secret-token")
+        self.assertEqual(result.auth_mode, "600")
+        self.assertFalse(Path(result.argv[3]).exists(), "the auth file must not outlive the step")
+        # The base reaches the Containerfile unchanged.
+        self.assertIn(f"BASE_IMAGE={self.HELD_BASE}", result.argv)
+
+    def test_an_upstream_base_is_pulled_anonymously_even_when_a_token_is_passed(self) -> None:
+        for base in (BASE_IMAGE, "quay.io/fedora-ostree-desktops/kinoite@sha256:" + "6" * 64):
+            with self.subTest(base=base):
+                result = self._run(
+                    BUILD_STEP,
+                    inputs={
+                        "base_image": base,
+                        "registry_username": "actor",
+                        "registry_password": "secret-token",
+                    },
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertNotIn("--authfile", result.argv)
+                self.assertIsNone(result.auth)
+
+    def test_the_private_copy_without_a_credential_fails_instead_of_going_anonymous(self) -> None:
+        result = self._run(BUILD_STEP, inputs={"base_image": self.HELD_BASE})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.argv, [], "buildah must not run without the credential")
+        self.assertIn("private held-base copy", result.stderr)
+
+    def test_the_copy_package_name_in_the_action_is_the_one_resolution_uses(self) -> None:
+        self.assertIn(f"/{HELD_BASE_PACKAGE}@", _step_body(BUILD_STEP))
 
     # -- the announcement step ---------------------------------------------
 

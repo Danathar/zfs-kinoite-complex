@@ -28,12 +28,7 @@ from ci_tools.common import (
     skopeo_inspect_json_optional,
     write_github_outputs,
 )
-from ci_tools.held_base_copy import (
-    COPY_MISSING,
-    held_base_copy_ref,
-    held_base_copy_state,
-    report_copy_state,
-)
+from ci_tools.held_base_copy import held_base_copy_exists, held_base_copy_ref
 from ci_tools.resolve_build_inputs import (
     BASE_VERSION_LABEL,
     KERNEL_HOLD_MAX_DAYS,
@@ -215,13 +210,15 @@ def evaluate_stable_signal_gate(
     # A held `:latest` past the window builds whether or not upstream moved,
     # so the run fails and says so instead of the gate skipping forever.
     #
-    # A held `:latest` whose base has no copy in this repository's held-base
-    # package builds too, and that build makes the copy
-    # (`ci_tools/held_base_copy.py`). Without this, a hold that began while
-    # the copy could not be made would skip every night below and never get
-    # one, and would fail once quay.io deletes the held tag after four weeks.
-    # Existence is asked with this job's token; a copy that exists but is not
-    # public is reported here and does not build.
+    # A held `:latest` whose base copy is not confirmed readable builds too, and
+    # that build makes the copy (`ci_tools/held_base_copy.py`). Without this, a
+    # hold that began while the copy could not be made would skip every night
+    # below and never get one, and would fail once quay.io deletes the held tag
+    # after four weeks. The copy package is private, so this asks with this
+    # job's token. "Missing", `denied`, 401 and 403 are all "not confirmed
+    # readable": they build, never skip and never raise. The main build's
+    # post-copy check asks the same function with the same kind of token, so a
+    # copy this gate cannot see fails that run instead of rebuilding nightly.
     previous_kernel_held_from = str(labels.get(KERNEL_HELD_FROM_LABEL) or "")
     if previous_kernel_held_from:
         held_base_version = str(labels.get(BASE_VERSION_LABEL) or "")
@@ -236,8 +233,7 @@ def evaluate_stable_signal_gate(
                 zfs_version=current_zfs_version,
             )
         copy_ref = held_base_copy_ref(image_org, str(labels.get(BASE_IMAGE_LABEL) or ""))
-        copy_state = held_base_copy_state(copy_ref, creds=creds) if copy_ref else COPY_MISSING
-        if copy_state == COPY_MISSING:
+        if not copy_ref or not held_base_copy_exists(copy_ref, creds=creds):
             return StableSignalDecision(
                 should_build=True,
                 reason="kernel-held-copy-missing",
@@ -245,7 +241,6 @@ def evaluate_stable_signal_gate(
                 stable_signal_digest=stable_signal_digest,
                 zfs_version=current_zfs_version,
             )
-        report_copy_state(copy_ref, copy_state)
     if previous_signal_digest != stable_signal_digest and previous_kernel_held_from:
         upstream_kernel = str((stable_signal_inspect.get("Labels") or {}).get("ostree.linux") or "")
         if upstream_kernel and kernel_exceeds_maximum(

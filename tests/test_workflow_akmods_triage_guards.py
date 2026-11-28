@@ -231,15 +231,6 @@ class TriageGuardTests(unittest.TestCase):
             ],
         )
 
-    def test_the_held_base_copy_is_checked_exactly_when_the_kernel_held_issue_is_kept(
-        self,
-    ) -> None:
-        # The issue step reads this step's output; on any other run it would read nothing.
-        self.assertEqual(
-            self.condition("Check this repository's copy of the held base"),
-            self.condition("Open, refresh or close the kernel-held issue"),
-        )
-
     def test_a_sticky_issue_is_opened_only_for_a_failed_run_with_a_payload(self) -> None:
         # The step reads artifacts/akmods-failure.json; a failure in any other step has none.
         self.check(
@@ -324,7 +315,6 @@ class TriageGuardTests(unittest.TestCase):
                 "Close stale sticky issues on successful run",
                 "Open or update the build failure issue",
                 "Close the build failure issue on a real green build",
-                "Check this repository's copy of the held base",
                 "Open, refresh or close the kernel-held issue",
                 "Build OpenZFS/kernel badge payload",
                 "Publish badges to status branch",

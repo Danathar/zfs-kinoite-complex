@@ -325,9 +325,11 @@ class WorkflowEnvContractTests(unittest.TestCase):
                 "check-akmods-cache",
                 "check-stable-signal",
                 "copy-held-base",
-                "held-base-copy-status",
                 "prepare-validation-build",
                 "promote-stable",
+                # Optional here: the private held-base copy is read only when no supported
+                # upstream base is left.
+                "resolve-build-inputs",
                 "write-last-good-build-badge",
             },
         )
@@ -340,7 +342,6 @@ class WorkflowEnvContractTests(unittest.TestCase):
                 "check-akmods-cache",
                 "check-stable-signal",
                 "copy-held-base",
-                "held-base-copy-status",
                 "promote-stable",
             },
         )

@@ -90,27 +90,69 @@ class KernelHeldWiringTests(unittest.TestCase):
         self.assertEqual(promote_stable.KERNEL_HELD_FROM_LABEL, LABEL)
         self.assertIn(f"{LABEL}=${{KERNEL_HELD_FROM}}", BUILD_ACTION.read_text(encoding="utf-8"))
 
+    def test_the_copy_step_lives_in_the_prepare_action_right_after_resolution(self) -> None:
+        # Right after resolve and before the akmods compile, so a failing copy fails fast
+        # instead of after a full ZFS rebuild (scheduled runs force one).
+        names = [step.get("name") for step in load(PREPARE_ACTION)["runs"]["steps"]]
+        copy = names.index("Keep a copy of the held base image")
+        self.assertEqual(names[copy - 1], "Resolve build inputs for this run")
+        self.assertLess(copy, names.index("Build and publish shared self-hosted ZFS akmods image"))
+        # And not a second time in the workflow, where it would run after the compile.
+        for job in self.jobs.values():
+            for step in job.get("steps", []):
+                self.assertNotIn("copy-held-base", str(step.get("run", "")))
+
     def test_the_copy_step_is_handed_the_held_base_and_the_registry_login(self) -> None:
-        job = self.jobs["build-zfs-akmods"]
-        prepare = step_using(job, PREPARE_USES)["id"]
-        copies = [
-            step
-            for step in job["steps"]
-            if step.get("name") == "Keep a copy of the held base image"
-        ]
+        steps = load(PREPARE_ACTION)["runs"]["steps"]
+        copies = [step for step in steps if step.get("name") == "Keep a copy of the held base image"]
         self.assertEqual(len(copies), 1)
-        outputs = f"${{{{ steps.{prepare}.outputs."
+        outputs = "${{ steps.resolve.outputs."
+        self.assertEqual(copies[0]["if"], "steps.resolve.outputs.kernel_held_from != ''")
         self.assertEqual(
             copies[0]["env"],
             {
                 "KERNEL_HELD_FROM": f"{outputs}kernel_held_from }}}}",
                 "BASE_IMAGE_NAME": f"{outputs}base_image_name }}}}",
                 "BASE_IMAGE_DIGEST": f"{outputs}base_image_digest }}}}",
-                "REGISTRY_ACTOR": "${{ github.actor }}",
-                "REGISTRY_TOKEN": "${{ github.token }}",
+                "REGISTRY_ACTOR": "${{ inputs.registry_actor }}",
+                "REGISTRY_TOKEN": "${{ inputs.registry_token }}",
             },
         )
         self.assertIn("python3 -m ci_tools.cli copy-held-base", copies[0]["run"])
+
+    def test_the_main_job_hands_the_prepare_action_the_package_write_token(self) -> None:
+        job = self.jobs["build-zfs-akmods"]
+        self.assertEqual(job["permissions"]["packages"], "write")
+        with_ = step_using(job, PREPARE_USES)["with"]
+        self.assertEqual(with_["registry_actor"], "${{ github.actor }}")
+        self.assertEqual(with_["registry_token"], "${{ github.token }}")
+
+    def test_resolution_reads_the_private_copy_with_the_same_login(self) -> None:
+        steps = load(PREPARE_ACTION)["runs"]["steps"]
+        resolve = next(step for step in steps if step.get("id") == "resolve")
+        self.assertEqual(resolve["env"]["REGISTRY_ACTOR"], "${{ inputs.registry_actor }}")
+        self.assertEqual(resolve["env"]["REGISTRY_TOKEN"], "${{ inputs.registry_token }}")
+
+    def test_the_gate_reads_with_its_own_job_token(self) -> None:
+        job = self.jobs["preflight"]
+        self.assertEqual(job["permissions"]["packages"], "read")
+        gate = next(step for step in job["steps"] if step.get("id") == "gate")
+        self.assertEqual(gate["env"]["REGISTRY_ACTOR"], "${{ github.actor }}")
+        self.assertEqual(gate["env"]["REGISTRY_TOKEN"], "${{ github.token }}")
+
+    def test_both_image_builds_pass_a_token_for_the_private_base(self) -> None:
+        candidate = step_using(self.jobs["build-candidate-image"], BUILD_USES)["with"]
+        self.assertEqual(candidate["registry_username"], "${{ github.actor }}")
+        self.assertEqual(candidate["registry_password"], "${{ github.token }}")
+        pr_workflow = load(REPO_ROOT / ".github" / "workflows" / "build-pr.yml")
+        (pr_job,) = pr_workflow["jobs"].values()
+        validation = step_using(pr_job, BUILD_USES)["with"]
+        self.assertEqual(validation["registry_username"], "${{ github.actor }}")
+        self.assertEqual(validation["registry_password"], "${{ github.token }}")
+        self.assertEqual(pr_job["permissions"]["packages"], "read")
+        prepare = next(step for step in pr_job["steps"] if step.get("id") == "prepare")
+        self.assertEqual(prepare["env"]["REGISTRY_ACTOR"], "${{ github.actor }}")
+        self.assertEqual(prepare["env"]["REGISTRY_TOKEN"], "${{ github.token }}")
 
 
 if __name__ == "__main__":

@@ -14,7 +14,7 @@ import os
 import tempfile
 import unittest
 from contextlib import redirect_stdout
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -28,7 +28,7 @@ from ci_tools.resolve_build_inputs import (
     HELD_BASE_PACKAGE,
     KERNEL_HOLD_MAX_DAYS,
     BuildInputResolution,
-    HeldBaseCopiesNotPublic,
+    HeldBaseCopiesUnreadable,
     ResolvedBuildInputs,
     _load_lock_file,
     _resolve_default_akmods_ref,
@@ -619,6 +619,38 @@ class DetectBaseImageKernelReleasesTests(unittest.TestCase):
         self.assertIn("ghcr.io/example/base@sha256:deadbeef", argv)
         self.assertIn("/lib/modules", argv[-1])
 
+    def test_a_private_copy_is_pulled_with_an_auth_file_never_the_token_in_argv(self) -> None:
+        seen: dict = {}
+
+        def pull(argv, **_kwargs):
+            seen["argv"] = list(argv)
+            seen["auths"] = json.loads(
+                Path(argv[argv.index("--authfile") + 1]).read_text(encoding="utf-8")
+            )["auths"]
+
+        with (
+            patch("ci_tools.resolve_build_inputs.run_cmd_with_retries", side_effect=pull),
+            patch(
+                "ci_tools.resolve_build_inputs.run_cmd", return_value="7.2.15-200.fc44.x86_64\n"
+            ),
+        ):
+            detect_base_image_kernel_releases(
+                "ghcr.io/example/held-base@sha256:deadbeef", creds="actor:secret-token"
+            )
+        self.assertEqual(list(seen["auths"]), ["ghcr.io"])
+        self.assertNotIn("secret-token", " ".join(seen["argv"]))
+        self.assertEqual(seen["argv"][-1], "ghcr.io/example/held-base@sha256:deadbeef")
+
+    def test_an_upstream_base_is_pulled_without_any_auth_file(self) -> None:
+        with (
+            patch("ci_tools.resolve_build_inputs.run_cmd_with_retries") as pull,
+            patch(
+                "ci_tools.resolve_build_inputs.run_cmd", return_value="7.2.15-200.fc44.x86_64\n"
+            ),
+        ):
+            detect_base_image_kernel_releases("quay.io/example/base@sha256:deadbeef")
+        self.assertNotIn("--authfile", pull.call_args.args[0])
+
     def test_empty_module_directory_listing_raises_with_image_ref(self) -> None:
         with (
             patch("ci_tools.resolve_build_inputs.run_cmd_with_retries"),
@@ -1149,17 +1181,24 @@ class FindHeldBaseTagTests(unittest.TestCase):
         kernels: dict[str, str],
         copies: dict[str, str] | Exception | None = None,
         linux_maximum: str = "7.2",
+        today: date | None = None,
     ) -> tuple[tuple[str, str], list[str]]:
         inspected: list[str] = []
+        self.copies_listed = 0
 
-        def inspect(ref: str) -> dict:
-            inspected.append(ref)
-            repository, tag = ref.removeprefix("docker://").rsplit(":", 1)
-            kernel = (kernels if repository == self.NAME else copies)[tag]
-            return {"Labels": {"ostree.linux": kernel} if kernel else {}}
+        def inspect_in(table: dict, repository: str):
+            def inspect(ref: str) -> dict:
+                inspected.append(ref)
+                found_repository, tag = ref.removeprefix("docker://").rsplit(":", 1)
+                self.assertEqual(found_repository, repository)
+                kernel = table[tag]
+                return {"Labels": {"ostree.linux": kernel} if kernel else {}}
+
+            return inspect
 
         def list_copy_tags(name: str) -> list[str]:
             self.assertEqual(name, self.COPIES)
+            self.copies_listed += 1
             if isinstance(copies, Exception):
                 raise copies
             return list(copies or {})
@@ -1169,10 +1208,11 @@ class FindHeldBaseTagTests(unittest.TestCase):
             copy_repository=self.COPIES,
             fedora_version="44",
             linux_maximum=linux_maximum,
-            today=self.TODAY,
+            today=today or self.TODAY,
             list_tags=lambda name: ["44", *kernels],
             list_copy_tags=list_copy_tags,
-            inspect=inspect,
+            inspect=inspect_in(kernels, self.NAME),
+            inspect_copy=inspect_in(copies if isinstance(copies, dict) else {}, self.COPIES),
         )
         return found, inspected
 
@@ -1214,31 +1254,35 @@ class FindHeldBaseTagTests(unittest.TestCase):
         # tests/test_check_stable_signal.py.
         self.assertEqual(KERNEL_HOLD_MAX_DAYS, 90)
 
-    def test_a_newer_copy_wins_over_an_older_upstream_tag(self) -> None:
-        # quay.io deleted the held tag; an older upstream tag that still qualifies must not be
-        # picked over it, or promotion would refuse the older base.
-        upstream = {
-            "44.20261118.0": "7.3.4-200.fc44.x86_64",
-            "44.20261020.0": "7.2.9-200.fc44.x86_64",
-        }
+    def test_a_supported_upstream_tag_wins_and_the_copies_are_never_read(self) -> None:
+        # While any supported upstream tag remains it is used, so the first run, before the
+        # copy package exists, never reads it. Even a package that refuses the read is harmless.
         copies = {"44.20261110.0": "7.2.15-200.fc44.x86_64"}
+        for package in (copies, HeldBaseCopiesUnreadable("denied")):
+            with self.subTest(package=package):
+                found, inspected = self._find_in(KINOITE_44_KERNELS, package)
+                self.assertEqual(found, (self.NAME, "44.20261110.0"))
+                self.assertEqual(self.copies_listed, 0)
+                self.assertTrue(all(self.NAME in ref for ref in inspected))
+
+    def test_the_newest_supported_copy_is_used_once_no_upstream_tag_qualifies(self) -> None:
+        upstream = {"44.20261118.0": "7.3.4-200.fc44.x86_64"}
+        copies = {
+            "44.20261110.0": "7.2.15-200.fc44.x86_64",
+            "44.20261105.0": "7.2.14-200.fc44.x86_64",
+            "44.20261112.0": "7.3.1-200.fc44.x86_64",
+        }
         found, inspected = self._find_in(upstream, copies)
         self.assertEqual(found, (self.COPIES, "44.20261110.0"))
+        # Newest copy first, and unsupported ones are passed over.
         self.assertEqual(
             inspected,
-            [f"docker://{self.NAME}:44.20261118.0", f"docker://{self.COPIES}:44.20261110.0"],
+            [
+                f"docker://{self.NAME}:44.20261118.0",
+                f"docker://{self.COPIES}:44.20261112.0",
+                f"docker://{self.COPIES}:44.20261110.0",
+            ],
         )
-
-    def test_a_newer_upstream_tag_wins_over_an_older_copy(self) -> None:
-        copies = {"44.20261001.0": "7.2.1-200.fc44.x86_64"}
-        found, _ = self._find_in(KINOITE_44_KERNELS, copies)
-        self.assertEqual(found, (self.NAME, "44.20261110.0"))
-
-    def test_a_tag_in_both_is_read_from_upstream(self) -> None:
-        copies = {"44.20261110.0": "7.2.15-200.fc44.x86_64"}
-        found, inspected = self._find_in(KINOITE_44_KERNELS, copies)
-        self.assertEqual(found, (self.NAME, "44.20261110.0"))
-        self.assertNotIn(f"docker://{self.COPIES}:44.20261110.0", inspected)
 
     def test_a_copy_older_than_the_hold_limit_is_never_used(self) -> None:
         # 2026-08-19 is 91 days before 2026-11-18; 2026-08-20 is exactly 90.
@@ -1258,20 +1302,64 @@ class FindHeldBaseTagTests(unittest.TestCase):
             self._find_in(upstream, copies)
         self.assertIn("no base to hold the build on", str(caught.exception))
 
-    def test_refused_copies_do_not_matter_while_an_upstream_tag_qualifies(self) -> None:
-        refused = HeldBaseCopiesNotPublic(f"{self.COPIES} refused an anonymous read")
-        found, _ = self._find_in(KINOITE_44_KERNELS, refused)
-        self.assertEqual(found, (self.NAME, "44.20261110.0"))
-
-    def test_refused_copies_are_reported_as_not_public_never_as_missing(self) -> None:
+    def test_nothing_qualifying_anywhere_fails_as_it_did_before_copies(self) -> None:
         upstream = {"44.20261118.0": "7.3.4-200.fc44.x86_64"}
-        refused = HeldBaseCopiesNotPublic(f"{self.COPIES} refused an anonymous read")
         with self.assertRaises(CiToolError) as caught:
-            self._find_in(upstream, refused)
-        message = str(caught.exception)
-        self.assertIn("could not be read", message)
-        self.assertIn(f"Make the {HELD_BASE_PACKAGE} package public", message)
-        self.assertNotIn("or in this repository's copies at", message)
+            self._find_in(upstream, {})
+        self.assertNotIsInstance(caught.exception, HeldBaseCopiesUnreadable)
+        self.assertIn("no base to hold the build on", str(caught.exception))
+
+    def test_copies_that_cannot_be_read_fail_loudly_once_they_are_needed(self) -> None:
+        upstream = {"44.20261118.0": "7.3.4-200.fc44.x86_64"}
+        unreadable = HeldBaseCopiesUnreadable(f"{self.COPIES} could not be read (REGISTRY_TOKEN)")
+        with self.assertRaises(HeldBaseCopiesUnreadable) as caught:
+            self._find_in(upstream, unreadable)
+        self.assertIn(self.COPIES, str(caught.exception))
+        self.assertIn("REGISTRY_TOKEN", str(caught.exception))
+
+    def test_walking_a_long_hold_forward_never_trips_the_promotion_check(self) -> None:
+        # Kinoite builds a dated tag every day, and quay.io deletes it after 28 days. A hold
+        # starts when 7.3 arrives on 2026-11-11. Each day the build picks a base, makes a copy
+        # of it, and promotes against the previous day's `:latest`. The pick must never be older
+        # than what `:latest` is already on, or `refuse_held_base_older_than_latest` would refuse
+        # the promotion and the hold would stall.
+        from ci_tools.promote_stable import (
+            KERNEL_HELD_FROM_LABEL,
+            refuse_held_base_older_than_latest,
+        )
+
+        def tag_on(day: date) -> str:
+            return f"44.{day:%Y%m%d}.0"
+
+        def kernel_on(day: date) -> str:
+            return "7.3.4-200.fc44.x86_64" if day >= date(2026, 11, 11) else "7.2.15-200.fc44.x86_64"
+
+        first = date(2026, 9, 1)
+        copies: dict[str, str] = {}
+        latest_labels: dict | None = None
+        picked_from_copy = 0
+        for offset in range(75):
+            today = date(2026, 11, 11) + timedelta(days=offset)
+            upstream = {
+                tag_on(day): kernel_on(day)
+                for day in (first + timedelta(days=n) for n in range((today - first).days + 1))
+                if (today - day).days <= 28
+            }
+            (repository, tag), _ = self._find_in(upstream, copies, today=today)
+            if repository == self.COPIES:
+                picked_from_copy += 1
+            copies.setdefault(tag, "7.2.15-200.fc44.x86_64")
+            candidate_labels = {
+                KERNEL_HELD_FROM_LABEL: "7.3.4-200.fc44.x86_64",
+                "org.opencontainers.image.version": tag,
+            }
+            refuse_held_base_older_than_latest(
+                candidate_labels=candidate_labels, latest_labels=latest_labels
+            )
+            latest_labels = candidate_labels
+        # The walk really did run past the point where upstream lost the held base.
+        self.assertGreater(picked_from_copy, 0)
+        self.assertEqual(latest_labels["org.opencontainers.image.version"], "44.20261110.0")
 
     def test_the_copy_repository_is_the_owners_held_base_package(self) -> None:
         self.assertEqual(held_base_repository("danathar"), self.COPIES)
@@ -1288,17 +1376,20 @@ class FindHeldBaseTagTests(unittest.TestCase):
                     "ci_tools.resolve_build_inputs.run_json_cmd", side_effect=CiToolError(message)
                 ),
             ):
-                self.assertEqual(list_held_base_copy_tags(self.COPIES), expected)
-        for message in ("unauthorized: authentication required", "403 Forbidden"):
+                self.assertEqual(list_held_base_copy_tags(self.COPIES, creds="a:t"), expected)
+        for message in ("unauthorized: authentication required", "403 Forbidden", "denied"):
             with (
                 self.subTest(message=message),
                 patch(
                     "ci_tools.resolve_build_inputs.run_json_cmd", side_effect=CiToolError(message)
                 ),
-                self.assertRaises(HeldBaseCopiesNotPublic) as caught,
+                self.assertRaises(HeldBaseCopiesUnreadable) as caught,
             ):
-                list_held_base_copy_tags(self.COPIES)
-            self.assertIn("not public", str(caught.exception))
+                list_held_base_copy_tags(self.COPIES, creds="a:t")
+            # Names the package and the token, and never claims it is merely "public".
+            self.assertIn(self.COPIES, str(caught.exception))
+            self.assertIn("REGISTRY_TOKEN", str(caught.exception))
+            self.assertNotIn("public", str(caught.exception))
         with (
             patch(
                 "ci_tools.resolve_build_inputs.run_json_cmd",
@@ -1306,18 +1397,37 @@ class FindHeldBaseTagTests(unittest.TestCase):
             ),
             self.assertRaises(CiToolError) as caught,
         ):
-            list_held_base_copy_tags(self.COPIES)
-        self.assertNotIsInstance(caught.exception, HeldBaseCopiesNotPublic)
+            list_held_base_copy_tags(self.COPIES, creds="a:t")
+        self.assertNotIsInstance(caught.exception, HeldBaseCopiesUnreadable)
 
-    def test_listing_copies_returns_the_tags(self) -> None:
-        with patch(
-            "ci_tools.resolve_build_inputs.run_json_cmd",
-            return_value={"Repository": self.COPIES, "Tags": ["44.20261110.0"]},
-        ) as run_json_cmd:
-            self.assertEqual(list_held_base_copy_tags(self.COPIES), ["44.20261110.0"])
-        self.assertEqual(
-            run_json_cmd.call_args.args[0], ["skopeo", "list-tags", f"docker://{self.COPIES}"]
-        )
+    def test_listing_copies_without_a_token_fails_naming_it(self) -> None:
+        with (
+            patch("ci_tools.resolve_build_inputs.run_json_cmd") as run_json_cmd,
+            self.assertRaises(HeldBaseCopiesUnreadable) as caught,
+        ):
+            list_held_base_copy_tags(self.COPIES, creds=None)
+        run_json_cmd.assert_not_called()
+        self.assertIn("REGISTRY_TOKEN", str(caught.exception))
+        self.assertIn("fork", str(caught.exception))
+
+    def test_listing_copies_hands_the_token_over_as_an_auth_file_only(self) -> None:
+        seen: dict = {}
+
+        def capture(args, **_kwargs):
+            seen["args"] = list(args)
+            seen["auths"] = json.loads(
+                Path(args[args.index("--authfile") + 1]).read_text(encoding="utf-8")
+            )["auths"]
+            return {"Repository": self.COPIES, "Tags": ["44.20261110.0"]}
+
+        with patch("ci_tools.resolve_build_inputs.run_json_cmd", side_effect=capture):
+            self.assertEqual(
+                list_held_base_copy_tags(self.COPIES, creds="actor:secret-token"),
+                ["44.20261110.0"],
+            )
+        self.assertEqual(list(seen["auths"]), ["ghcr.io"])
+        self.assertNotIn("secret-token", " ".join(seen["args"]))
+        self.assertEqual(seen["args"][-1], f"docker://{self.COPIES}")
 
     def test_a_copy_tag_maps_through_choose_base_image_tag(self) -> None:
         # The copy is tagged with the version label exactly, which is the first candidate the
@@ -1333,7 +1443,7 @@ class FindHeldBaseTagTests(unittest.TestCase):
         self.assertEqual(tag, "44.20261110.0")
         self.assertEqual(checked[0], "44.20261110.0")
 
-    def test_lists_the_base_repository_tags_with_skopeo(self) -> None:
+    def test_lists_the_base_repository_tags_with_skopeo_anonymously(self) -> None:
         with patch(
             "ci_tools.resolve_build_inputs.run_json_cmd",
             return_value={"Repository": self.NAME, "Tags": ["44", "44.20261110.0"]},
@@ -1384,22 +1494,33 @@ class ResolveBuildInputsKernelHoldTests(unittest.TestCase):
         *,
         tags: dict | None = None,
         copies: dict | None = None,
+        copy_list_error: Exception | None = None,
         copy_digest_error: Exception | None = None,
         linux_maximum: str = "7.2",
         installed: str = "7.2.15-200.fc44.x86_64\n",
         env: dict | None = None,
+        token: bool = True,
     ):
         tags = HOLD_TAGS if tags is None else tags
         copies = {} if copies is None else copies
         self.pulled: list[str] = []
+        self.pull_auth: list[dict | None] = []
         self.listed = 0
+        self.copies_listed = 0
+        # Every registry read of the copy package, as (call, credentialed).
+        self.copy_reads: list[tuple[str, bool]] = []
+        self.upstream_reads_with_token: list[str] = []
 
-        def inspect_json(ref: str) -> dict:
+        def inspect_json(ref: str, *, creds: str | None = None) -> dict:
             if "build" in ref:
                 return {"Name": "ghcr.io/example/build", "Digest": "sha256:cafef00d"}
             if "brew" in ref:
                 return {"Name": "ghcr.io/example/brew", "Digest": "sha256:beefcafe"}
             repository, tag = ref.removeprefix("docker://").rsplit(":", 1)
+            if repository == self.COPIES:
+                self.copy_reads.append((f"inspect {tag}", creds is not None))
+            elif creds is not None:
+                self.upstream_reads_with_token.append(ref)
             kernel, version, digest = (copies if repository == self.COPIES else tags)[tag]
             return {
                 "Name": repository,
@@ -1407,26 +1528,39 @@ class ResolveBuildInputsKernelHoldTests(unittest.TestCase):
                 "Labels": {"ostree.linux": kernel, "org.opencontainers.image.version": version},
             }
 
-        def inspect_digest(ref: str) -> str:
+        def inspect_digest(ref: str, *, creds: str | None = None) -> str:
             repository, tag = ref.removeprefix("docker://").rsplit(":", 1)
             if repository == self.COPIES:
+                self.copy_reads.append((f"digest {tag}", creds is not None))
                 if copy_digest_error is not None:
                     raise copy_digest_error
                 return copies[tag][2]
+            if creds is not None:
+                self.upstream_reads_with_token.append(ref)
             if tag not in tags:
                 raise CiToolError(f"manifest unknown: {ref}")
             return tags[tag][2]
 
-        def list_tags(name: str) -> list[str]:
+        def list_tags(name: str, *, creds: str | None = None) -> list[str]:
+            if name == self.COPIES:
+                self.copies_listed += 1
+                self.copy_reads.append(("list", creds is not None))
+                if copy_list_error is not None:
+                    raise copy_list_error
+                return list(copies)
+            self.assertIsNone(creds, "upstream tags must be listed anonymously")
             self.listed += 1
             return list(tags)
 
-        def list_copy_tags(name: str) -> list[str]:
-            self.assertEqual(name, self.COPIES)
-            return list(copies)
-
         def pull(args, **kwargs) -> str:
             self.pulled.append(args[-1])
+            auth = None
+            if "--authfile" in args:
+                auth = json.loads(
+                    Path(args[args.index("--authfile") + 1]).read_text(encoding="utf-8")
+                )["auths"]
+                self.assertNotIn("secret-token", " ".join(args))
+            self.pull_auth.append(auth)
             return ""
 
         base_env = {
@@ -1438,6 +1572,8 @@ class ResolveBuildInputsKernelHoldTests(unittest.TestCase):
             "DEFAULT_AKMODS_REF": "a" * 40,
             "DEFAULT_BREW_IMAGE": "ghcr.io/example/brew@sha256:beefcafe",
             "GITHUB_REPOSITORY_OWNER": "Danathar",
+            "REGISTRY_ACTOR": "actor" if token else "",
+            "REGISTRY_TOKEN": "secret-token" if token else "",
         }
         with (
             patch.dict(os.environ, base_env | (env or {}), clear=False),
@@ -1446,10 +1582,6 @@ class ResolveBuildInputsKernelHoldTests(unittest.TestCase):
                 "ci_tools.resolve_build_inputs.skopeo_inspect_digest", side_effect=inspect_digest
             ),
             patch("ci_tools.resolve_build_inputs.list_base_image_tags", side_effect=list_tags),
-            patch(
-                "ci_tools.resolve_build_inputs.list_held_base_copy_tags",
-                side_effect=list_copy_tags,
-            ),
             patch("ci_tools.resolve_build_inputs.run_cmd_with_retries", side_effect=pull),
             patch("ci_tools.resolve_build_inputs.run_cmd", return_value=installed),
             patch(
@@ -1505,6 +1637,16 @@ class ResolveBuildInputsKernelHoldTests(unittest.TestCase):
         )
         self.assertEqual(self.pulled, [])
 
+    def test_the_first_run_never_reads_the_copy_package(self) -> None:
+        # A supported upstream base remains, so the package, which may not exist yet and may
+        # answer `denied`, is not touched at all, and upstream is read anonymously.
+        inputs = self._resolve(copy_list_error=CiToolError("denied")).inputs
+        self.assertEqual(inputs.base_image_name, self.NAME)
+        self.assertEqual(self.copies_listed, 0)
+        self.assertEqual(self.copy_reads, [])
+        self.assertEqual(self.upstream_reads_with_token, [])
+        self.assertEqual(self.pull_auth, [None])
+
     def test_a_held_base_only_this_repository_still_has_is_built_from_the_copy(self) -> None:
         # quay.io deleted 44.20261110.0; the copy keeps its digest and its version-label tag.
         tags = {tag: value for tag, value in HOLD_TAGS.items() if tag != "44.20261110.0"}
@@ -1517,11 +1659,52 @@ class ResolveBuildInputsKernelHoldTests(unittest.TestCase):
         self.assertEqual(inputs.kernel_release, "7.2.15-200.fc44.x86_64")
         self.assertEqual(self.pulled, [f"{self.COPIES}@{self.HELD_DIGEST}"])
 
+    def test_every_read_of_the_copy_uses_the_token_and_upstream_reads_stay_anonymous(self) -> None:
+        tags = {tag: value for tag, value in HOLD_TAGS.items() if tag != "44.20261110.0"}
+        copies = {"44.20261110.0": HOLD_TAGS["44.20261110.0"]}
+        self._resolve(tags=tags, copies=copies)
+        # Tag listing, inspect (choosing, then pinning), the digest lookup that maps the tag.
+        self.assertEqual(
+            self.copy_reads,
+            [
+                ("list", True),
+                ("inspect 44.20261110.0", True),
+                ("inspect 44.20261110.0", True),
+                ("digest 44.20261110.0", True),
+            ],
+        )
+        self.assertEqual(self.upstream_reads_with_token, [])
+        # `podman pull` of the copy gets an auth file for ghcr.io alone, never the token in argv.
+        self.assertEqual(self.pull_auth, [{"ghcr.io": self.pull_auth[0]["ghcr.io"]}])
+        self.assertEqual(list(self.pull_auth[0]), ["ghcr.io"])
+
+    def test_a_copy_that_cannot_be_listed_fails_naming_the_package_and_the_token(self) -> None:
+        tags = {tag: value for tag, value in HOLD_TAGS.items() if tag != "44.20261110.0"}
+        for error in ("denied: permission_denied", "403 Forbidden"):
+            with self.subTest(error=error), self.assertRaises(CiToolError) as caught:
+                self._resolve(tags=tags, copy_list_error=CiToolError(error))
+            message = str(caught.exception)
+            self.assertIn(self.COPIES, message)
+            self.assertIn("REGISTRY_TOKEN", message)
+            self.assertNotIn("Failed to map digest", message)
+            self.assertEqual(self.pulled, [])
+
+    def test_a_copy_needed_without_a_token_fails_naming_the_token(self) -> None:
+        # A pull request from a fork has no package token; that matters only once no supported
+        # upstream base is left.
+        tags = {tag: value for tag, value in HOLD_TAGS.items() if tag != "44.20261110.0"}
+        copies = {"44.20261110.0": HOLD_TAGS["44.20261110.0"]}
+        with self.assertRaises(CiToolError) as caught:
+            self._resolve(tags=tags, copies=copies, token=False)
+        self.assertIn("REGISTRY_TOKEN", str(caught.exception))
+        self.assertEqual(self.copy_reads, [])
+
     def test_a_copy_that_cannot_be_read_says_why_instead_of_failing_to_map(self) -> None:
         tags = {tag: value for tag, value in HOLD_TAGS.items() if tag != "44.20261110.0"}
         copies = {"44.20261110.0": HOLD_TAGS["44.20261110.0"]}
         cases = {
-            "unauthorized: authentication required": "is not public",
+            "unauthorized: authentication required": "cannot read the "
+            f"{HELD_BASE_PACKAGE} package",
             "connection reset by peer": "registry read failed",
         }
         for error, expected in cases.items():

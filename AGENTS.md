@@ -39,7 +39,7 @@ guidance in sections 1–7 below when they conflict:
    sanctioned exception is the kernel hold ("Kernel Hold" in
    `docs/architecture-overview.md`): when the newest base's kernel is newer than OpenZFS
    supports, input resolution builds on an older base whose kernel it does support. That
-   base comes from upstream or from this repository's own copy of it, which the main
+   base comes from upstream or from this repository's own private copy of it, which the main
    build keeps at the same digest because quay.io deletes dated tags after four weeks; a
    failed or mismatched copy fails the run. It relaxes no check, and it is not a pattern
    to copy for any other guard.

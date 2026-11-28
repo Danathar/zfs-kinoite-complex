@@ -28,6 +28,9 @@ from ci_tools.common import (
     load_repo_defaults,
     normalize_owner,
     optional_env,
+    registry_auth_dir,
+    registry_auth_file,
+    registry_creds_from_env,
     require_env,
     require_env_or_default,
     run_cmd,
@@ -73,13 +76,13 @@ HELD_BASE_PACKAGE = "zfs-kinoite-complex-held-base"
 BASE_VERSION_LABEL = "org.opencontainers.image.version"
 
 
-class HeldBaseCopiesNotPublic(CiToolError):
+class HeldBaseCopiesUnreadable(CiToolError):
     """
-    The held-base copy package refused an anonymous read.
+    The held-base copy package could not be read with the job's token.
 
-    GHCR gives an anonymous caller the same bearer-token 403 for a private
-    package as for one that does not exist yet, so this never means "there
-    are no copies". It means "not readable without a credential".
+    The package is private. GHCR answers a read of a package that does not exist yet, and
+    sometimes a read the token is not allowed, with `denied` or a 403, so this never means
+    "there are no copies". It means "not confirmed readable".
     """
 
 
@@ -308,11 +311,19 @@ def _utc_today() -> date:
     return datetime.now(UTC).date()
 
 
-def list_base_image_tags(base_image_name: str) -> list[str]:
-    """Return every tag in the base image repository."""
-    listing = run_json_cmd(
-        ["skopeo", "list-tags", f"docker://{base_image_name}"], timeout=REGISTRY_METADATA_TIMEOUT
-    )
+def list_base_image_tags(base_image_name: str, *, creds: str | None = None) -> list[str]:
+    """
+    Return every tag in the base image repository.
+
+    Upstream is read anonymously. `creds` is only for this repository's private held-base copy
+    package; it reaches `skopeo` as an auth file, never on the command line.
+    """
+    with registry_auth_dir(creds, f"docker://{base_image_name}") as auth_dir:
+        command = ["skopeo", "list-tags"]
+        if auth_dir:
+            command.extend(["--authfile", registry_auth_file(auth_dir)])
+        command.append(f"docker://{base_image_name}")
+        listing = run_json_cmd(command, timeout=REGISTRY_METADATA_TIMEOUT)
     tags = listing.get("Tags")
     if not isinstance(tags, list):
         raise CiToolError(f"Missing tag list in skopeo list-tags output for {base_image_name}")
@@ -324,27 +335,42 @@ def held_base_repository(image_org: str) -> str:
     return f"ghcr.io/{image_org}/{HELD_BASE_PACKAGE}"
 
 
-def list_held_base_copy_tags(repository: str) -> list[str]:
+def list_held_base_copy_tags(repository: str, *, creds: str | None) -> list[str]:
     """
-    Return every tag in the held-base copy package, read anonymously.
+    Return every tag in the private held-base copy package, read with the job's token.
 
-    Anonymous like every other base read here: pull request validation calls
-    this too and has no package token. A package that does not exist yet has
-    no copies. A refusal raises `HeldBaseCopiesNotPublic` instead of reading
-    as "no copies", and the caller decides whether it matters.
+    A package that does not exist yet reads as having no copies. A refusal raises
+    `HeldBaseCopiesUnreadable` instead, because GHCR may answer even an authenticated read of a
+    package that was never created with `denied`: nothing here depends on telling the two apart.
+    The caller decides whether it matters, and it only does once no upstream tag is left.
     """
+    if not creds:
+        raise HeldBaseCopiesUnreadable(
+            f"{repository} is private and needs the job's token to be read, but REGISTRY_ACTOR "
+            "and REGISTRY_TOKEN are not both set for this step. A pull request from a fork "
+            "cannot read it."
+        )
     try:
-        return list_base_image_tags(repository)
+        return list_base_image_tags(repository, creds=creds)
     except CiToolError as exc:
         message = str(exc)
         if is_missing_image_error(message):
             return []
         if is_registry_permission_error(message):
-            raise HeldBaseCopiesNotPublic(
-                f"{repository} refused an anonymous read, so it either does not exist yet or "
-                f"is not public ({message.strip()})"
+            raise HeldBaseCopiesUnreadable(
+                f"{repository} could not be read with the job's token (REGISTRY_TOKEN): the "
+                f"package may not exist yet, or the token may not be allowed to read it "
+                f"({message.strip()})"
             ) from exc
         raise
+
+
+def _base_kernel_is_supported(inspect_json: dict, linux_maximum: str) -> bool:
+    """True when a base image's `ostree.linux` label is readable and within `linux_maximum`."""
+    kernel_label = str((inspect_json.get("Labels") or {}).get("ostree.linux") or "")
+    if kernel_major_minor(kernel_label) is None:
+        return False
+    return not kernel_exceeds_maximum(kernel_label, linux_maximum)
 
 
 def find_held_base(
@@ -355,59 +381,40 @@ def find_held_base(
     linux_maximum: str,
     today: date,
     list_tags: Callable[[str], list[str]] = list_base_image_tags,
-    list_copy_tags: Callable[[str], list[str]] = list_held_base_copy_tags,
+    list_copy_tags: Callable[[str], list[str]],
     inspect: Callable[[str], dict] = skopeo_inspect_json,
+    inspect_copy: Callable[[str], dict],
 ) -> tuple[str, str]:
     """
-    Return `(repository, tag)` of the newest dated base whose kernel label OpenZFS supports.
+    Return `(repository, tag)` of the newest dated base whose kernel OpenZFS supports.
 
-    The candidates are the upstream repository's dated tags and this
-    repository's copies of earlier held bases, both of one Fedora release and
-    both no older than `KERNEL_HOLD_MAX_DAYS` by their own date. They are
-    tried newest first by that date, whichever repository holds them.
-    Preferring upstream would pick an older upstream tag over a newer copy,
-    and promotion's `refuse_held_base_older_than_latest` would then refuse
-    the candidate. A tag in both is read from upstream; it is the same image.
+    Candidates are one Fedora release's dated tags no older than `KERNEL_HOLD_MAX_DAYS` by their
+    own date. Upstream first: the newest supported upstream tag wins while one remains. Only when
+    none does are this repository's copies read, and then the newest supported copy wins.
 
-    A copy package that refuses an anonymous read is not "no copies". It only
-    matters when no upstream tag qualifies: quay.io keeps every dated tag for
-    four weeks, so every upstream tag is newer than any copy whose upstream tag
-    is gone, and a qualifying upstream tag would win anyway. With none, the
-    run fails and names the refusal.
+    That order is the newest base by date. quay.io keeps every dated tag for four weeks and
+    expires the oldest first, so while any supported upstream tag remains it is at least as new
+    as every copy, and promotion's `refuse_held_base_older_than_latest` cannot be tripped by
+    preferring it. It also means the first run, before the copy package exists, never reads it.
 
-    The label only chooses the tag. The caller still pins the tag's digest and
-    reads the real kernel from `/lib/modules` before building on it.
+    When the copies are needed and cannot be read, `HeldBaseCopiesUnreadable` propagates and the
+    run fails naming the package and the token. If nothing qualifies, the run fails as it did
+    before the copies existed.
+
+    The label only chooses the tag. The caller still pins the tag's digest and reads the real
+    kernel from `/lib/modules` before building on it.
     """
     window = {
         "fedora_version": fedora_version,
         "today": today,
         "lookback_days": KERNEL_HOLD_MAX_DAYS,
     }
-    upstream_tags = dated_base_tags_newest_first(list_tags(base_image_name), **window)
-    copies_refused: HeldBaseCopiesNotPublic | None = None
-    try:
-        copy_tags = dated_base_tags_newest_first(list_copy_tags(copy_repository), **window)
-    except HeldBaseCopiesNotPublic as exc:
-        copies_refused = exc
-        copy_tags = []
-    candidates = [(base_image_name, tag) for tag in upstream_tags]
-    candidates += [(copy_repository, tag) for tag in copy_tags if tag not in upstream_tags]
-    candidates.sort(key=lambda candidate: dated_base_version_key(candidate[1]), reverse=True)
-    for repository, tag in candidates:
-        labels = inspect(f"docker://{repository}:{tag}").get("Labels") or {}
-        kernel_label = str(labels.get("ostree.linux") or "")
-        if kernel_major_minor(kernel_label) is None:
-            continue
-        if not kernel_exceeds_maximum(kernel_label, linux_maximum):
-            return repository, tag
-    if copies_refused is not None:
-        raise CiToolError(
-            f"No {base_image_name} Fedora {fedora_version} base image from the last "
-            f"{KERNEL_HOLD_MAX_DAYS} days has a kernel OpenZFS supports (Linux-Maximum "
-            f"{linux_maximum}), and this repository's copies of held bases could not be read: "
-            f"{copies_refused}. Make the {HELD_BASE_PACKAGE} package public (see \"Kernel Hold\" "
-            "in docs/architecture-overview.md); until then there is no base to hold the build on."
-        )
+    for tag in dated_base_tags_newest_first(list_tags(base_image_name), **window):
+        if _base_kernel_is_supported(inspect(f"docker://{base_image_name}:{tag}"), linux_maximum):
+            return base_image_name, tag
+    for tag in dated_base_tags_newest_first(list_copy_tags(copy_repository), **window):
+        if _base_kernel_is_supported(inspect_copy(f"docker://{copy_repository}:{tag}"), linux_maximum):
+            return copy_repository, tag
     raise CiToolError(
         f"No Fedora {fedora_version} base image from the last {KERNEL_HOLD_MAX_DAYS} days, in "
         f"{base_image_name} or in this repository's copies at {copy_repository}, has a kernel "
@@ -425,7 +432,7 @@ def _load_lock_file(lock_file_path: str) -> dict:
         return json.load(handle)
 
 
-def detect_base_image_kernel_releases(image_ref: str) -> list[str]:
+def detect_base_image_kernel_releases(image_ref: str, *, creds: str | None = None) -> list[str]:
     """
     Inspect the base image filesystem and return every installed kernel release.
 
@@ -445,17 +452,18 @@ def detect_base_image_kernel_releases(image_ref: str) -> list[str]:
     transfer timeout, so exhausting all three still leaves the 90-minute job
     time to report the failure instead of being killed during the last pull.
     """
-    run_cmd_with_retries(
-        [
-            "podman",
-            "pull",
-            "--retry",
-            str(REGISTRY_RETRY_ATTEMPTS),
-            image_ref,
-        ],
-        capture_output=False,
-        timeout=REGISTRY_TRANSFER_TIMEOUT / REGISTRY_RETRY_ATTEMPTS,
-    )
+    # `creds` is given only when the base is this repository's private copy; the auth file
+    # carries it for that one registry and never appears in the command line.
+    with registry_auth_dir(creds, image_ref) as auth_dir:
+        pull_command = ["podman", "pull", "--retry", str(REGISTRY_RETRY_ATTEMPTS)]
+        if auth_dir:
+            pull_command.extend(["--authfile", registry_auth_file(auth_dir)])
+        pull_command.append(image_ref)
+        run_cmd_with_retries(
+            pull_command,
+            capture_output=False,
+            timeout=REGISTRY_TRANSFER_TIMEOUT / REGISTRY_RETRY_ATTEMPTS,
+        )
     # Now a local image; `podman run` transfers nothing and keeps its unbounded
     # runtime, which is a `find` over /lib/modules.
     output = run_cmd(
@@ -655,15 +663,23 @@ def resolve_build_inputs() -> BuildInputResolution:
     # supports, instead of building on one it cannot (the ZFS build would fail
     # there anyway). A lock-file replay is never held: it must rebuild exactly
     # the base it names. The held base may come from this repository's own
-    # copy package; `base_image_name` then names that package, so everything
-    # below pins, pulls and tags the copy.
+    # private copy package; `base_image_name` then names that package, so
+    # everything below pins, pulls and tags the copy, and reads it with the
+    # job's token (`copy_creds`). Upstream reads stay anonymous.
     kernel_held_from = ""
     copy_repository = ""
+    copy_creds: str | None = None
+
+    def copy_read_options() -> dict[str, str]:
+        """The token option for a read of the private copy; nothing for any upstream read."""
+        return {"creds": copy_creds} if copy_creds else {}
+
     linux_maximum = "" if use_input_lock else resolve_linux_maximum(zfs_version)
     if not use_input_lock and kernel_exceeds_maximum(label_kernel_release, linux_maximum):
         kernel_held_from = label_kernel_release
         image_org = normalize_owner(require_env("GITHUB_REPOSITORY_OWNER"))
         copy_repository = held_base_repository(image_org)
+        held_creds = registry_creds_from_env()
         held_repository, held_tag = find_held_base(
             base_image_name=base_image_name,
             copy_repository=copy_repository,
@@ -671,11 +687,18 @@ def resolve_build_inputs() -> BuildInputResolution:
             linux_maximum=linux_maximum,
             today=_utc_today(),
             list_tags=list_base_image_tags,
-            list_copy_tags=list_held_base_copy_tags,
+            list_copy_tags=lambda repository: list_held_base_copy_tags(
+                repository, creds=held_creds
+            ),
             inspect=skopeo_inspect_json,
+            inspect_copy=lambda ref: skopeo_inspect_json(ref, creds=held_creds),
         )
+        if held_repository == copy_repository:
+            copy_creds = held_creds
         base_image_name = held_repository
-        held_inspect_json = skopeo_inspect_json(f"docker://{base_image_name}:{held_tag}")
+        held_inspect_json = skopeo_inspect_json(
+            f"docker://{base_image_name}:{held_tag}", **copy_read_options()
+        )
         base_image_digest = str(held_inspect_json.get("Digest") or "")
         held_labels = held_inspect_json.get("Labels") or {}
         label_kernel_release = str(held_labels.get("ostree.linux") or "")
@@ -684,7 +707,7 @@ def resolve_build_inputs() -> BuildInputResolution:
             raise CiToolError(f"Failed to resolve base image digest for {base_image_name}:{held_tag}")
 
     base_image_pinned = f"{base_image_name}@{base_image_digest}"
-    detected_kernel_releases = detect_base_image_kernel_releases(base_image_pinned)
+    detected_kernel_releases = detect_base_image_kernel_releases(base_image_pinned, **copy_read_options())
     kernel_release = detected_kernel_releases[-1]
     fedora_version = extract_fedora_version(kernel_release)
     source_tag = extract_source_tag(base_image_ref)
@@ -699,12 +722,12 @@ def resolve_build_inputs() -> BuildInputResolution:
     def lookup_digest(candidate_tag: str) -> str:
         candidate_ref = f"docker://{base_image_name}:{candidate_tag}"
         try:
-            return skopeo_inspect_digest(candidate_ref)
+            return skopeo_inspect_digest(candidate_ref, **copy_read_options())
         except CiToolError as exc:
-            if base_image_name != copy_repository:
+            if not copy_creds:
                 return ""
             reason = (
-                f"the package is not public; make the {HELD_BASE_PACKAGE} package public"
+                f"the job's token (REGISTRY_TOKEN) cannot read the {HELD_BASE_PACKAGE} package"
                 if is_registry_permission_error(str(exc))
                 else "the registry read failed"
             )

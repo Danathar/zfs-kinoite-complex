@@ -10,7 +10,7 @@
     {
       "module": "ci_tools/held_base_copy.py",
       "operator": "core/ReplaceBinaryOperator_Mul_Div",
-      "line": "def held_base_copy_state(copy_ref: str, *, creds: str) -> str:",
+      "line": "def held_base_copy_exists(copy_ref: str, *, creds: str) -> bool:",
       "reason": "The mutant turns the keyword-only marker `*` into the positional-only marker `/`, so `copy_ref` can no longer be passed by keyword. Every caller passes it first and `creds` by keyword, which both signatures accept, so no input tells them apart."
     }
   ]

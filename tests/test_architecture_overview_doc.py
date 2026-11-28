@@ -36,6 +36,8 @@ tests in this tree do.
 from __future__ import annotations
 
 import ast
+import contextlib
+import io
 import json
 import re
 import unittest
@@ -193,7 +195,7 @@ def run_gate(
     signal_digest: str = CURRENT_DIGEST,
     signal_kernel: str = "",
     today: date = GATE_TODAY,
-    copy: str = "public",
+    copy: str = "readable",
 ):
     """
     Run the real gate against one fake registry.
@@ -201,9 +203,12 @@ def run_gate(
     `latest` is the inspect payload for this repo's own `:latest`, or an
     exception to raise for it. The upstream signal image always answers with
     `signal_digest`, so a scenario only has to say what is different about the
-    promoted image it is compared against. `copy` is this repository's copy of
-    the held base: "public", "not-public" (refused without a credential) or
-    "missing".
+    promoted image it is compared against. `copy` is this repository's private
+    copy of the held base, which only the job's token can read: "readable",
+    "missing" (the registry's "manifest unknown"), "denied" (a refusal even
+    with the token, as GHCR may answer a package that was never created) or
+    "other-error" (a registry failure that is neither). A read without the
+    token fails the test: the package is private.
     """
 
     def inspect(image_ref: str, *, creds: str | None = None) -> dict:
@@ -215,10 +220,14 @@ def run_gate(
                 raise latest
             return latest
         if image_ref == HELD_BASE_COPY_REF:
-            if copy == "missing" or (copy == "not-public" and creds is None):
-                raise CiToolError(
-                    "manifest unknown" if creds else "unauthorized: authentication required"
-                )
+            if creds is None:
+                raise AssertionError("the private copy was read without the job's token")
+            if copy == "missing":
+                raise CiToolError("manifest unknown")
+            if copy == "denied":
+                raise CiToolError("denied: permission_denied")
+            if copy == "other-error":
+                raise CiToolError("toomanyrequests: rate limited")
             return {"Digest": HELD_BASE_DIGEST}
         raise AssertionError(f"unexpected inspect of {image_ref}")
 
@@ -346,13 +355,81 @@ class ScheduledBuildGateTableTests(unittest.TestCase):
         self.assertEqual(decision.reason, "kernel-held-past-hold-window")
         self.assertTrue(decision.should_build)
 
-    def test_a_held_latest_with_a_copy_that_is_not_public_still_skips(self) -> None:
-        # Not public is reported, not rebuilt: a rebuild cannot change a package's visibility.
-        decision = run_gate(
-            _held_latest_inspect(), signal_kernel="7.3.5-200.fc44.x86_64", copy="not-public"
-        )
+    def test_a_held_latest_with_a_readable_copy_skips_as_before(self) -> None:
+        decision = run_gate(_held_latest_inspect(), signal_kernel="7.3.5-200.fc44.x86_64")
         self.assertEqual(decision.reason, "kernel-held-upstream-kernel-still-unsupported")
         self.assertFalse(decision.should_build)
+
+    def test_a_copy_that_is_missing_or_denied_builds_and_never_raises(self) -> None:
+        # GHCR may answer even an authenticated read of a package that was never created with
+        # `denied`, so "missing" and "denied" are one answer: the copy is not confirmed readable.
+        for copy in ("missing", "denied"):
+            with self.subTest(copy=copy):
+                decision = run_gate(
+                    _held_latest_inspect(), signal_kernel="7.3.5-200.fc44.x86_64", copy=copy
+                )
+                self.assertEqual(decision.reason, "kernel-held-copy-missing")
+                self.assertTrue(decision.should_build)
+
+    def test_a_registry_failure_that_is_neither_still_raises(self) -> None:
+        # "Could not tell" is never read as "missing": a rate limit must not start a rebuild.
+        with self.assertRaises(CiToolError):
+            run_gate(
+                _held_latest_inspect(), signal_kernel="7.3.5-200.fc44.x86_64", copy="other-error"
+            )
+
+    def test_after_a_successful_copy_the_next_scheduled_run_skips(self) -> None:
+        # One fake registry for both sides: the main build's copy step, then the nightly gate.
+        # Before the copy the gate builds; once the copy step has succeeded it skips instead of
+        # rebuilding every night.
+        from ci_tools.held_base_copy import copy_held_base
+
+        registry = {"copy": False}
+
+        def optional(ref: str, *, creds: str | None = None):
+            self.assertIsNotNone(creds, "the private copy was read without the job's token")
+            if ref.endswith(f":{HELD_BASE_VERSION}"):
+                return {"Digest": HELD_BASE_DIGEST} if registry["copy"] else None
+            self.assertEqual(ref, HELD_BASE_COPY_REF)
+            return {"Digest": HELD_BASE_DIGEST} if registry["copy"] else None
+
+        def land_copy(*_args, **_kwargs) -> None:
+            registry["copy"] = True
+
+        def gate():
+            # The real `held_base_copy_exists` on both sides; only the registry is faked.
+            with patch(
+                "ci_tools.held_base_copy.skopeo_inspect_json_optional", side_effect=optional
+            ):
+                return run_gate(_held_latest_inspect(), signal_kernel="7.3.5-200.fc44.x86_64")
+
+        self.assertEqual(gate().reason, "kernel-held-copy-missing")
+        with (
+            patch(
+                "ci_tools.held_base_copy.skopeo_inspect_json",
+                return_value={"Labels": {BASE_VERSION_LABEL: HELD_BASE_VERSION}},
+            ),
+            patch("ci_tools.held_base_copy.skopeo_inspect_json_optional", side_effect=optional),
+            patch("ci_tools.held_base_copy.skopeo_copy", side_effect=land_copy),
+            patch("ci_tools.held_base_copy.skopeo_inspect_digest", return_value=HELD_BASE_DIGEST),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            copy_held_base(
+                base_image_name="quay.io/fedora-ostree-desktops/kinoite",
+                base_image_digest=HELD_BASE_DIGEST,
+                image_org="danathar",
+                creds="actor:token",
+            )
+        decision = gate()
+        self.assertEqual(decision.reason, "kernel-held-upstream-kernel-still-unsupported")
+        self.assertFalse(decision.should_build)
+
+    def test_the_gate_reads_the_copy_with_its_own_token(self) -> None:
+        with patch(
+            "ci_tools.check_stable_signal.held_base_copy_exists", return_value=True
+        ) as exists:
+            run_gate(_held_latest_inspect(), signal_kernel="7.3.5-200.fc44.x86_64")
+        exists.assert_called_once_with(HELD_BASE_COPY_REF, creds="actor:token")
 
     def test_a_held_latest_with_no_copy_builds_even_when_nothing_moved(self) -> None:
         held = _held_latest_inspect()

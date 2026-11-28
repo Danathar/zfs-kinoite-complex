@@ -1,11 +1,11 @@
 """
 Script: tests/test_held_base_copy.py
-What: Tests for ci_tools/held_base_copy.py, the copy of the held base kept in this repository's GHCR.
-Doing: Mocks every registry call and checks the copy's options, its tag, its digest check, and
-the three states (missing, not public, public) the gate, the build and the triage workflow read.
+What: Tests for ci_tools/held_base_copy.py, the private copy of the held base kept in this repository's GHCR.
+Doing: Mocks every registry call and checks the copy's options, its tag, its digest check, that the
+GitHub token never reaches quay.io, and the one existence function the gate and the post-copy check share.
 Why: A kernel hold longer than four weeks stands on this copy once quay.io deletes the held tag.
-A copy at the wrong digest, a copy under the wrong tag, or a private copy read as a missing one
-would each leave the hold with no base while every check stayed green.
+A copy at the wrong digest, a copy under the wrong tag, a token sent to the wrong registry, or a copy
+the gate cannot see while the main job can would each leave the hold broken while every check stayed green.
 Goal: Make each of those fail here, on the pull request that causes it.
 """
 
@@ -16,7 +16,6 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -25,15 +24,10 @@ from unittest.mock import patch
 
 from ci_tools.common import CiToolError
 from ci_tools.held_base_copy import (
-    COPY_MISSING,
-    COPY_NOT_PUBLIC,
-    COPY_PUBLIC,
     copy_held_base,
+    held_base_copy_exists,
     held_base_copy_ref,
-    held_base_copy_state,
     main,
-    main_status,
-    report_copy_state,
 )
 from ci_tools.resolve_build_inputs import HELD_BASE_PACKAGE
 
@@ -48,20 +42,18 @@ COPY_BY_DIGEST = f"docker://{COPY_REPOSITORY}@{DIGEST}"
 SOURCE_REF = f"docker://{SOURCE_NAME}@{DIGEST}"
 
 
-def registry(*, exists: bool = True, anonymous: object = "public"):
+def registry(*, exists: bool = True, refusal: Exception | None = None):
     """
-    A fake `skopeo_inspect_json_optional`: with creds it answers `exists`; without, `anonymous`.
+    A fake `skopeo_inspect_json_optional` for the private copy: it answers only with the token.
 
-    `anonymous` is "public", None (absent), or an exception to raise.
+    `exists` False reads as the registry's "manifest unknown"; `refusal` is raised instead.
     """
 
     def optional(ref: str, *, creds: str | None = None) -> dict | None:
-        if creds is not None:
-            assert creds == CREDS, creds
-            return {"Digest": DIGEST} if exists else None
-        if isinstance(anonymous, Exception):
-            raise anonymous
-        return None if anonymous is None else {"Digest": DIGEST}
+        assert creds == CREDS, f"the private copy was read without the token: {creds!r}"
+        if refusal is not None:
+            raise refusal
+        return {"Digest": DIGEST} if exists else None
 
     return optional
 
@@ -76,54 +68,43 @@ class HeldBaseCopyRefTests(unittest.TestCase):
                 self.assertEqual(held_base_copy_ref(ORG, value), "")
 
 
-class HeldBaseCopyStateTests(unittest.TestCase):
-    def state(self, **kwargs) -> str:
+class HeldBaseCopyExistsTests(unittest.TestCase):
+    def exists(self, **kwargs) -> bool:
         with patch(
             "ci_tools.held_base_copy.skopeo_inspect_json_optional", side_effect=registry(**kwargs)
         ):
-            return held_base_copy_state(COPY_BY_DIGEST, creds=CREDS)
+            return held_base_copy_exists(COPY_BY_DIGEST, creds=CREDS)
 
-    def test_missing_is_asked_with_the_token(self) -> None:
-        self.assertEqual(self.state(exists=False), COPY_MISSING)
+    def test_a_readable_copy_exists(self) -> None:
+        self.assertTrue(self.exists())
 
-    def test_an_anonymous_refusal_is_not_public_never_missing(self) -> None:
-        refused = CiToolError("unauthorized: authentication required")
-        self.assertEqual(self.state(anonymous=refused), COPY_NOT_PUBLIC)
+    def test_a_missing_copy_does_not(self) -> None:
+        self.assertFalse(self.exists(exists=False))
 
-    def test_an_anonymous_absence_of_an_existing_copy_is_not_public(self) -> None:
-        self.assertEqual(self.state(anonymous=None), COPY_NOT_PUBLIC)
-
-    def test_a_readable_copy_is_public(self) -> None:
-        self.assertEqual(self.state(), COPY_PUBLIC)
-
-    def test_any_other_anonymous_error_raises(self) -> None:
-        with self.assertRaises(CiToolError):
-            self.state(anonymous=CiToolError("connection reset by peer"))
-
-    def test_a_credentialed_registry_error_raises(self) -> None:
-        with (
-            patch(
-                "ci_tools.held_base_copy.skopeo_inspect_json_optional",
-                side_effect=CiToolError("toomanyrequests"),
-            ),
-            self.assertRaises(CiToolError),
+    def test_a_refusal_is_not_confirmed_readable_and_never_raises(self) -> None:
+        # GHCR may answer an authenticated read of a package that was never created with
+        # `denied`, so a refusal reads the same as missing: build, never skip, never raise.
+        for message in (
+            "denied: permission_denied",
+            "unauthorized: authentication required",
+            "403 Forbidden",
+            "401 Unauthorized",
         ):
-            held_base_copy_state(COPY_BY_DIGEST, creds=CREDS)
+            with self.subTest(message=message):
+                self.assertFalse(self.exists(refusal=CiToolError(message)))
 
+    def test_any_other_registry_error_raises(self) -> None:
+        # "Could not tell" is never read as "missing".
+        for message in ("toomanyrequests", "connection reset by peer"):
+            with self.subTest(message=message), self.assertRaises(CiToolError):
+                self.exists(refusal=CiToolError(message))
 
-class ReportCopyStateTests(unittest.TestCase):
-    def test_not_public_is_a_warning_with_the_owner_steps(self) -> None:
-        with redirect_stdout(io.StringIO()) as out:
-            report_copy_state(COPY_BY_DIGEST, COPY_NOT_PUBLIC)
-        text = out.getvalue()
-        self.assertTrue(text.startswith("::warning "), text)
-        self.assertIn(HELD_BASE_PACKAGE, text)
-        self.assertIn("Change visibility", text)
-
-    def test_public_is_logged_plainly(self) -> None:
-        with redirect_stdout(io.StringIO()) as out:
-            report_copy_state(COPY_BY_DIGEST, COPY_PUBLIC)
-        self.assertEqual(out.getvalue(), f"Held base copy {COPY_BY_DIGEST}: public\n")
+    def test_it_is_always_asked_with_the_token(self) -> None:
+        with patch(
+            "ci_tools.held_base_copy.skopeo_inspect_json_optional", return_value=None
+        ) as inspect:
+            held_base_copy_exists(COPY_BY_DIGEST, creds=CREDS)
+        inspect.assert_called_once_with(COPY_BY_DIGEST, creds=CREDS)
 
 
 class CopyHeldBaseTests(unittest.TestCase):
@@ -134,19 +115,25 @@ class CopyHeldBaseTests(unittest.TestCase):
         copied_digest: str = DIGEST,
         version: str = VERSION,
         base_image_name: str = SOURCE_NAME,
-        exists: bool = True,
+        by_digest_readable: bool = True,
+        by_digest_refusal: Exception | None = None,
     ):
         """
-        Run `copy_held_base` against a fake registry.
+        Run `copy_held_base` against a fake registry, with the real `held_base_copy_exists`.
 
         `tag_digest` is what the copy's version tag already holds (None: nothing yet).
-        `copied_digest` is what that tag holds after a copy.
+        `copied_digest` is what that tag holds after a copy. `by_digest_readable` and
+        `by_digest_refusal` say what the token sees when it reads the copy by digest.
         """
 
         def optional(ref: str, *, creds: str | None = None) -> dict | None:
-            if ref == COPY_BY_TAG and creds is not None and self.copy_calls == []:
+            self.assertEqual(creds, CREDS, f"{ref} was read without the token")
+            if ref == COPY_BY_TAG:
                 return None if tag_digest is None else {"Digest": tag_digest}
-            return registry(exists=exists)(ref, creds=creds)
+            self.assertEqual(ref, COPY_BY_DIGEST)
+            if by_digest_refusal is not None:
+                raise by_digest_refusal
+            return {"Digest": DIGEST} if by_digest_readable else None
 
         self.copy_calls: list = []
         with (
@@ -172,7 +159,7 @@ class CopyHeldBaseTests(unittest.TestCase):
             )
 
     def test_copies_with_the_promotion_options_under_the_version_label(self) -> None:
-        self.assertEqual(self.run_copy(), COPY_BY_TAG)
+        self.assertEqual(self.run_copy(), COPY_BY_DIGEST)
         self.inspect.assert_called_once_with(SOURCE_REF)
         self.assertEqual(
             self.copy_calls,
@@ -191,6 +178,47 @@ class CopyHeldBaseTests(unittest.TestCase):
         self.digest.assert_called_once_with(COPY_BY_TAG, creds=CREDS)
         self.assertIn(f"Copied held base {SOURCE_REF} -> {COPY_BY_TAG}", self.out.getvalue())
 
+    def test_the_quay_source_is_read_anonymously_and_its_auth_file_holds_no_quay_entry(
+        self,
+    ) -> None:
+        # Not a mock of skopeo_copy: the real one builds the auth file, and the command it
+        # would run is captured. The GitHub token must reach ghcr.io only.
+        seen: dict = {}
+
+        def capture(argv, **_kwargs):
+            self.assertNotIn("--src-authfile", argv)
+            self.assertNotIn("--src-creds", argv)
+            auth_path = argv[argv.index("--dest-authfile") + 1]
+            seen["auths"] = json.loads(Path(auth_path).read_text(encoding="utf-8"))["auths"]
+            seen["argv"] = list(argv)
+            return ""
+
+        def optional(ref: str, *, creds: str | None = None) -> dict | None:
+            return None if ref == COPY_BY_TAG else {"Digest": DIGEST}
+
+        with (
+            patch(
+                "ci_tools.held_base_copy.skopeo_inspect_json",
+                return_value={"Labels": {"org.opencontainers.image.version": VERSION}},
+            ),
+            patch("ci_tools.held_base_copy.skopeo_inspect_json_optional", side_effect=optional),
+            patch("ci_tools.held_base_copy.skopeo_inspect_digest", return_value=DIGEST),
+            patch("ci_tools.common.run_cmd", side_effect=capture),
+            redirect_stdout(io.StringIO()),
+        ):
+            copy_held_base(
+                base_image_name=SOURCE_NAME,
+                base_image_digest=DIGEST,
+                image_org=ORG,
+                creds=CREDS,
+            )
+
+        self.assertEqual(list(seen["auths"]), ["ghcr.io"])
+        self.assertNotIn("quay.io", json.dumps(seen["auths"]))
+        self.assertEqual(seen["argv"][-2:], [SOURCE_REF, COPY_BY_TAG])
+        self.assertIn("--preserve-digests", seen["argv"])
+        self.assertIn("--multi-arch=all", seen["argv"])
+
     def test_a_copy_at_another_digest_fails_closed(self) -> None:
         with self.assertRaises(CiToolError) as caught:
             self.run_copy(copied_digest="sha256:" + "8" * 64)
@@ -202,7 +230,7 @@ class CopyHeldBaseTests(unittest.TestCase):
         self.assertIn("resolves to no digest, expected", str(caught.exception))
 
     def test_a_copy_already_there_is_not_copied_again(self) -> None:
-        self.assertEqual(self.run_copy(tag_digest=DIGEST), COPY_BY_TAG)
+        self.assertEqual(self.run_copy(tag_digest=DIGEST), COPY_BY_DIGEST)
         self.assertEqual(self.copy_calls, [])
         self.digest.assert_not_called()
 
@@ -218,15 +246,61 @@ class CopyHeldBaseTests(unittest.TestCase):
         self.assertIn("not a dated base version", str(caught.exception))
         self.assertEqual(self.copy_calls, [])
 
-    def test_a_run_already_on_the_copy_only_reports_it(self) -> None:
+    def test_a_copy_the_token_cannot_read_back_fails_the_run_loudly(self) -> None:
+        # The post-copy check asks the gate's own existence function. If it cannot see the copy,
+        # the gate would see "missing" every night and rebuild, while this job looked green.
+        for kwargs in (
+            {"by_digest_readable": False},
+            {"by_digest_refusal": CiToolError("denied: permission_denied")},
+        ):
+            with self.subTest(kwargs=kwargs), self.assertRaises(CiToolError) as caught:
+                self.run_copy(**kwargs)
+            self.assertIn("cannot read it back", str(caught.exception))
+            self.assertIn("rebuild every night", str(caught.exception))
+
+    def test_the_post_copy_check_is_the_function_the_gate_calls(self) -> None:
+        from ci_tools import check_stable_signal, held_base_copy
+
+        self.assertIs(check_stable_signal.held_base_copy_exists, held_base_copy.held_base_copy_exists)
+        with (
+            patch("ci_tools.held_base_copy.held_base_copy_exists", return_value=True) as exists,
+            patch(
+                "ci_tools.held_base_copy.skopeo_inspect_json",
+                return_value={"Labels": {"org.opencontainers.image.version": VERSION}},
+            ),
+            patch(
+                "ci_tools.held_base_copy.skopeo_inspect_json_optional",
+                return_value={"Digest": DIGEST},
+            ),
+            redirect_stdout(io.StringIO()),
+        ):
+            copy_held_base(
+                base_image_name=SOURCE_NAME,
+                base_image_digest=DIGEST,
+                image_org=ORG,
+                creds=CREDS,
+            )
+        exists.assert_called_once_with(COPY_BY_DIGEST, creds=CREDS)
+
+    def test_a_run_already_on_the_copy_is_verified_not_copied_onto_itself(self) -> None:
         self.assertEqual(self.run_copy(base_image_name=COPY_REPOSITORY), COPY_BY_DIGEST)
         self.assertEqual(self.copy_calls, [])
         self.inspect.assert_not_called()
-        self.assertIn(f"Held base copy {COPY_BY_DIGEST}: public", self.out.getvalue())
+        self.digest.assert_not_called()
+        self.assertIn("verified, not copied", self.out.getvalue())
 
-    def test_a_run_on_a_copy_the_registry_denies_having_fails(self) -> None:
+    def test_a_run_on_a_copy_the_registry_does_not_return_fails(self) -> None:
         with self.assertRaises(CiToolError):
-            self.run_copy(base_image_name=COPY_REPOSITORY, exists=False)
+            self.run_copy(base_image_name=COPY_REPOSITORY, by_digest_readable=False)
+
+    def test_a_non_digest_base_cannot_be_kept(self) -> None:
+        with self.assertRaises(CiToolError):
+            copy_held_base(
+                base_image_name=SOURCE_NAME,
+                base_image_digest="latest",
+                image_org=ORG,
+                creds=CREDS,
+            )
 
 
 class MainTests(unittest.TestCase):
@@ -284,63 +358,6 @@ class MainTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("This run is not held", result.stdout)
-
-
-class MainStatusTests(unittest.TestCase):
-    def status(
-        self, inputs: dict | None, state: str = COPY_PUBLIC, *, token: str = "token"
-    ) -> tuple[str, list]:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            manifest = Path(temp_dir) / "build-inputs.json"
-            if inputs is not None:
-                manifest.write_text(json.dumps({"inputs": inputs}), encoding="utf-8")
-            env = {
-                "BUILD_INPUTS_MANIFEST": str(manifest),
-                "GITHUB_REPOSITORY_OWNER": "Danathar",
-                "REGISTRY_ACTOR": "actor",
-                "REGISTRY_TOKEN": token,
-            }
-            with (
-                patch.dict(os.environ, env, clear=False),
-                patch("ci_tools.held_base_copy.held_base_copy_state", return_value=state) as ask,
-                patch("ci_tools.held_base_copy.write_github_outputs") as write,
-                redirect_stdout(io.StringIO()),
-            ):
-                main_status()
-        return write.call_args.args[0]["state"], ask.call_args_list
-
-    HELD: ClassVar[dict[str, object]] = {
-        "kernel_held_from": "7.3.4-200.fc44.x86_64",
-        "use_input_lock": False,
-        "base_image_name": SOURCE_NAME,
-        "base_image_digest": DIGEST,
-    }
-
-    def test_a_held_build_reports_its_copy_state(self) -> None:
-        state, asked = self.status(self.HELD, COPY_NOT_PUBLIC)
-        self.assertEqual(state, COPY_NOT_PUBLIC)
-        self.assertEqual(len(asked), 1)
-        self.assertEqual(asked[0].args, (COPY_BY_DIGEST,))
-        self.assertEqual(asked[0].kwargs, {"creds": CREDS})
-
-    def test_nothing_to_report_without_a_hold_or_a_manifest(self) -> None:
-        unheld = self.HELD | {"kernel_held_from": ""}
-        replay = self.HELD | {"use_input_lock": True}
-        for inputs in (None, unheld, replay):
-            with self.subTest(inputs=inputs):
-                state, asked = self.status(inputs)
-                self.assertEqual(state, "")
-                self.assertEqual(asked, [])
-
-    def test_a_held_build_without_the_registry_token_fails_rather_than_going_anonymous(
-        self,
-    ) -> None:
-        with self.assertRaises(CiToolError):
-            self.status(self.HELD, token="")
-
-    def test_a_held_manifest_without_a_digest_fails(self) -> None:
-        with self.assertRaises(CiToolError):
-            self.status(self.HELD | {"base_image_digest": ""})
 
 
 if __name__ == "__main__":

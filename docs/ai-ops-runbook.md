@@ -318,14 +318,12 @@ Every file in `.github/workflows/` has an entry here.
   that kernel, the OpenZFS version, and the held base and its kernel. Fedora
   updates in that base, security fixes included, wait until the hold lifts.
 - **First:** nothing to fix. Do not pin, patch or relabel anything to end the
-  hold. Check whether OpenZFS has a patch release on the configured minor line
-  (`DEFAULT_ZFS_MINOR_VERSION`) whose `Linux-Maximum` covers the newer kernel;
-  until it does, the hold is correct. A new minor line is an owner-merged
-  Renovate pull request, never automatic. If the body says this repository's
-  copy of the held base is not public, that is the owner's one manual step:
-  make the `zfs-kinoite-complex-held-base` package public (GitHub profile,
-  Packages, the package, Package settings, Change visibility, Public). Builds
-  need that copy once quay.io deletes the held tag after four weeks.
+  hold. Check whether OpenZFS has a release whose `Linux-Maximum` covers the
+  newer kernel; until it does, the hold is correct. There is no manual step for
+  the copy of the held base: the `zfs-kinoite-complex-held-base` package stays
+  private and builds read it with their own token. If a build fails naming that
+  package and the token, the copy could not be read: check that the package is
+  linked to this repository and readable by its workflows.
 - **Closing:** `akmods-failure-triage.yml` closes it after the first green
   build that really built and was not held. If the hold reaches 90 days the
   build fails instead, and the failure issues above take over.

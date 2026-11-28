@@ -149,8 +149,41 @@ runs:
         # runners share IPs, so without this the ZFS version resolution can
         # fail for reasons unrelated to this repository.
         GITHUB_TOKEN: ${{ inputs.registry_token }}
+        # Read this repository's private held-base copy package, which
+        # resolution consults only when no supported upstream base is left.
+        # Upstream bases are read anonymously.
+        REGISTRY_ACTOR: ${{ inputs.registry_actor }}
+        REGISTRY_TOKEN: ${{ inputs.registry_token }}
       run: |
         python3 -m ci_tools.cli resolve-build-inputs
+
+    # A held build keeps this repository's own copy of the held base in the
+    # private zfs-kinoite-complex-held-base package. quay.io deletes a dated
+    # Kinoite tag after four weeks, and a hold may last up to
+    # KERNEL_HOLD_MAX_DAYS (ci_tools/resolve_build_inputs.py); later runs resolve
+    # the held base from the copy once the original is gone. This runs right
+    # after resolution and before the akmods compile, so a failing copy fails
+    # in minutes instead of after a full ZFS rebuild. Only the main job runs
+    # this action: it holds the package-write token, while the gate reads only
+    # and pull request validation has no token to write with.
+    #
+    # A failed copy fails the run rather than warning. Scheduled runs force an
+    # akmods rebuild, so a run that went on without the copy would rebuild and
+    # publish a new :latest every night while the copy never landed. The next
+    # run retries, and the gate's kernel-held-copy-missing reason makes sure
+    # there is a next run. A base that already is the copy is verified, not
+    # copied onto itself.
+    - name: Keep a copy of the held base image
+      if: steps.resolve.outputs.kernel_held_from != ''
+      shell: bash
+      env:
+        KERNEL_HELD_FROM: ${{ steps.resolve.outputs.kernel_held_from }}
+        BASE_IMAGE_NAME: ${{ steps.resolve.outputs.base_image_name }}
+        BASE_IMAGE_DIGEST: ${{ steps.resolve.outputs.base_image_digest }}
+        REGISTRY_ACTOR: ${{ inputs.registry_actor }}
+        REGISTRY_TOKEN: ${{ inputs.registry_token }}
+      run: |
+        python3 -m ci_tools.cli copy-held-base
 
     # Save a plain JSON summary of the resolved inputs. In GitHub Actions,
     # an "artifact" is a file saved from the run so it can be downloaded later

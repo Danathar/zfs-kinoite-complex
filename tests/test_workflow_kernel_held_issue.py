@@ -30,7 +30,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from ci_tools.resolve_build_inputs import HELD_BASE_PACKAGE, KERNEL_HOLD_MAX_DAYS
+from ci_tools.resolve_build_inputs import KERNEL_HOLD_MAX_DAYS
 
 try:
     import yaml
@@ -113,11 +113,9 @@ class KernelHeldIssueTests(unittest.TestCase):
         path.parent.mkdir(parents=True)
         path.write_text(json.dumps({"schema_version": 1, "inputs": inputs}), encoding="utf-8")
 
-    def run_step(self, issues: list[dict], copy_state: str = "") -> list[list]:
+    def run_step(self, issues: list[dict]) -> list[list]:
         payload = {"script": self.step["with"]["script"], "run": RUN, "issues": issues}
-        env = {key: value for key, value in os.environ.items() if key != "HELD_BASE_COPY_STATE"}
-        if copy_state:
-            env["HELD_BASE_COPY_STATE"] = copy_state
+        env = dict(os.environ)
         result = subprocess.run(
             [NODE, "-e", HARNESS],
             input=json.dumps(payload),
@@ -218,49 +216,32 @@ class KernelHeldIssueTests(unittest.TestCase):
     def test_no_manifest_leaves_the_issue_alone(self) -> None:
         self.assertEqual(self.run_step([issue(7)]), [])
 
-    def test_the_copy_state_comes_from_the_status_step(self) -> None:
-        self.assertEqual(
-            self.step["env"]["HELD_BASE_COPY_STATE"], "${{ steps.held_copy.outputs.state }}"
-        )
+    def test_the_issue_asks_the_owner_for_nothing_about_the_copy(self) -> None:
+        # The copy package stays private and builds read it with their own token, so there is
+        # no visibility step for the owner and no copy state for this workflow to read.
+        self.write_manifest(HELD_INPUTS)
+        body = self.run_step([])[1][1]["body"]
+        for text in ("Action needed", "Change visibility", "public"):
+            self.assertNotIn(text, body)
+        self.assertNotIn("HELD_BASE_COPY_STATE", self.step.get("env", {}))
         workflow = yaml.safe_load(WORKFLOW_PATH.read_text(encoding="utf-8"))
-        status = [
-            step for step in workflow["jobs"]["triage"]["steps"] if step.get("id") == "held_copy"
-        ]
-        self.assertEqual(len(status), 1)
-        self.assertIn("python3 -m ci_tools.cli held-base-copy-status", status[0]["run"])
-        self.assertEqual(
-            status[0]["env"],
-            {
-                "BUILD_INPUTS_MANIFEST": "artifacts/build-inputs/build-inputs.json",
-                "REGISTRY_ACTOR": "${{ github.actor }}",
-                "REGISTRY_TOKEN": "${{ github.token }}",
-            },
-        )
-
-    def test_a_copy_that_is_not_public_asks_the_owner_to_make_it_public(self) -> None:
-        self.write_manifest(HELD_INPUTS)
-        body = self.run_step([], copy_state="not-public")[1][1]["body"]
-        self.assertIn("**Action needed:**", body)
-        self.assertIn(f"`ghcr.io/o/{HELD_BASE_PACKAGE}`", body)
-        self.assertIn("Change visibility", body)
-
-    def test_a_missing_copy_says_the_next_build_makes_it(self) -> None:
-        self.write_manifest(HELD_INPUTS)
-        body = self.run_step([], copy_state="missing")[1][1]["body"]
-        self.assertIn("does not exist yet", body)
-        self.assertIn("kernel-held-copy-missing", body)
-        self.assertNotIn("**Action needed:**", body)
-
-    def test_a_public_copy_adds_nothing(self) -> None:
-        self.write_manifest(HELD_INPUTS)
-        body = self.run_step([], copy_state="public")[1][1]["body"]
-        self.assertNotIn(HELD_BASE_PACKAGE, body)
+        for step in workflow["jobs"]["triage"]["steps"]:
+            self.assertNotIn("held-base-copy-status", str(step.get("run", "")))
 
     def test_the_body_states_the_hold_limit_resolution_uses(self) -> None:
         self.write_manifest(HELD_INPUTS)
         body = self.run_step([])[1][1]["body"]
         self.assertIn(f"from the last {KERNEL_HOLD_MAX_DAYS} days", body)
-        self.assertIn("DEFAULT_ZFS_MINOR_VERSION", body)
+        self.assertIn("private copy of held bases", body)
+
+    def test_the_body_does_not_promise_a_new_openzfs_line_is_manual_or_automatic(self) -> None:
+        # How a newer OpenZFS minor line is adopted is decided in its own issue (#631); this
+        # text says only how the hold lifts today, as soon as a release supports the kernel.
+        self.write_manifest(HELD_INPUTS)
+        body = self.run_step([])[1][1]["body"]
+        for text in ("Renovate", "minor line", "owner-merged", "automatic"):
+            self.assertNotIn(text, body)
+        self.assertIn("as soon as an OpenZFS release supports the newer kernel", body)
 
     def test_a_backtick_or_newline_in_a_label_cannot_break_out_of_its_code_span(self) -> None:
         self.write_manifest(HELD_INPUTS | {"kernel_held_from": "7.3.4`\n## injected"})

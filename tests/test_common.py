@@ -679,6 +679,7 @@ class CredentialArgvTests(unittest.TestCase):
         self.assertEqual(argv[-2:], [source, destination])
         self.assert_secret_is_absent(argv)
         self.assertEqual(seen["auths"], {"ghcr.io": self._CREDS})
+        self.assertNotIn("quay.io", seen["auths"])
 
     def test_skopeo_copy_omits_credential_flags_when_none_is_given(self) -> None:
         with patch("ci_tools.common.run_cmd") as run_cmd_mock:

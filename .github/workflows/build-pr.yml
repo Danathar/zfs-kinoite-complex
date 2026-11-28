@@ -86,6 +86,11 @@ jobs:
           zfs_version: ${{ steps.prepare.outputs.zfs_version }}
           image_repo: ghcr.io/${{ steps.registry.outputs.image_org }}/${{ steps.defaults.outputs.image_name }}
           signing_key_filename: ${{ steps.defaults.outputs.image_name }}.pub
+          # Reads the base when it is this repository's private held-base copy.
+          # A pull request from a fork has no package token, so it cannot read
+          # the copy; that matters only once no supported upstream base is left.
+          registry_username: ${{ github.actor }}
+          registry_password: ${{ github.token }}
 
       # Rechunk here too so a pull request cannot merge a change that breaks
       # the rechunk step; this workflow never publishes, so the rechunked

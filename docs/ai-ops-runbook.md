@@ -299,7 +299,7 @@ Every file in `.github/workflows/` has an entry here.
   OpenZFS does not support yet no longer turns the build red on its own: the
   build holds on an older base (see "The kernel-held issue" below). An issue
   here therefore means the hold could not help, for example no supported base
-  in the last 28 days, or a different failure. The correct short-term result
+  in the last 90 days, or a different failure. The correct short-term result
   then is a red candidate and an unchanged stable image.
 - **Closing:** the workflow closes the issue itself with a comment after the
   next green `build.yml` run that really built. A skipped scheduled run does
@@ -319,9 +319,16 @@ Every file in `.github/workflows/` has an entry here.
   updates in that base, security fixes included, wait until the hold lifts.
 - **First:** nothing to fix. Do not pin, patch or relabel anything to end the
   hold. Check whether OpenZFS has a release whose `Linux-Maximum` covers the
-  newer kernel; until it does, the hold is correct.
+  newer kernel; until it does, the hold is correct. There is no manual step for
+  the copy of the held base: the `zfs-kinoite-complex-held-base` package stays
+  private and builds read it with their own token. If a build fails naming that
+  package and the token, the copy could not be read: check that the package is
+  linked to this repository and readable by its workflows. A build that says it
+  cannot trust a held base copy could not verify `:latest`'s cosign signature or
+  found no copy of the base `:latest` was built on; a copy that no signed `:latest`
+  was built on is never used (see Kernel Hold in the architecture overview).
 - **Closing:** `akmods-failure-triage.yml` closes it after the first green
-  build that really built and was not held. If the hold reaches 28 days the
+  build that really built and was not held. If the hold reaches 90 days the
   build fails instead, and the failure issues above take over.
 - **Detail:** "Kernel Hold" in
   [`architecture-overview.md`](./architecture-overview.md).

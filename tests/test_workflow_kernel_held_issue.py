@@ -23,11 +23,14 @@ node; the CI runner image has both.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+
+from ci_tools.resolve_build_inputs import KERNEL_HOLD_MAX_DAYS
 
 try:
     import yaml
@@ -112,6 +115,7 @@ class KernelHeldIssueTests(unittest.TestCase):
 
     def run_step(self, issues: list[dict]) -> list[list]:
         payload = {"script": self.step["with"]["script"], "run": RUN, "issues": issues}
+        env = dict(os.environ)
         result = subprocess.run(
             [NODE, "-e", HARNESS],
             input=json.dumps(payload),
@@ -120,6 +124,7 @@ class KernelHeldIssueTests(unittest.TestCase):
             check=False,
             timeout=30,
             cwd=self.work_dir,
+            env=env,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         return json.loads(result.stdout)
@@ -192,7 +197,9 @@ class KernelHeldIssueTests(unittest.TestCase):
         inputs = dict(UNHELD_INPUTS)
         del inputs["kernel_held_from"]
         self.write_manifest(inputs)
-        self.assertEqual(self.writes(self.run_step([issue(7)])), [("createComment", 7), ("update", 7)])
+        self.assertEqual(
+            self.writes(self.run_step([issue(7)])), [("createComment", 7), ("update", 7)]
+        )
 
     def test_the_runbook_section_names_the_title_this_step_writes(self) -> None:
         runbook = RUNBOOK_PATH.read_text(encoding="utf-8")
@@ -208,6 +215,33 @@ class KernelHeldIssueTests(unittest.TestCase):
 
     def test_no_manifest_leaves_the_issue_alone(self) -> None:
         self.assertEqual(self.run_step([issue(7)]), [])
+
+    def test_the_issue_asks_the_owner_for_nothing_about_the_copy(self) -> None:
+        # The copy package stays private and builds read it with their own token, so there is
+        # no visibility step for the owner and no copy state for this workflow to read.
+        self.write_manifest(HELD_INPUTS)
+        body = self.run_step([])[1][1]["body"]
+        for text in ("Action needed", "Change visibility", "public"):
+            self.assertNotIn(text, body)
+        self.assertNotIn("HELD_BASE_COPY_STATE", self.step.get("env", {}))
+        workflow = yaml.safe_load(WORKFLOW_PATH.read_text(encoding="utf-8"))
+        for step in workflow["jobs"]["triage"]["steps"]:
+            self.assertNotIn("held-base-copy-status", str(step.get("run", "")))
+
+    def test_the_body_states_the_hold_limit_resolution_uses(self) -> None:
+        self.write_manifest(HELD_INPUTS)
+        body = self.run_step([])[1][1]["body"]
+        self.assertIn(f"from the last {KERNEL_HOLD_MAX_DAYS} days", body)
+        self.assertIn("private copy of held bases", body)
+
+    def test_the_body_does_not_promise_a_new_openzfs_line_is_manual_or_automatic(self) -> None:
+        # How a newer OpenZFS minor line is adopted is decided in its own issue (#631); this
+        # text says only how the hold lifts today, as soon as a release supports the kernel.
+        self.write_manifest(HELD_INPUTS)
+        body = self.run_step([])[1][1]["body"]
+        for text in ("Renovate", "minor line", "owner-merged", "automatic"):
+            self.assertNotIn(text, body)
+        self.assertIn("as soon as an OpenZFS release supports the newer kernel", body)
 
     def test_a_backtick_or_newline_in_a_label_cannot_break_out_of_its_code_span(self) -> None:
         self.write_manifest(HELD_INPUTS | {"kernel_held_from": "7.3.4`\n## injected"})

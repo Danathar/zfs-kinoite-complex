@@ -36,6 +36,7 @@ def command_map() -> dict[str, Callable[..., None]]:
     from ci_tools.check_stable_signal import main as check_stable_signal
     from ci_tools.classify_akmods_failure import main as classify_akmods_failure
     from ci_tools.export_repo_defaults import main as export_repo_defaults
+    from ci_tools.held_base_copy import main as copy_held_base
     from ci_tools.pin_akmods_cache import main as pin_akmods_cache
     from ci_tools.prepare_validation_build import main as prepare_validation_build
     from ci_tools.promote_stable import main as promote_stable
@@ -53,6 +54,7 @@ def command_map() -> dict[str, Callable[..., None]]:
         "resolve-build-inputs": resolve_build_inputs,
         "write-build-inputs-manifest": write_build_inputs_manifest,
         "check-akmods-cache": check_akmods_cache,
+        "copy-held-base": copy_held_base,
         "check-stable-signal": check_stable_signal,
         "compute-candidate-tag": main_compute_candidate_tag,
         "export-repo-defaults": export_repo_defaults,

@@ -118,8 +118,9 @@ It returns one of:
 | `current-latest-missing-stable-signal-labels` | `:latest` exists but predates this gate, or was built by a non-schedule event before provenance was recorded | yes |
 | `current-latest-missing-zfs-version-label` | `:latest` exists but predates the `zfs-version` label | yes |
 | `not-schedule-event` | push or manual run; the gate is bypassed entirely | yes |
-| `kernel-held-past-hold-window` | `:latest` is held and its base is older than the 28-day hold window (or its base version cannot be read), so the run builds whether or not upstream moved, and fails if there is still no supported base | yes |
-| `kernel-held-upstream-kernel-still-unsupported` | `:latest` is held on an older base, the upstream kernel is still newer than the resolved OpenZFS release supports, and the held base is inside the 28-day hold window, so a rebuild would resolve the same held base | no |
+| `kernel-held-past-hold-window` | `:latest` is held and its base is older than the 90-day hold window (`KERNEL_HOLD_MAX_DAYS`, or its base version cannot be read), so the run builds whether or not upstream moved, and fails if there is still no supported base | yes |
+| `kernel-held-copy-missing` | `:latest` is held inside the hold window, but this repository's copy of its base (the digest in `org.zfs-kinoite-complex.base-image`, in the private `zfs-kinoite-complex-held-base` package) is not confirmed readable with the job's token (missing, `denied`, 401 or 403), so the run builds and that build makes the copy | yes |
+| `kernel-held-upstream-kernel-still-unsupported` | `:latest` is held on an older base, the upstream kernel is still newer than the resolved OpenZFS release supports, the held base is inside the 90-day hold window, and its copy is readable with the job's token, so a rebuild would resolve the same held base | no |
 
 The `zfs-version` label baked onto the image is *not* sourced from this gate's
 own resolution, unlike the stable-signal labels. It comes from the real
@@ -176,7 +177,7 @@ The `main` workflow now wraps that whole preparation path in one local action:
 
 That action does six things in one place:
 
-1. resolve and record build inputs
+1. resolve and record build inputs, and, when the run is held on an older base, keep a private copy of that base before anything is compiled
 2. upload the build-input manifest
 3. verify whether the shared akmods cache can be reused
 4. rebuild and republish the shared cache only when required
@@ -192,29 +193,106 @@ reads that line for the exact release it resolved
 (`ci_tools/zfs_release.py`, `resolve_linux_maximum`) and compares it with the
 newest base image's kernel label (`ostree.linux`).
 
-When the kernel is newer, the run does not fail. It walks the base
-repository's plain dated tags (`44.20261110.0`), newest first and no older
-than 28 days, and builds on the newest one whose kernel OpenZFS supports
-(`resolve_build_inputs.find_held_base_tag`). The chosen tag is then pinned by
-digest and its kernel read from `/lib/modules` as usual, so every check after
-this point is unchanged: the akmods cache must still cover that exact kernel
-and ZFS version, and the image is still signed and verified. Pull request
-builds resolve their inputs the same way, so they build on the held base too.
+When the kernel is newer, the run does not fail. It looks at the plain dated
+tags (`44.20261110.0`) of the same Fedora release, no older than
+`KERNEL_HOLD_MAX_DAYS` (90) by their own date, and builds on the newest one
+whose kernel OpenZFS supports (`resolve_build_inputs.find_held_base`). The
+newest supported upstream tag wins while one remains, and a tag dated after today
+is ignored, upstream or copy. Only when none qualifies is this repository's own
+copy of an earlier held base used, in the private `zfs-kinoite-complex-held-base`
+GHCR package. That order is also the newest base by date: quay.io expires dated
+tags oldest first, so while any supported upstream tag remains it is at least as
+new as every copy, and promotion's `refuse_held_base_older_than_latest` is never
+tripped by the choice. It also means the first run, before the package exists,
+never reads it. If nothing qualifies, the run fails as every run did before
+holds existed. The chosen tag is then pinned by digest and its kernel read from
+`/lib/modules` as usual, so every check after this point is unchanged: the
+akmods cache must still cover that exact kernel and ZFS version, and the image
+is still signed and verified. Pull request builds resolve their inputs the same
+way, so they build on the held base too.
+
+A copy is used as a base only at a digest a signed record names. Any workflow run
+in this repository that declares `packages: write` can write the copy package,
+so what sits in it, including a newer-looking tag, is not evidence of anything.
+Resolution therefore never lists the package. It reads `:latest`, pins it by
+digest, verifies its cosign signature against the committed `cosign.pub` (the
+same check the akmods cache gets), and takes the digest from its
+`org.zfs-kinoite-complex.base-image` label. It looks the copy up by that digest,
+and it must carry a dated version label of this Fedora release inside the hold
+window and a kernel OpenZFS supports. The tag it is then pinned and tagged by must
+resolve to the same digest. This chose verifying `:latest` over signing each copy:
+making a copy needs no key, so the copy job stays free of signing material, and
+the signed `:latest` already says which base this repository shipped. If `:latest`
+is missing, unsigned or unverifiable, records no base digest, or its base has no
+copy that qualifies, the run fails and says which. One case fails by design: a
+copy exists, but `:latest` was never built on it, for example because the held
+build that made it failed before promotion and quay.io then deleted the held tag.
+That copy is not trusted, and the run fails until a build reaches `:latest`. It
+takes four weeks of held builds that never reached `:latest` to get there, because
+every scheduled run in that time builds on the upstream tag again.
+
+The copy exists because quay.io deletes a dated Kinoite tag after four weeks
+(`quay.expires-after=4w`), and a hold may last longer. Every held main build
+copies its base into the package. The copy step is in the `prepare-main-akmods`
+action, right after input resolution and before the akmods compile, so a failing
+copy fails in minutes instead of after a full ZFS rebuild
+(`ci_tools/held_base_copy.py`). It copies with the options promotion uses
+(`--preserve-digests --multi-arch=all`), tags the copy with the base's
+`org.opencontainers.image.version` exactly, and checks that the copy is the same
+digest. The quay.io source is read anonymously and only the GHCR destination gets
+the GitHub token, so the token never reaches quay.io. A base that already is a
+copy is verified, not copied onto itself. A failed copy fails the run; the next
+run retries. Only that job copies: the gate reads only, and pull request
+validation has no package-write token. While `:latest` is held and the copy of
+its base is not confirmed readable, the scheduled gate builds with
+`kernel-held-copy-missing` instead of skipping, so a hold cannot sit out the four
+weeks without a copy.
+
+The package stays private, and nobody has to make anything public. Every read of
+a copy uses the job's own token (`REGISTRY_ACTOR` and `REGISTRY_TOKEN`): the read
+of `:latest` and the inspect and `podman pull` of the copy in resolution, buildah's `FROM` in
+`build-native-image`, the gate's existence check and pull request validation.
+Upstream reads stay anonymous, and buildah's auth entry is keyed to the copy's
+repository, so another owner's image in the same build (`ghcr.io/ublue-os/brew`)
+is never offered the token. A lock-file replay of a run whose base was a copy
+reads it with the job's token too. An anonymous GHCR read cannot tell a missing
+package from a private one, and GHCR may answer even an authenticated read of a
+package that was never created with `denied`, so nothing depends on telling
+missing from denied: the copy step's probe of the tag before the first copy treats
+`denied` as "no copy yet" and goes on to copy. The gate treats missing, `denied`, 401 and 403 alike as "the
+copy is not confirmed readable": it builds with `kernel-held-copy-missing`, and
+never skips or raises on it. The copy step ends by asking
+`held_base_copy_exists`, the same function the gate calls, with the same kind of
+token, and fails the run loudly if it cannot see the copy. Otherwise the gate
+could keep seeing "missing" while the main job saw "present", and every night
+would rebuild and look green. After a successful copy the next scheduled run
+skips. When resolution does need a copy and cannot read it, it fails and names
+the package and the token. A pull request from a fork has no package token, so
+it cannot read the copy; that matters only once no supported upstream base is
+left.
+
+Old copies are not cleaned up yet: `prune_registry.DEFAULT_PACKAGES` does not
+include the package, so prune never touches it. That is safe, since nothing
+deletes a copy a build may need, but it grows by one image per held base. Cleanup
+is a follow-up.
 
 A held run records the kernel it skipped as `kernel_held_from` in the
 build-input manifest and as the `org.zfs-kinoite-complex.kernel-held-from`
 image label. `akmods-failure-triage.yml` keeps a "Kernel held" issue open
 while builds are held, and the OpenZFS/kernel badge says so. The hold lifts by
-itself: once an OpenZFS release supports the newer kernel (a new patch release
-triggers a scheduled build), the newest base qualifies again and the issue
-closes.
+itself as soon as an OpenZFS release supports the newer kernel: that release
+triggers a scheduled build when it is a new patch on the configured line
+(`zfs-version-advanced`), the newest base qualifies again and the issue closes.
+An automatic move to a newer OpenZFS line is approved separately and is not part
+of the hold.
 
 What a hold costs: the held base is all of Fedora as it was on that day, not
 only its kernel, so Fedora updates (security fixes included) wait until the
 hold lifts. Only this repository's own layers keep moving. That is why the
-hold is limited to 28 days (`KERNEL_HOLD_LOOKBACK_DAYS`), which is also as long as quay.io keeps a
-dated Kinoite tag (`quay.expires-after=4w`). With no qualifying
-base in that window the run fails, as every run did before holds existed.
+hold is limited to 90 days (`KERNEL_HOLD_MAX_DAYS`), an owner decision; input
+resolution and the scheduled gate's window check read that one constant. With
+no qualifying base in that window, upstream or copied, the run fails, as
+every run did before holds existed.
 
 A lock-file replay is never held: it rebuilds exactly the base it names.
 Promotion refuses a held candidate whose base is older than `latest`'s (see

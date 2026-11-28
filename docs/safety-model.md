@@ -28,12 +28,15 @@ If a candidate fails, the previous `latest` digest remains in place.
 
 When the newest Fedora Kinoite base has a kernel the resolved OpenZFS release
 does not support yet, step 1 does not fail. It holds the build on the newest
-base from the last 28 days whose kernel OpenZFS does support, records that on
+base from the last 90 days whose kernel OpenZFS does support, records that on
 the image (the `org.zfs-kinoite-complex.kernel-held-from` label), and keeps a
 "Kernel held" issue open until the hold lifts. Every later step is unchanged.
-A held candidate is never promoted over a `latest` on a newer base. A held
-image is behind on all of Fedora, not only the kernel, which is why the hold
-is limited to 28 days; see "Kernel Hold" in
+Because quay.io deletes a dated Kinoite tag after four weeks, a held main
+build keeps its own copy of the held base, at the same digest, in the
+`zfs-kinoite-complex-held-base` package, and a later held build may stand on
+that copy only at the digest its signed `latest` was built on. A held candidate is never promoted over a `latest` on a newer
+base. A held image is behind on all of Fedora, not only the kernel, which is
+why the hold is limited to 90 days; see "Kernel Hold" in
 [`architecture-overview.md`](./architecture-overview.md).
 
 CI does not boot the image or import a real pool before promotion. The

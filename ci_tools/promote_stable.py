@@ -90,7 +90,7 @@ def refuse_held_base_older_than_latest(*, candidate_labels: dict, latest_labels:
     Refuse to promote a held candidate built on an older base than `:latest`.
 
     A held build sits on the newest Kinoite base whose kernel OpenZFS supports
-    (`resolve_build_inputs.find_held_base_tag`). If `:latest` is already on a
+    (`resolve_build_inputs.find_held_base`). If `:latest` is already on a
     newer base, promoting the held candidate would move users back to an older
     Fedora, kernel included. Candidates that were not held are left to the
     existing checks, so a deliberate rollback replayed from a lock file still

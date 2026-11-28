@@ -77,6 +77,7 @@ JUST_STEP = "Install pinned just for the akmods Justfile"
 # the action without a decision about what it runs turns this file red.
 STEP_COMMANDS = {
     "Resolve build inputs for this run": "resolve-build-inputs",
+    "Keep a copy of the held base image": "copy-held-base",
     "Write build inputs manifest": "write-build-inputs-manifest",
     CACHE_STEP: "check-akmods-cache",
     REFUSE_STEP: None,
@@ -926,6 +927,18 @@ class StepWiringTests(unittest.TestCase):
 
         env = _run_step("Resolve build inputs for this run").only_call.env
         self.assertEqual(env["GITHUB_TOKEN"], INPUTS["registry_token"])
+
+    def test_the_input_resolution_step_can_read_the_private_held_base_copies(self) -> None:
+        """
+        Resolution reads the private copy package with the job's own token.
+
+        Without both halves of the login the package cannot be listed, and a hold that has
+        outlived its upstream base would fail with the package unreadable.
+        """
+
+        env = _run_step("Resolve build inputs for this run").only_call.env
+        self.assertEqual(env["REGISTRY_ACTOR"], INPUTS["registry_actor"])
+        self.assertEqual(env["REGISTRY_TOKEN"], INPUTS["registry_token"])
 
 
 # The one input the build-inputs record names differently from the `resolve` step's output.

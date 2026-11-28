@@ -29,6 +29,7 @@ from ci_tools.common import (
     cosign_verify,
     git_ls_remote_resolve,
     is_missing_image_error,
+    is_registry_permission_error,
     registry_auth_dir,
     registry_auth_file,
     registry_creds_from_env,
@@ -122,6 +123,18 @@ class CommonTests(unittest.TestCase):
         self.assertTrue(is_missing_image_error("Error: reading manifest: name unknown"))
         self.assertTrue(is_missing_image_error("404 Not Found"))
         self.assertFalse(is_missing_image_error("unauthorized: authentication required"))
+
+    def test_is_registry_permission_error_matches_refusals_not_absence(self) -> None:
+        for message in (
+            "unauthorized: authentication required",
+            "requested access to the resource is denied",
+            "403 Forbidden",
+            "401 Unauthorized",
+        ):
+            with self.subTest(message=message):
+                self.assertTrue(is_registry_permission_error(message))
+        self.assertFalse(is_registry_permission_error("manifest unknown"))
+        self.assertFalse(is_registry_permission_error("connection reset by peer"))
 
     def test_skopeo_inspect_json_optional_returns_none_for_missing_image(self) -> None:
         with patch(
@@ -645,6 +658,28 @@ class CredentialArgvTests(unittest.TestCase):
 
         self.assert_secret_is_absent(run_cmd_mock.call_args.args[0])
         self.assertEqual(seen["auths"], {"ghcr.io": self._CREDS})
+
+    def test_skopeo_copy_can_authenticate_the_destination_only(self) -> None:
+        # The held-base shape: an anonymous quay.io read copied into GHCR. The
+        # GHCR token must never be offered to quay.io.
+        seen: dict[str, dict[str, str]] = {}
+
+        def capture(argv, **_kwargs):
+            self.assertNotIn("--src-authfile", argv)
+            self.assertIn("--dest-authfile", argv)
+            seen["auths"] = self.read_auth(argv[argv.index("--dest-authfile") + 1])
+            return ""
+
+        source = "docker://quay.io/fedora-ostree-desktops/kinoite@sha256:abc"
+        destination = "docker://ghcr.io/example/held-base:44.20261110.0"
+        with patch("ci_tools.common.run_cmd", side_effect=capture) as run_cmd_mock:
+            skopeo_copy(source, destination, creds=self._CREDS, authenticate_source=False)
+
+        argv = run_cmd_mock.call_args.args[0]
+        self.assertEqual(argv[-2:], [source, destination])
+        self.assert_secret_is_absent(argv)
+        self.assertEqual(seen["auths"], {"ghcr.io": self._CREDS})
+        self.assertNotIn("quay.io", seen["auths"])
 
     def test_skopeo_copy_omits_credential_flags_when_none_is_given(self) -> None:
         with patch("ci_tools.common.run_cmd") as run_cmd_mock:

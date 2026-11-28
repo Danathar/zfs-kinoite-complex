@@ -12,34 +12,13 @@ from ci_tools.akmods_clone_pinned import clone_pinned
 from ci_tools.check_akmods_cache import inspect_akmods_cache
 from ci_tools.common import (
     CiToolError,
+    is_registry_permission_error,
     normalize_owner,
     require_env,
     require_env_or_default,
     write_github_outputs,
 )
 from ci_tools.resolve_build_inputs import resolve_build_inputs, write_resolved_build_outputs
-
-# Registry replies that mean "you are not allowed to look", as opposed to "this
-# does not exist". GHCR deliberately refuses to distinguish the two for an
-# anonymous caller: it answers a read of a private or nonexistent package with a
-# bearer-token 403 rather than `manifest unknown`.
-#
-# Kept local rather than alongside `is_missing_image_error` in common.py because
-# it only improves one error message here. Nothing branches on it, so a false
-# positive costs a slightly-off hint and nothing more.
-_REGISTRY_AUTH_ERROR_MARKERS = (
-    "unauthorized",
-    "authentication required",
-    "denied",
-    "403 forbidden",
-    "401 unauthorized",
-)
-
-
-def _looks_like_a_permission_error(message: str) -> bool:
-    """True when a registry failure reads as a permission problem."""
-    normalized = message.lower()
-    return any(marker in normalized for marker in _REGISTRY_AUTH_ERROR_MARKERS)
 
 
 def main() -> None:
@@ -72,7 +51,7 @@ def main() -> None:
             zfs_version=inputs.zfs_version,
         )
     except CiToolError as exc:
-        if not _looks_like_a_permission_error(str(exc)):
+        if not is_registry_permission_error(str(exc)):
             raise
         raise CiToolError(
             "Could not read the shared akmods cache package "

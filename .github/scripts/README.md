@@ -18,6 +18,7 @@ If a term is unfamiliar, check the shared glossary first:
 | Resolve build inputs                                                       | `resolve-build-inputs`        | `ci_tools.resolve_build_inputs`        |
 | Write build inputs manifest                                                | `write-build-inputs-manifest` | `ci_tools.write_build_inputs_manifest` |
 | Check shared akmods cache                                                  | `check-akmods-cache`          | `ci_tools.check_akmods_cache`          |
+| Keep a copy of the held base image                                         | `copy-held-base`              | `ci_tools.held_base_copy`              |
 | Resolve shared akmods cache tag to digest                                  | `pin-akmods-cache`            | `ci_tools.pin_akmods_cache`            |
 | Export normalized registry context for later workflow steps                | `export-registry-context`     | `ci_tools.tagging_context`             |
 | Export checked-in repo defaults for workflow steps                         | `export-repo-defaults`        | `ci_tools.export_repo_defaults`        |

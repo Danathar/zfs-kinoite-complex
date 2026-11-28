@@ -39,8 +39,11 @@ So the bar for changes here is higher than "tests pass."
    sanctioned exception is the kernel hold ("Kernel Hold" in
    `docs/architecture-overview.md`): when the newest base's kernel is newer than
    OpenZFS supports, input resolution builds on an older base whose kernel it
-   does support. It relaxes no check, and it is not a pattern to copy for any
-   other guard.
+   does support. That base comes from upstream or from this repository's own
+   private copy of it, which the main build keeps at the same digest because quay.io
+   deletes dated tags after four weeks; a failed or mismatched copy fails the
+   run. It relaxes no check, and it is not a pattern to copy for any other
+   guard.
 
 2. **Treat the build, promotion, and signing path as safety-critical.** That is:
    `build.yml`, `.github/actions/publish-native-image`, `ci_tools/sign_image.py`,

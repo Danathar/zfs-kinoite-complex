@@ -36,6 +36,8 @@ tests in this tree do.
 from __future__ import annotations
 
 import ast
+import contextlib
+import io
 import json
 import re
 import unittest
@@ -43,6 +45,7 @@ from datetime import date
 from unittest.mock import patch
 
 from ci_tools.check_stable_signal import (
+    BASE_IMAGE_LABEL,
     BASE_VERSION_LABEL,
     KERNEL_HELD_FROM_LABEL,
     STABLE_SIGNAL_DIGEST_LABEL,
@@ -163,6 +166,8 @@ def _latest_inspect(
 # The day the held-base scenario is evaluated on; its base is a week older.
 GATE_TODAY = date(2026, 11, 18)
 HELD_BASE_VERSION = "44.20261110.0"
+HELD_BASE_DIGEST = "sha256:" + "2" * 64
+HELD_BASE_COPY_REF = f"docker://ghcr.io/danathar/zfs-kinoite-complex-held-base@{HELD_BASE_DIGEST}"
 
 
 def _held_latest_inspect() -> dict:
@@ -171,6 +176,7 @@ def _held_latest_inspect() -> dict:
     held["Labels"] |= {
         KERNEL_HELD_FROM_LABEL: "7.3.4-200.fc44.x86_64",
         BASE_VERSION_LABEL: HELD_BASE_VERSION,
+        BASE_IMAGE_LABEL: f"quay.io/fedora-ostree-desktops/kinoite@{HELD_BASE_DIGEST}",
     }
     return held
 
@@ -179,7 +185,7 @@ def _held_past_window_latest_inspect() -> dict:
     """A held `:latest` whose base left the window while upstream did not move at all."""
     held = _held_latest_inspect()
     held["Labels"][STABLE_SIGNAL_DIGEST_LABEL] = CURRENT_DIGEST
-    held["Labels"][BASE_VERSION_LABEL] = "44.20261017.0"
+    held["Labels"][BASE_VERSION_LABEL] = "44.20260801.0"
     return held
 
 
@@ -189,6 +195,7 @@ def run_gate(
     signal_digest: str = CURRENT_DIGEST,
     signal_kernel: str = "",
     today: date = GATE_TODAY,
+    copy: str = "readable",
 ):
     """
     Run the real gate against one fake registry.
@@ -196,7 +203,12 @@ def run_gate(
     `latest` is the inspect payload for this repo's own `:latest`, or an
     exception to raise for it. The upstream signal image always answers with
     `signal_digest`, so a scenario only has to say what is different about the
-    promoted image it is compared against.
+    promoted image it is compared against. `copy` is this repository's private
+    copy of the held base, which only the job's token can read: "readable",
+    "missing" (the registry's "manifest unknown"), "denied" (a refusal even
+    with the token, as GHCR may answer a package that was never created) or
+    "other-error" (a registry failure that is neither). A read without the
+    token fails the test: the package is private.
     """
 
     def inspect(image_ref: str, *, creds: str | None = None) -> dict:
@@ -207,6 +219,16 @@ def run_gate(
             if isinstance(latest, Exception):
                 raise latest
             return latest
+        if image_ref == HELD_BASE_COPY_REF:
+            if creds is None:
+                raise AssertionError("the private copy was read without the job's token")
+            if copy == "missing":
+                raise CiToolError("manifest unknown")
+            if copy == "denied":
+                raise CiToolError("denied: permission_denied")
+            if copy == "other-error":
+                raise CiToolError("toomanyrequests: rate limited")
+            return {"Digest": HELD_BASE_DIGEST}
         raise AssertionError(f"unexpected inspect of {image_ref}")
 
     with (
@@ -243,6 +265,9 @@ GATE_SCENARIOS = {
     "current-latest-missing-zfs-version-label": lambda: run_gate(_latest_inspect(zfs_version="")),
     "not-schedule-event": lambda: _bypass_decision_offline(),
     "kernel-held-past-hold-window": lambda: run_gate(_held_past_window_latest_inspect()),
+    "kernel-held-copy-missing": lambda: run_gate(
+        _held_latest_inspect(), signal_kernel="7.3.5-200.fc44.x86_64", copy="missing"
+    ),
     "kernel-held-upstream-kernel-still-unsupported": lambda: run_gate(
         _held_latest_inspect(), signal_kernel="7.3.5-200.fc44.x86_64"
     ),
@@ -266,7 +291,7 @@ class ScheduledBuildGateTableTests(unittest.TestCase):
         # Guard the guard: every assertion below iterates these rows, and an
         # empty list passes a for-loop silently.
         rows = gate_table()
-        self.assertEqual(len(rows), 10, rows)
+        self.assertEqual(len(rows), 11, rows)
         self.assertEqual(len({reason for reason, _ in rows}), len(rows))
 
     def test_the_documented_reasons_are_exactly_the_gate_source_reasons(self) -> None:
@@ -301,7 +326,7 @@ class ScheduledBuildGateTableTests(unittest.TestCase):
 
     def test_a_held_latest_builds_once_its_base_is_past_the_hold_window(self) -> None:
         held = _held_latest_inspect()
-        held["Labels"][BASE_VERSION_LABEL] = "44.20261017.0"
+        held["Labels"][BASE_VERSION_LABEL] = "44.20260801.0"
         decision = run_gate(held, signal_kernel="7.3.5-200.fc44.x86_64")
         self.assertEqual(decision.reason, "kernel-held-past-hold-window")
         self.assertTrue(decision.should_build)
@@ -329,6 +354,120 @@ class ScheduledBuildGateTableTests(unittest.TestCase):
         decision = run_gate(held, signal_kernel="7.3.5-200.fc44.x86_64")
         self.assertEqual(decision.reason, "kernel-held-past-hold-window")
         self.assertTrue(decision.should_build)
+
+    def test_a_held_latest_with_a_readable_copy_skips_as_before(self) -> None:
+        decision = run_gate(_held_latest_inspect(), signal_kernel="7.3.5-200.fc44.x86_64")
+        self.assertEqual(decision.reason, "kernel-held-upstream-kernel-still-unsupported")
+        self.assertFalse(decision.should_build)
+
+    def test_a_copy_that_is_missing_or_denied_builds_and_never_raises(self) -> None:
+        # GHCR may answer even an authenticated read of a package that was never created with
+        # `denied`, so "missing" and "denied" are one answer: the copy is not confirmed readable.
+        for copy in ("missing", "denied"):
+            with self.subTest(copy=copy):
+                decision = run_gate(
+                    _held_latest_inspect(), signal_kernel="7.3.5-200.fc44.x86_64", copy=copy
+                )
+                self.assertEqual(decision.reason, "kernel-held-copy-missing")
+                self.assertTrue(decision.should_build)
+
+    def test_a_registry_failure_that_is_neither_still_raises(self) -> None:
+        # "Could not tell" is never read as "missing": a rate limit must not start a rebuild.
+        with self.assertRaises(CiToolError):
+            run_gate(
+                _held_latest_inspect(), signal_kernel="7.3.5-200.fc44.x86_64", copy="other-error"
+            )
+
+    def test_after_a_successful_copy_the_next_scheduled_run_skips(self) -> None:
+        # One fake registry for both sides: the main build's copy step, then the nightly gate.
+        # Before the copy the gate builds; once the copy step has succeeded it skips instead of
+        # rebuilding every night.
+        from ci_tools.held_base_copy import copy_held_base
+
+        registry = {"copy": False}
+
+        def optional(ref: str, *, creds: str | None = None):
+            self.assertIsNotNone(creds, "the private copy was read without the job's token")
+            if ref.endswith(f":{HELD_BASE_VERSION}"):
+                return {"Digest": HELD_BASE_DIGEST} if registry["copy"] else None
+            self.assertEqual(ref, HELD_BASE_COPY_REF)
+            return {"Digest": HELD_BASE_DIGEST} if registry["copy"] else None
+
+        def land_copy(*_args, **_kwargs) -> None:
+            registry["copy"] = True
+
+        def gate():
+            # The real `held_base_copy_exists` on both sides; only the registry is faked.
+            with patch(
+                "ci_tools.held_base_copy.skopeo_inspect_json_optional", side_effect=optional
+            ):
+                return run_gate(_held_latest_inspect(), signal_kernel="7.3.5-200.fc44.x86_64")
+
+        self.assertEqual(gate().reason, "kernel-held-copy-missing")
+        with (
+            patch(
+                "ci_tools.held_base_copy.skopeo_inspect_json",
+                return_value={"Labels": {BASE_VERSION_LABEL: HELD_BASE_VERSION}},
+            ),
+            patch("ci_tools.held_base_copy.skopeo_inspect_json_optional", side_effect=optional),
+            patch("ci_tools.held_base_copy.skopeo_copy", side_effect=land_copy),
+            patch("ci_tools.held_base_copy.skopeo_inspect_digest", return_value=HELD_BASE_DIGEST),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            copy_held_base(
+                base_image_name="quay.io/fedora-ostree-desktops/kinoite",
+                base_image_digest=HELD_BASE_DIGEST,
+                image_org="danathar",
+                creds="actor:token",
+            )
+        decision = gate()
+        self.assertEqual(decision.reason, "kernel-held-upstream-kernel-still-unsupported")
+        self.assertFalse(decision.should_build)
+
+    def test_the_gate_reads_the_copy_with_its_own_token(self) -> None:
+        with patch(
+            "ci_tools.check_stable_signal.held_base_copy_exists", return_value=True
+        ) as exists:
+            run_gate(_held_latest_inspect(), signal_kernel="7.3.5-200.fc44.x86_64")
+        exists.assert_called_once_with(HELD_BASE_COPY_REF, creds="actor:token")
+
+    def test_a_held_latest_with_no_copy_builds_even_when_nothing_moved(self) -> None:
+        held = _held_latest_inspect()
+        held["Labels"][STABLE_SIGNAL_DIGEST_LABEL] = CURRENT_DIGEST
+        decision = run_gate(held, copy="missing")
+        self.assertEqual(decision.reason, "kernel-held-copy-missing")
+        self.assertTrue(decision.should_build)
+
+    def test_a_held_latest_without_a_pinned_base_label_counts_as_no_copy(self) -> None:
+        held = _held_latest_inspect()
+        del held["Labels"][BASE_IMAGE_LABEL]
+        decision = run_gate(held, signal_kernel="7.3.5-200.fc44.x86_64")
+        self.assertEqual(decision.reason, "kernel-held-copy-missing")
+        self.assertTrue(decision.should_build)
+
+    def test_a_zfs_patch_move_still_builds_first_while_held(self) -> None:
+        held = _held_latest_inspect()
+        held["Labels"][ZFS_VERSION_LABEL] = "2.4.2"
+        decision = run_gate(held, signal_kernel="7.3.5-200.fc44.x86_64", copy="missing")
+        self.assertEqual(decision.reason, "zfs-version-advanced")
+        self.assertTrue(decision.should_build)
+
+    def test_the_gate_window_is_the_resolution_hold_limit(self) -> None:
+        from ci_tools import check_stable_signal, resolve_build_inputs
+
+        self.assertIs(
+            check_stable_signal.KERNEL_HOLD_MAX_DAYS, resolve_build_inputs.KERNEL_HOLD_MAX_DAYS
+        )
+        # 2026-08-20 is exactly 90 days before GATE_TODAY, 2026-08-19 one more.
+        for version, reason in (
+            ("44.20260820.0", "kernel-held-upstream-kernel-still-unsupported"),
+            ("44.20260819.0", "kernel-held-past-hold-window"),
+        ):
+            held = _held_latest_inspect()
+            held["Labels"][BASE_VERSION_LABEL] = version
+            with self.subTest(version=version):
+                decision = run_gate(held, signal_kernel="7.3.5-200.fc44.x86_64")
+                self.assertEqual(decision.reason, reason)
 
     def test_a_held_latest_builds_when_the_upstream_kernel_is_unknown(self) -> None:
         decision = run_gate(_held_latest_inspect())

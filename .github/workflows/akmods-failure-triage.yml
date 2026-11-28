@@ -392,7 +392,7 @@ jobs:
                 '',
                 `Last refreshed by ${run.html_url} on ${run.head_sha}.`,
                 '',
-                'The hold lifts by itself: the first build whose newest base has a supported kernel closes this issue. If no base from the last 28 days has one, the build fails instead (docs/upstream-change-response.md).',
+                'The hold lifts by itself as soon as an OpenZFS release supports the newer kernel: the first build whose newest base has a supported kernel closes this issue. If no base from the last 90 days, upstream or in this repository\'s private copy of held bases, has a supported kernel, the build fails instead (docs/upstream-change-response.md).',
               ].join('\n');
               if (open.length > 0) {
                 await github.rest.issues.update({

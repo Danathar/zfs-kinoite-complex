@@ -42,6 +42,18 @@ inputs:
       is held, and the scheduled gate and promotion read it back.
     required: false
     default: ""
+  registry_username:
+    description: >-
+      Registry user used only to read the base image when it is this
+      repository's private held-base copy. Unused for any other base.
+    required: false
+    default: ""
+  registry_password:
+    description: >-
+      Registry token used only to read the base image when it is this
+      repository's private held-base copy. Unused for any other base.
+    required: false
+    default: ""
   image_repo:
     description: Public image repository path used by in-image signing policy.
     required: true
@@ -92,8 +104,46 @@ runs:
         STABLE_SIGNAL_DIGEST: ${{ inputs.stable_signal_digest }}
         ZFS_VERSION: ${{ inputs.zfs_version }}
         KERNEL_HELD_FROM: ${{ inputs.kernel_held_from }}
+        # Read only for a base that is this repository's private held-base
+        # copy (see the check below). Upstream bases are always pulled
+        # anonymously, so the token never goes to quay.io.
+        REGISTRY_USERNAME: ${{ inputs.registry_username }}
+        REGISTRY_PASSWORD: ${{ inputs.registry_password }}
       run: |
         set -euo pipefail
+        # A held build whose upstream base is gone builds `FROM` this
+        # repository's copy in the zfs-kinoite-complex-held-base package. That
+        # package is private, so buildah needs an auth file for it. The token
+        # goes into a 0600 file in a fresh directory, never into argv, and
+        # only for a base in that package (ci_tools.resolve_build_inputs
+        # HELD_BASE_PACKAGE); any other base is pulled anonymously.
+        #
+        # The entry is keyed to that one repository, not to ghcr.io. buildah
+        # offers an auth entry to every stage of the build, and the Containerfile
+        # also has `FROM ghcr.io/ublue-os/brew@...`, another owner's image, which
+        # must stay anonymous. containers-auth.json takes repository-scoped keys
+        # and uses the most specific match.
+        auth_args=()
+        held_repository="${IMAGE_REPO%/*}/zfs-kinoite-complex-held-base"
+        if [[ "${BASE_IMAGE}" == "${held_repository}@"* ]]; then
+          if [[ -z "${REGISTRY_USERNAME}" || -z "${REGISTRY_PASSWORD}" ]]; then
+            echo "The base image ${BASE_IMAGE} is this repository's private held-base copy, but no registry credential was passed to read it." >&2
+            exit 1
+          fi
+          umask 077
+          auth_dir="$(mktemp -d)"
+          trap 'rm -rf "${auth_dir}"' EXIT
+          # The encode lands in a variable first so that `set -e` sees a failure
+          # here: inlined in printf's arguments, a failed substitution would write
+          # an empty credential and push on. The pair goes in on stdin, so it is
+          # never argv of anything.
+          encoded_credential="$(printf '%s' "${REGISTRY_USERNAME}:${REGISTRY_PASSWORD}" | base64 -w0)"
+          printf '{"auths":{"%s":{"auth":"%s"}}}\n' \
+            "${held_repository}" \
+            "${encoded_credential}" \
+            > "${auth_dir}/config.json"
+          auth_args=(--authfile "${auth_dir}/config.json")
+        fi
         # --format docker (rather than buildah's oci default) writes this local
         # image with a Docker v2s2 manifest. The reason recorded for it is that
         # host update tooling (`bootc upgrade` on booted machines) works more
@@ -102,6 +152,7 @@ runs:
         # loaded from an OCI archive, so published images have an OCI manifest.
         buildah build \
           --tls-verify=true \
+          "${auth_args[@]}" \
           --format docker \
           -f ./Containerfile \
           --build-arg "BASE_IMAGE=${BASE_IMAGE}" \

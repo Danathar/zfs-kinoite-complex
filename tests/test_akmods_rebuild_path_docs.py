@@ -60,6 +60,7 @@ PIN_STEP = "Resolve shared akmods cache digest"
 # must carry so the mapping cannot drift onto an unrelated item. Items are 1-based.
 STEP_ITEMS: dict[str, tuple[int, str]] = {
     "Resolve build inputs for this run": (1, "resolve and record build inputs"),
+    "Keep a copy of the held base image": (1, "resolve and record build inputs"),
     "Write build inputs manifest": (1, "resolve and record build inputs"),
     "Upload build inputs manifest": (2, "upload the build-input manifest"),
     "Check for existing shared akmods cache": (3, "can be reused"),

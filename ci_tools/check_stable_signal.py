@@ -28,8 +28,10 @@ from ci_tools.common import (
     skopeo_inspect_json_optional,
     write_github_outputs,
 )
+from ci_tools.held_base_copy import held_base_copy_exists, held_base_copy_ref
 from ci_tools.resolve_build_inputs import (
-    KERNEL_HOLD_LOOKBACK_DAYS,
+    BASE_VERSION_LABEL,
+    KERNEL_HOLD_MAX_DAYS,
     dated_base_version_key,
     kernel_exceeds_maximum,
 )
@@ -39,8 +41,10 @@ STABLE_SIGNAL_IMAGE_LABEL = "org.zfs-kinoite-complex.stable-signal-image"
 STABLE_SIGNAL_DIGEST_LABEL = "org.zfs-kinoite-complex.stable-signal-digest"
 ZFS_VERSION_LABEL = "org.zfs-kinoite-complex.zfs-version"
 KERNEL_HELD_FROM_LABEL = "org.zfs-kinoite-complex.kernel-held-from"
-# Inherited from the Kinoite base, so it names the dated base the image was built on.
-BASE_VERSION_LABEL = "org.opencontainers.image.version"
+# The digest-pinned base the image was built on. A held image's copy keeps that digest.
+BASE_IMAGE_LABEL = "org.zfs-kinoite-complex.base-image"
+# BASE_VERSION_LABEL, imported above and re-read by promote_stable.py, is
+# inherited from the Kinoite base, so it names the dated base the image was built on.
 
 
 @dataclass(frozen=True)
@@ -91,7 +95,7 @@ def _bypass_decision(stable_signal_image: str) -> StableSignalDecision:
     )
 
 
-def _held_base_within_lookback(base_version: str, today: date) -> bool:
+def _held_base_within_hold_window(base_version: str, today: date) -> bool:
     """
     True when a held image's base (`44.20261110.0`) is still inside the hold window.
 
@@ -101,7 +105,7 @@ def _held_base_within_lookback(base_version: str, today: date) -> bool:
     key = dated_base_version_key(base_version)
     if key is None:
         return False
-    return (today - key[1]).days <= KERNEL_HOLD_LOOKBACK_DAYS
+    return (today - key[1]).days <= KERNEL_HOLD_MAX_DAYS
 
 
 def _docker_ref(image_ref: str) -> str:
@@ -205,13 +209,34 @@ def evaluate_stable_signal_gate(
     #
     # A held `:latest` past the window builds whether or not upstream moved,
     # so the run fails and says so instead of the gate skipping forever.
+    #
+    # A held `:latest` whose base copy is not confirmed readable builds too, and
+    # that build makes the copy (`ci_tools/held_base_copy.py`). Without this, a
+    # hold that began while the copy could not be made would skip every night
+    # below and never get one, and would fail once quay.io deletes the held tag
+    # after four weeks. The copy package is private, so this asks with this
+    # job's token. "Missing", `denied`, 401 and 403 are all "not confirmed
+    # readable": they build, never skip and never raise. The main build's
+    # post-copy check asks the same function with the same kind of token, so a
+    # copy this gate cannot see fails that run instead of rebuilding nightly.
     previous_kernel_held_from = str(labels.get(KERNEL_HELD_FROM_LABEL) or "")
     if previous_kernel_held_from:
         held_base_version = str(labels.get(BASE_VERSION_LABEL) or "")
-        if not _held_base_within_lookback(held_base_version, today or datetime.now(UTC).date()):
+        if not _held_base_within_hold_window(
+            held_base_version, today or datetime.now(UTC).date()
+        ):
             return StableSignalDecision(
                 should_build=True,
                 reason="kernel-held-past-hold-window",
+                stable_signal_ref=stable_signal_image,
+                stable_signal_digest=stable_signal_digest,
+                zfs_version=current_zfs_version,
+            )
+        copy_ref = held_base_copy_ref(image_org, str(labels.get(BASE_IMAGE_LABEL) or ""))
+        if not copy_ref or not held_base_copy_exists(copy_ref, creds=creds):
+            return StableSignalDecision(
+                should_build=True,
+                reason="kernel-held-copy-missing",
                 stable_signal_ref=stable_signal_image,
                 stable_signal_digest=stable_signal_digest,
                 zfs_version=current_zfs_version,

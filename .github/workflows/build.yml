@@ -374,6 +374,9 @@ jobs:
           kernel_held_from: ${{ needs.build-zfs-akmods.outputs.kernel_held_from }}
           image_repo: ghcr.io/${{ steps.registry.outputs.image_org }}/${{ steps.defaults.outputs.image_name }}
           signing_key_filename: ${{ steps.defaults.outputs.image_name }}.pub
+          # Reads the base when it is this repository's private held-base copy.
+          registry_username: ${{ github.actor }}
+          registry_password: ${{ github.token }}
 
       # Re-layer the built image into content-addressed chunks before it is
       # published. This only changes how the image is split into layers, not

@@ -38,8 +38,11 @@ guidance in sections 1–7 below when they conflict:
    First) tells you to resist, and it is more important here than usual. The one
    sanctioned exception is the kernel hold ("Kernel Hold" in
    `docs/architecture-overview.md`): when the newest base's kernel is newer than OpenZFS
-   supports, input resolution builds on an older base whose kernel it does support. It
-   relaxes no check, and it is not a pattern to copy for any other guard.
+   supports, input resolution builds on an older base whose kernel it does support. That
+   base comes from upstream or from this repository's own private copy of it, which the main
+   build keeps at the same digest because quay.io deletes dated tags after four weeks; a
+   failed or mismatched copy fails the run. It relaxes no check, and it is not a pattern
+   to copy for any other guard.
 2. **Treat the build, promotion, and signing path as safety-critical.** That is:
    `build.yml`, `.github/actions/publish-native-image`, `ci_tools/sign_image.py`,
    `ci_tools/promote_stable.py`, `ci_tools/check_akmods_cache.py`,

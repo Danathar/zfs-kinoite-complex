@@ -520,6 +520,27 @@ def is_missing_image_error(message: str) -> bool:
     return any(marker in normalized for marker in _MISSING_IMAGE_ERROR_MARKERS)
 
 
+# Registry replies that mean "you are not allowed to look", as opposed to "this
+# does not exist". GHCR deliberately refuses to distinguish the two for an
+# anonymous caller: it answers a read of a private or nonexistent package with a
+# bearer-token 403 rather than `manifest unknown`. So a caller that sees one of
+# these on an anonymous read has learned "not readable without a credential",
+# never "missing".
+_REGISTRY_PERMISSION_ERROR_MARKERS = (
+    "unauthorized",
+    "authentication required",
+    "denied",
+    "403 forbidden",
+    "401 unauthorized",
+)
+
+
+def is_registry_permission_error(message: str) -> bool:
+    """True when a registry failure message reads as a permission problem."""
+    normalized = message.lower()
+    return any(marker in normalized for marker in _REGISTRY_PERMISSION_ERROR_MARKERS)
+
+
 def skopeo_inspect_json_optional(image_ref: str, *, creds: str | None = None) -> dict | None:
     """
     Inspect one image, returning `None` only when the image does not exist.
@@ -544,6 +565,7 @@ def skopeo_copy(
     retry_times: int = 3,
     preserve_digests: bool = False,
     multi_arch: str = "",
+    authenticate_source: bool = True,
 ) -> None:
     """
     Copy an image between registry references using skopeo.
@@ -561,12 +583,20 @@ def skopeo_copy(
     same as the flags it replaces: a promotion copies between two references in
     the same private registry and needs the credential on each side. A local
     `dir:` end simply ignores the file it is handed.
+
+    `authenticate_source=False` hands the credential to the destination only.
+    That is for a copy from another registry into this repository's GHCR, such
+    as `ci_tools/held_base_copy.py` copying a quay.io base: the GHCR token means
+    nothing to quay.io, and an anonymous read is how every base is read.
     """
-    with registry_auth_dir(creds, source, destination) as auth_dir:
+    auth_refs = (source, destination) if authenticate_source else (destination,)
+    with registry_auth_dir(creds, *auth_refs) as auth_dir:
         command = ["skopeo", "copy", "--retry-times", str(retry_times)]
         if auth_dir:
             auth_file = registry_auth_file(auth_dir)
-            command.extend(["--src-authfile", auth_file, "--dest-authfile", auth_file])
+            if authenticate_source:
+                command.extend(["--src-authfile", auth_file])
+            command.extend(["--dest-authfile", auth_file])
         if preserve_digests:
             command.append("--preserve-digests")
         if multi_arch:

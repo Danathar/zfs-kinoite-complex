@@ -56,6 +56,8 @@ Docs-only changes do not trigger image builds.
    - pull-request cache validation plus pinned-akmods-ref fetch validation
 5. [`ci_tools/tagging_context.py`](../ci_tools/tagging_context.py)
    - normalizes registry paths
+6. [`ci_tools/held_base_copy.py`](../ci_tools/held_base_copy.py)
+   - keeps this repository's copy of the base a kernel-held build stands on
 
 ### 4. Akmods build control
 
@@ -103,19 +105,20 @@ Docs-only changes do not trigger image builds.
 10. [`tests/test_common.py`](../tests/test_common.py)
 11. [`tests/test_configure_signing_policy.py`](../tests/test_configure_signing_policy.py)
 12. [`tests/test_export_repo_defaults.py`](../tests/test_export_repo_defaults.py)
-13. [`tests/test_install_zfs_from_akmods_cache.py`](../tests/test_install_zfs_from_akmods_cache.py)
-14. [`tests/test_oci_layout.py`](../tests/test_oci_layout.py)
-15. [`tests/test_pin_akmods_cache.py`](../tests/test_pin_akmods_cache.py)
-16. [`tests/test_prepare_validation_build.py`](../tests/test_prepare_validation_build.py)
-17. [`tests/test_promote_stable.py`](../tests/test_promote_stable.py)
-18. [`tests/test_prune_registry.py`](../tests/test_prune_registry.py)
-19. [`tests/test_resolve_build_inputs.py`](../tests/test_resolve_build_inputs.py)
-20. [`tests/test_sign_image.py`](../tests/test_sign_image.py)
-21. [`tests/test_tagging_context.py`](../tests/test_tagging_context.py)
-22. [`tests/test_write_akmods_badge.py`](../tests/test_write_akmods_badge.py)
-23. [`tests/test_write_build_inputs_manifest.py`](../tests/test_write_build_inputs_manifest.py)
-24. [`tests/test_write_last_good_build_badge.py`](../tests/test_write_last_good_build_badge.py)
-25. [`tests/test_zfs_release.py`](../tests/test_zfs_release.py)
+13. [`tests/test_held_base_copy.py`](../tests/test_held_base_copy.py)
+14. [`tests/test_install_zfs_from_akmods_cache.py`](../tests/test_install_zfs_from_akmods_cache.py)
+15. [`tests/test_oci_layout.py`](../tests/test_oci_layout.py)
+16. [`tests/test_pin_akmods_cache.py`](../tests/test_pin_akmods_cache.py)
+17. [`tests/test_prepare_validation_build.py`](../tests/test_prepare_validation_build.py)
+18. [`tests/test_promote_stable.py`](../tests/test_promote_stable.py)
+19. [`tests/test_prune_registry.py`](../tests/test_prune_registry.py)
+20. [`tests/test_resolve_build_inputs.py`](../tests/test_resolve_build_inputs.py)
+21. [`tests/test_sign_image.py`](../tests/test_sign_image.py)
+22. [`tests/test_tagging_context.py`](../tests/test_tagging_context.py)
+23. [`tests/test_write_akmods_badge.py`](../tests/test_write_akmods_badge.py)
+24. [`tests/test_write_build_inputs_manifest.py`](../tests/test_write_build_inputs_manifest.py)
+25. [`tests/test_write_last_good_build_badge.py`](../tests/test_write_last_good_build_badge.py)
+26. [`tests/test_zfs_release.py`](../tests/test_zfs_release.py)
 
 #### Running Tests
 

@@ -12,7 +12,7 @@
     "ci_tools/cli.py": 31,
     "ci_tools/common.py": 208,
     "ci_tools/export_repo_defaults.py": 12,
-    "ci_tools/held_base_copy.py": 60,
+    "ci_tools/held_base_copy.py": 49,
     "ci_tools/pin_akmods_cache.py": 18,
     "ci_tools/prepare_validation_build.py": 25,
     "ci_tools/promote_stable.py": 37,

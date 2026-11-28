@@ -1028,6 +1028,14 @@ class DiagnoseGuardTableTests(unittest.TestCase):
         "held candidate on base": False,
         # A base version label that cannot be read: escalate, the guard is ours.
         "held candidate: cannot compare": True,
+        # A candidate whose zfs-version label is not an OpenZFS release: the build wrote it.
+        "is not an OpenZFS release": True,
+        # Correct refusal of a candidate on an older OpenZFS line than `:latest`.
+        "latest already runs OpenZFS": False,
+        # `:latest` has no readable label and the candidate is older than the configured line.
+        "latest has no readable": True,
+        # The configured line is not `x.y`: that value lives in this repository.
+        "Invalid ZFS minor version": True,
         "Missing tag list": False,  # transient registry failure
         "GITHUB_RUN_NUMBER is not a run number": True,  # the workflow's environment
         "REQUIRE_MATCH=true needs AKMODS_IMAGE_PINNED": True,  # the action's wiring
@@ -1060,10 +1068,12 @@ class DiagnoseGuardTableTests(unittest.TestCase):
         )
         text = (COMMANDS_DIR / "diagnose-build.md").read_text(encoding="utf-8")
         match = re.search(
-            r"\b(one|two|three|four|five|six)\b\s+of\s+the\s+entries", text, re.IGNORECASE
+            r"\b(one|two|three|four|five|six|seven)\b\s+of\s+the\s+entries",
+            text,
+            re.IGNORECASE,
         )
         self.assertIsNotNone(match, "diagnose-build.md no longer counts the guard rows")
-        words = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6}
+        words = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7}
         self.assertEqual(words[match.group(1).lower()], unfixable)
 
 

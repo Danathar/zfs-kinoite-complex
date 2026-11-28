@@ -17,6 +17,7 @@ import http.client
 import json
 import os
 import unittest
+from typing import ClassVar
 from unittest.mock import patch
 from urllib.request import Request
 
@@ -364,7 +365,7 @@ class SelectZfsVersionTests(unittest.TestCase):
     ships 7.3.
     """
 
-    METAS = {
+    METAS: ClassVar[dict[str, str]] = {
         "2.4.4": _meta("7.2"),
         "2.4.5": _meta("7.3"),
         "2.5.0": _meta("7.3", "5.10"),

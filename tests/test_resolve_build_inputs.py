@@ -17,6 +17,7 @@ import unittest
 from contextlib import redirect_stdout
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from typing import ClassVar
 from unittest.mock import patch
 
 from ci_tools.common import (
@@ -2129,7 +2130,7 @@ class ResolveBuildInputsKernelHoldTests(unittest.TestCase):
 class LatestZfsVersionLabelTests(unittest.TestCase):
     """`:latest`'s `zfs-version` label, the floor `select_zfs_version` never goes below."""
 
-    ENV = {
+    ENV: ClassVar[dict[str, str]] = {
         "GITHUB_REPOSITORY_OWNER": "Danathar",
         "REGISTRY_ACTOR": "actor",
         "REGISTRY_TOKEN": "secret-token",

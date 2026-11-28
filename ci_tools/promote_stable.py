@@ -228,8 +228,10 @@ def report_zfs_line_move(*, candidate_labels: dict, latest_labels: dict | None) 
             "",
             "- Existing pools are untouched.",
             "- Do not run `zpool upgrade` while you want to be able to roll back.",
-            "- A pool created from now on gets the new line's features and will not import "
-            "on the previous image.",
+            (
+                "- A pool created from now on gets the new line's features and will not import "
+                "on the previous image."
+            ),
             "",
         ]
     )

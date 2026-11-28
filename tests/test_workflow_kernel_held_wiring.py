@@ -90,6 +90,28 @@ class KernelHeldWiringTests(unittest.TestCase):
         self.assertEqual(promote_stable.KERNEL_HELD_FROM_LABEL, LABEL)
         self.assertIn(f"{LABEL}=${{KERNEL_HELD_FROM}}", BUILD_ACTION.read_text(encoding="utf-8"))
 
+    def test_the_copy_step_is_handed_the_held_base_and_the_registry_login(self) -> None:
+        job = self.jobs["build-zfs-akmods"]
+        prepare = step_using(job, PREPARE_USES)["id"]
+        copies = [
+            step
+            for step in job["steps"]
+            if step.get("name") == "Keep a copy of the held base image"
+        ]
+        self.assertEqual(len(copies), 1)
+        outputs = f"${{{{ steps.{prepare}.outputs."
+        self.assertEqual(
+            copies[0]["env"],
+            {
+                "KERNEL_HELD_FROM": f"{outputs}kernel_held_from }}}}",
+                "BASE_IMAGE_NAME": f"{outputs}base_image_name }}}}",
+                "BASE_IMAGE_DIGEST": f"{outputs}base_image_digest }}}}",
+                "REGISTRY_ACTOR": "${{ github.actor }}",
+                "REGISTRY_TOKEN": "${{ github.token }}",
+            },
+        )
+        self.assertIn("python3 -m ci_tools.cli copy-held-base", copies[0]["run"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -199,7 +199,9 @@ class KernelHeldIssueTests(unittest.TestCase):
         inputs = dict(UNHELD_INPUTS)
         del inputs["kernel_held_from"]
         self.write_manifest(inputs)
-        self.assertEqual(self.writes(self.run_step([issue(7)])), [("createComment", 7), ("update", 7)])
+        self.assertEqual(
+            self.writes(self.run_step([issue(7)])), [("createComment", 7), ("update", 7)]
+        )
 
     def test_the_runbook_section_names_the_title_this_step_writes(self) -> None:
         runbook = RUNBOOK_PATH.read_text(encoding="utf-8")
@@ -226,6 +228,14 @@ class KernelHeldIssueTests(unittest.TestCase):
         ]
         self.assertEqual(len(status), 1)
         self.assertIn("python3 -m ci_tools.cli held-base-copy-status", status[0]["run"])
+        self.assertEqual(
+            status[0]["env"],
+            {
+                "BUILD_INPUTS_MANIFEST": "artifacts/build-inputs/build-inputs.json",
+                "REGISTRY_ACTOR": "${{ github.actor }}",
+                "REGISTRY_TOKEN": "${{ github.token }}",
+            },
+        )
 
     def test_a_copy_that_is_not_public_asks_the_owner_to_make_it_public(self) -> None:
         self.write_manifest(HELD_INPUTS)

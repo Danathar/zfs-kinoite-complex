@@ -14,10 +14,13 @@ from __future__ import annotations
 import io
 import json
 import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from typing import ClassVar
 from unittest.mock import patch
 
 from ci_tools.common import CiToolError
@@ -193,6 +196,11 @@ class CopyHeldBaseTests(unittest.TestCase):
             self.run_copy(copied_digest="sha256:" + "8" * 64)
         self.assertIn("digest mismatch", str(caught.exception))
 
+    def test_a_copy_that_resolves_to_no_digest_says_so(self) -> None:
+        with self.assertRaises(CiToolError) as caught:
+            self.run_copy(copied_digest="")
+        self.assertIn("resolves to no digest, expected", str(caught.exception))
+
     def test_a_copy_already_there_is_not_copied_again(self) -> None:
         self.assertEqual(self.run_copy(tag_digest=DIGEST), COPY_BY_TAG)
         self.assertEqual(self.copy_calls, [])
@@ -222,7 +230,7 @@ class CopyHeldBaseTests(unittest.TestCase):
 
 
 class MainTests(unittest.TestCase):
-    ENV = {
+    ENV: ClassVar[dict[str, str]] = {
         "BASE_IMAGE_NAME": SOURCE_NAME,
         "BASE_IMAGE_DIGEST": DIGEST,
         "GITHUB_REPOSITORY_OWNER": "Danathar",
@@ -251,9 +259,37 @@ class MainTests(unittest.TestCase):
             base_image_name=SOURCE_NAME, base_image_digest=DIGEST, image_org=ORG, creds=CREDS
         )
 
+    def test_a_held_run_without_the_registry_token_fails_rather_than_going_anonymous(self) -> None:
+        env = self.ENV | {"KERNEL_HELD_FROM": "7.3.4-200.fc44.x86_64"}
+        with (
+            patch.dict(os.environ, env, clear=False),
+            patch.dict(os.environ, {"REGISTRY_TOKEN": ""}),
+            patch("ci_tools.held_base_copy.copy_held_base") as copy,
+            self.assertRaises(CiToolError),
+        ):
+            main()
+        copy.assert_not_called()
+
+    def test_running_the_module_directly_runs_main(self) -> None:
+        # `python3 -m ci_tools.held_base_copy` reaches main() only through the __main__ guard.
+        env = {key: value for key, value in os.environ.items() if key != "KERNEL_HELD_FROM"}
+        result = subprocess.run(
+            [sys.executable, "-m", "ci_tools.held_base_copy"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+            cwd=Path(__file__).resolve().parent.parent,
+            env=env,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("This run is not held", result.stdout)
+
 
 class MainStatusTests(unittest.TestCase):
-    def status(self, inputs: dict | None, state: str = COPY_PUBLIC) -> tuple[str, list]:
+    def status(
+        self, inputs: dict | None, state: str = COPY_PUBLIC, *, token: str = "token"
+    ) -> tuple[str, list]:
         with tempfile.TemporaryDirectory() as temp_dir:
             manifest = Path(temp_dir) / "build-inputs.json"
             if inputs is not None:
@@ -262,7 +298,7 @@ class MainStatusTests(unittest.TestCase):
                 "BUILD_INPUTS_MANIFEST": str(manifest),
                 "GITHUB_REPOSITORY_OWNER": "Danathar",
                 "REGISTRY_ACTOR": "actor",
-                "REGISTRY_TOKEN": "token",
+                "REGISTRY_TOKEN": token,
             }
             with (
                 patch.dict(os.environ, env, clear=False),
@@ -273,7 +309,7 @@ class MainStatusTests(unittest.TestCase):
                 main_status()
         return write.call_args.args[0]["state"], ask.call_args_list
 
-    HELD = {
+    HELD: ClassVar[dict[str, object]] = {
         "kernel_held_from": "7.3.4-200.fc44.x86_64",
         "use_input_lock": False,
         "base_image_name": SOURCE_NAME,
@@ -295,6 +331,12 @@ class MainStatusTests(unittest.TestCase):
                 state, asked = self.status(inputs)
                 self.assertEqual(state, "")
                 self.assertEqual(asked, [])
+
+    def test_a_held_build_without_the_registry_token_fails_rather_than_going_anonymous(
+        self,
+    ) -> None:
+        with self.assertRaises(CiToolError):
+            self.status(self.HELD, token="")
 
     def test_a_held_manifest_without_a_digest_fails(self) -> None:
         with self.assertRaises(CiToolError):

@@ -6,6 +6,12 @@
       "operator": "bash/FlipFlag_0_1",
       "line": "local prev_opt=0",
       "reason": "prev_opt is read only in the branch for a wrapper other than env and exec, and the wrapper's name sets it to 0 before that branch runs, so its starting value is never read."
+    },
+    {
+      "module": "ci_tools/held_base_copy.py",
+      "operator": "core/ReplaceBinaryOperator_Mul_Div",
+      "line": "def held_base_copy_state(copy_ref: str, *, creds: str) -> str:",
+      "reason": "The mutant turns the keyword-only marker `*` into the positional-only marker `/`, so `copy_ref` can no longer be passed by keyword. Every caller passes it first and `creds` by keyword, which both signatures accept, so no input tells them apart."
     }
   ]
 }

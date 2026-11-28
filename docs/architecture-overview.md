@@ -120,7 +120,32 @@ It returns one of:
 | `not-schedule-event` | push or manual run; the gate is bypassed entirely | yes |
 | `kernel-held-past-hold-window` | `:latest` is held and its base is older than the 90-day hold window (`KERNEL_HOLD_MAX_DAYS`, or its base version cannot be read), so the run builds whether or not upstream moved, and fails if there is still no supported base | yes |
 | `kernel-held-copy-missing` | `:latest` is held inside the hold window, but this repository's copy of its base (the digest in `org.zfs-kinoite-complex.base-image`, in the private `zfs-kinoite-complex-held-base` package) is not confirmed readable with the job's token (missing, `denied`, 401 or 403), so the run builds and that build makes the copy | yes |
+| `unshipped-commits` | no other reason built, but main has a commit since the one `:latest` was built from that changes a path outside `on.push.paths-ignore`, so the run builds it even while `:latest` is held | yes |
+| `unshipped-commits-source-unknown` | the commit `:latest` was built from cannot be told: `:latest` has no digest, the registry lookup of its audit tags failed, no `stable-*` audit tag among the newest ten shares its digest, or the walk over those tags passed its 300-second deadline. The shipped commit is matched by the 7-character SHA prefix in the audit tag. This keeps building every scheduled run until one build promotes | yes |
+| `unshipped-commits-compare-failed` | the GitHub compare call failed (including a 404 after a force-push, and a connection dropped mid-response) or returned a payload the gate cannot read | yes |
+| `unshipped-commits-history-diverged` | main is behind, or has diverged from, the commit `:latest` was built from | yes |
+| `unshipped-commits-file-list-truncated` | the compare API listed its maximum of 300 files, none outside the ignored paths, so the rest are unknown | yes |
 | `kernel-held-upstream-kernel-still-unsupported` | `:latest` is held on an older base, the upstream kernel is still newer than the resolved OpenZFS release supports, the held base is inside the 90-day hold window, and its copy is readable with the job's token, so a rebuild would resolve the same held base | no |
+
+The `unshipped-commits` reasons exist because a scheduled run cancels a push
+build still in progress (the `concurrency` group in `build.yml`). Without them
+the scheduled run would then skip, on `stable-signal-unchanged` or while held on
+`kernel-held-upstream-kernel-still-unsupported`, and the merged change would
+never ship. The gate finds the commit `:latest` was built from through the
+`stable-<run>-<sha7>` audit tag promotion writes with the same digest, matched
+by that 7-character SHA prefix (`:latest` carries no label with this
+repository's commit), and asks the GitHub compare API which files changed
+between it and the current main. A change counts only if it touches a path a
+push would have built for: the gate keeps a literal copy of
+`on.push.paths-ignore`, matched with GitHub's glob rules, and a test keeps the
+copy equal to the workflow. A rename counts if either name is outside those
+paths. This check runs after every other build reason and before both skips, so
+it can add builds but never block one, including a ZFS patch. Every case it
+cannot settle builds, with its own reason, rather than failing the run. Two
+consequences are intended: a push build that *failed* also leaves its commit
+unshipped, so the next scheduled run retries it and a broken main fails every
+night until it is fixed; and while the shipped commit cannot be told, every
+scheduled run builds until one promotes.
 
 The `zfs-version` label baked onto the image is *not* sourced from this gate's
 own resolution, unlike the stable-signal labels. It comes from the real
